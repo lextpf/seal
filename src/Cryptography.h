@@ -106,7 +106,8 @@ namespace sage {
         // The header sits exactly one page-aligned header block before the payload.
         // allocate() placed the payload at (middle + headerSize), so we reverse that.
         SIZE_T headerSize = align_up(sizeof(locked_header), page);
-        return reinterpret_cast<locked_header*>((BYTE*)const_cast<T*>(payload) - headerSize);
+        auto addr = reinterpret_cast<uintptr_t>(payload) - headerSize;
+        return reinterpret_cast<locked_header*>(addr);
     }
 
     /**
@@ -119,8 +120,8 @@ namespace sage {
     struct locked_allocator {
         using value_type = T;
 
-        locked_allocator() noexcept {}
-        template<class U> locked_allocator(const locked_allocator<U>&) noexcept {}
+        locked_allocator() noexcept = default;
+        template<class U> explicit locked_allocator(const locked_allocator<U>&) noexcept {}
 
         /// @brief Allocate n objects in a locked, guarded region.
         T* allocate(std::size_t n) {
@@ -262,7 +263,7 @@ namespace sage {
         if (!p) return;
         auto* hdr = header_from_payload(p);
         DWORD oldProt;
-        (void)VirtualProtect((LPVOID)p, hdr->payloadSpan, PAGE_NOACCESS, &oldProt);
+        (void)VirtualProtect(const_cast<std::remove_cv_t<T>*>(p), hdr->payloadSpan, PAGE_NOACCESS, &oldProt);
     }
 
     /// @brief Switch the payload protection to PAGE_READWRITE.
@@ -271,7 +272,7 @@ namespace sage {
         if (!p) return;
         auto* hdr = header_from_payload(p);
         DWORD oldProt;
-        (void)VirtualProtect((LPVOID)p, hdr->payloadSpan, PAGE_READWRITE, &oldProt);
+        (void)VirtualProtect(const_cast<std::remove_cv_t<T>*>(p), hdr->payloadSpan, PAGE_READWRITE, &oldProt);
     }
 
     /**
@@ -397,15 +398,19 @@ namespace sage {
             // Flip the payload span to PAGE_READWRITE, saving the previous
             // protection so we can restore it when the guard goes out of scope.
             auto* hdr = header_from_payload(p);
-            changed = !!VirtualProtect((LPVOID)p, hdr->payloadSpan, PAGE_READWRITE, &oldProt);
+            changed = !!VirtualProtect(const_cast<std::remove_cv_t<T>*>(p), hdr->payloadSpan, PAGE_READWRITE, &oldProt);
         }
         ~RWGuard() {
             if (!p || !changed) return;
             // Restore the original protection (typically PAGE_NOACCESS).
             auto* hdr = header_from_payload(p);
             DWORD tmp;
-            (void)VirtualProtect((LPVOID)p, hdr->payloadSpan, oldProt, &tmp);
+            (void)VirtualProtect(const_cast<std::remove_cv_t<T>*>(p), hdr->payloadSpan, oldProt, &tmp);
         }
+        RWGuard(const RWGuard&) = delete;
+        RWGuard& operator=(const RWGuard&) = delete;
+        RWGuard(RWGuard&&) = delete;
+        RWGuard& operator=(RWGuard&&) = delete;
     };
 
     /**
@@ -533,7 +538,7 @@ namespace sage {
     {
     public:
         /// @brief Constant-time byte comparison.
-        static bool ctEqualRaw(const void* a, const void* b, size_t n);
+        static bool ctEqualRaw(const unsigned char* a, const unsigned char* b, size_t n);
 
         /// @brief Constant-time equality for byte-like ranges.
         template<class A, class B>
@@ -550,8 +555,9 @@ namespace sage {
         [[nodiscard]] static constexpr bool ctEqualAny(const A& aa, const B& bb)
         {
             if (std::ranges::size(aa) != std::ranges::size(bb)) return false;
-            return ctEqualRaw(std::ranges::data(aa),
-                std::ranges::data(bb),
+            return ctEqualRaw(
+                reinterpret_cast<const unsigned char*>(std::ranges::data(aa)),
+                reinterpret_cast<const unsigned char*>(std::ranges::data(bb)),
                 std::ranges::size(aa));
         }
 
@@ -590,7 +596,7 @@ namespace sage {
         static BOOL tryEnableLockPrivilege();
 
         /// @brief Securely wipe and release containers.
-        static void cleanseString() noexcept {}
+        static void cleanseString() noexcept { /* Base case for variadic fold expression — intentionally empty */ }
 
         template <class... Ts>
         static void cleanseString(Ts&&... xs) noexcept

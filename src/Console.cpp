@@ -292,6 +292,54 @@ std::pair<std::vector<std::string>, bool> readBulkLinesDualFrom(std::istream& in
     return { std::move(lines), uncensored };
 }
 
+// Returns: 1 = terminator found (break), 0 = line handled (continue)
+static int handleNewline(std::string& cur, std::vector<std::string>& lines, bool& uncensored)
+{
+    std::string t = sage::utils::trim(cur);
+
+    // Terminator: '?' for censored, '!' for uncensored output
+    if (t == "?" || t == "!")
+    {
+        uncensored = (t == "!");
+        std::cout << "\n";
+        return 1;
+    }
+
+    // Console commands
+    if (t == ":open" || t == ":o" || t == ":edit")
+    {
+        if (!sage::openInputInNotepad())
+            std::cerr << "(failed to launch Notepad)\n";
+        cur.clear();
+        std::cout << "\n";
+        return 0;
+    }
+
+    if (t == ":copy" || t == ":clip" || t == ":copyfile" || t == ":copyinput")
+    {
+        bool ok = sage::Clipboard::copyInputFile();
+        std::cout << (ok ? "(fence copied to clipboard)" : "(failed to copy fence)") << "\n";
+        cur.clear();
+        return 0;
+    }
+
+    if (t == ":none" || t == ":clear")
+    {
+        (void)sage::Clipboard::copyWithTTL("");
+        std::cout << "(clipboard cleaned)\n";
+        cur.clear();
+        return 0;
+    }
+
+    if (!t.empty())
+    {
+        lines.push_back(cur);
+    }
+    cur.clear();
+    std::cout << "\n";
+    return 0;
+}
+
 bool readBulkLinesDualOrEsc(std::pair<std::vector<std::string>, bool>& out)
 {
     std::vector<std::string> lines;
@@ -303,64 +351,16 @@ bool readBulkLinesDualOrEsc(std::pair<std::vector<std::string>, bool>& out)
         int ch = _getch();
 
         if (ch == 27)
-        {
             return false;
-        }
         if (ch == 3)
-        {
             throw std::runtime_error("Interrupted");
-        }
         if (ch == 26)
-        {
             throw std::runtime_error("EOF");
-        }
 
         if (ch == '\r' || ch == '\n')
         {
-            std::string t = sage::utils::trim(cur);
-
-            // Terminator: '?' for censored, '!' for uncensored output
-            if (t == "?" || t == "!")
-            {
-                uncensored = (t == "!");
-                std::cout << "\n";
+            if (handleNewline(cur, lines, uncensored) == 1)
                 break;
-            }
-
-            // Console commands
-            if (t == ":open" || t == ":o" || t == ":edit")
-            {
-                if (!sage::openInputInNotepad())
-                {
-                    std::cerr << "(failed to launch Notepad)\n";
-                }
-                cur.clear();
-                std::cout << "\n";
-                continue;
-            }
-
-            if (t == ":copy" || t == ":clip" || t == ":copyfile" || t == ":copyinput")
-            {
-                bool ok = sage::Clipboard::copyInputFile();
-                std::cout << (ok ? "(fence copied to clipboard)" : "(failed to copy fence)") << "\n";
-                cur.clear();
-                continue;
-            }
-
-            if (t == ":none" || t == ":clear")
-            {
-                (void)sage::Clipboard::copyWithTTL("");
-                std::cout << "(clipboard cleaned)\n";
-                cur.clear();
-                continue;
-            }
-
-            if (!t.empty())
-            {
-                lines.push_back(cur);
-            }
-            cur.clear();
-            std::cout << "\n";
             continue;
         }
 

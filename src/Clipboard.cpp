@@ -116,36 +116,39 @@ bool Clipboard::copyWithTTL(const char* data, size_t n, DWORD ttl_ms)
 
         // Open clipboard without emptying - we only want to read-compare
         ClipboardLock lock;
-        if (lock.ok)
+        if (!lock.ok)
         {
-            HANDLE h = GetClipboardData(CF_UNICODETEXT);
-            bool same = false;
-            if (h)
-            {
-                if (wchar_t* w = static_cast<wchar_t*>(GlobalLock(h)))
-                {
-                    // Round-trip current clipboard UTF-16 back to UTF-8 for comparison
-                    int need = WideCharToMultiByte(
-                        CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
-                    std::string cur(need ? static_cast<size_t>(need) - 1 : 0, '\0');
-                    if (need)
-                    {
-                        WideCharToMultiByte(
-                            CP_UTF8, 0, w, -1, cur.data(), need, nullptr, nullptr);
-                    }
-                    GlobalUnlock(h);
-
-                    // Constant-time compare to avoid timing leaks
-                    same = sage::Cryptography::ctEqualAny(cur, val);
-                }
-            }
-
-            // Only clear if nobody else has changed the clipboard
-            if (same)
-            {
-                EmptyClipboard();
-            }
+            sage::Cryptography::cleanseString(val);
+            sage::Cryptography::trimWorkingSet();
+            return;
         }
+
+        bool same = false;
+        HANDLE h = GetClipboardData(CF_UNICODETEXT);
+        wchar_t* w = h ? static_cast<wchar_t*>(GlobalLock(h)) : nullptr;
+        if (w)
+        {
+            // Round-trip current clipboard UTF-16 back to UTF-8 for comparison
+            int need = WideCharToMultiByte(
+                CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+            std::string cur(need ? static_cast<size_t>(need) - 1 : 0, '\0');
+            if (need)
+            {
+                WideCharToMultiByte(
+                    CP_UTF8, 0, w, -1, cur.data(), need, nullptr, nullptr);
+            }
+            GlobalUnlock(h);
+
+            // Constant-time compare to avoid timing leaks
+            same = sage::Cryptography::ctEqualAny(cur, val);
+        }
+
+        // Only clear if nobody else has changed the clipboard
+        if (same)
+        {
+            EmptyClipboard();
+        }
+
         sage::Cryptography::cleanseString(val);
         sage::Cryptography::trimWorkingSet();
     }).detach();

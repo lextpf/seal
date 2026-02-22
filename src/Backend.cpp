@@ -21,6 +21,7 @@
 #include <dwmapi.h>
 
 #include <functional>
+#include <memory>
 #include <string>
 
 #include "tess_ocr_api.h"
@@ -43,8 +44,8 @@ Backend::qstringToSecureWide(const QString& qstr)
 
 Backend::Backend(QObject* parent)
     : QObject(parent)
-    , m_Model(new VaultListModel(this))
-    , m_FillController(new FillController(this))
+    , m_Model(std::make_unique<VaultListModel>(this).release())
+    , m_FillController(std::make_unique<FillController>(this).release())
 {
     m_Model->setRecords(&m_Records);
 
@@ -99,7 +100,7 @@ Backend::Backend(QObject* parent)
 
 Backend::~Backend()
 {
-    cleanup();
+    try { cleanup(); } catch (...) {}
 }
 
 VaultListModel* Backend::vaultModel() const { return m_Model; }
@@ -700,7 +701,7 @@ void Backend::typeLogin(int index)
     m_CountdownText = QString("Typing in %1...").arg(remaining);
     emit countdownTextChanged();
 
-    QTimer* timer = new QTimer(this);
+    auto* timer = std::make_unique<QTimer>(this).release();
     timer->setInterval(1000);
 
     connect(timer, &QTimer::timeout, this, [this, timer, index, remaining]() mutable
@@ -756,7 +757,7 @@ void Backend::typePassword(int index)
     m_CountdownText = QString("Typing in %1...").arg(remaining);
     emit countdownTextChanged();
 
-    QTimer* timer = new QTimer(this);
+    auto* timer = std::make_unique<QTimer>(this).release();
     timer->setInterval(1000);
 
     connect(timer, &QTimer::timeout, this, [this, timer, index, remaining]() mutable

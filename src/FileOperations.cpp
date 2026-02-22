@@ -271,6 +271,64 @@ bool FileOperations::processFilePath(const std::string& raw, const SecurePwd& pa
 }
 
 template<class SecurePwd>
+static void decryptHexTokens(const std::vector<std::string>& hexTokens,
+                             const SecurePwd& password,
+                             std::vector<sage::secure_triplet16_t>& aggTriples,
+                             std::vector<std::string>& otherPlain)
+{
+    for (const auto& tok : hexTokens)
+    {
+        try
+        {
+            auto plain = FileOperations::decryptLine(tok, password);
+
+            std::vector<sage::secure_triplet16<sage::locked_allocator<wchar_t>>> ts;
+            if (FileOperations::parseTriples(plain.view(), ts))
+            {
+                aggTriples.insert(aggTriples.end(),
+                    std::make_move_iterator(ts.begin()),
+                    std::make_move_iterator(ts.end()));
+            }
+            else
+            {
+                (void)sage::Clipboard::copyWithTTL(plain.view());
+                otherPlain.emplace_back(plain.data(), plain.size());
+            }
+            sage::Cryptography::cleanseString(plain);
+        }
+        catch (const std::exception& ex)
+        {
+            std::cerr << "(decrypt failed: " << ex.what() << ")\n";
+        }
+    }
+}
+
+static void displayTriples(std::vector<sage::secure_triplet16_t>& aggTriples, bool uncensored)
+{
+    if (uncensored)
+    {
+        std::ostringstream oss;
+        for (size_t i = 0; i < aggTriples.size(); ++i)
+        {
+            if (i) oss << ", ";
+            std::string sv = FileOperations::tripleToUtf8(aggTriples[i]);
+            oss << sv;
+            sage::Cryptography::cleanseString(sv);
+        }
+        std::cout << oss.str() << "\n";
+    }
+    else
+    {
+        interactiveMaskedWin(aggTriples);
+        std::cout << "(Masked; Click **** to copy)\n";
+    }
+    for (auto& t : aggTriples)
+    {
+        sage::Cryptography::cleanseString(t.primary, t.secondary, t.tertiary);
+    }
+}
+
+template<class SecurePwd>
 void FileOperations::processBatch(const std::vector<std::string>& lines, bool uncensored, const SecurePwd& password)
 {
     if (lines.empty()) return;
@@ -286,31 +344,7 @@ void FileOperations::processBatch(const std::vector<std::string>& lines, bool un
         auto hexTokens = sage::utils::extractHexTokens(L);
         if (!hexTokens.empty())
         {
-            for (const auto& tok : hexTokens)
-            {
-                try
-                {
-                    auto plain = decryptLine(tok, password);
-
-                    std::vector<sage::secure_triplet16<sage::locked_allocator<wchar_t>>> ts;
-                    if (parseTriples(plain.view(), ts))
-                    {
-                        aggTriples.insert(aggTriples.end(),
-                            std::make_move_iterator(ts.begin()),
-                            std::make_move_iterator(ts.end()));
-                    }
-                    else
-                    {
-                        (void)sage::Clipboard::copyWithTTL(plain.view());
-                        otherPlain.emplace_back(plain.data(), plain.size());
-                    }
-                    sage::Cryptography::cleanseString(plain);
-                }
-                catch (const std::exception& ex)
-                {
-                    std::cerr << "(decrypt failed: " << ex.what() << ")\n";
-                }
-            }
+            decryptHexTokens(hexTokens, password, aggTriples, otherPlain);
             continue;
         }
 
@@ -325,36 +359,12 @@ void FileOperations::processBatch(const std::vector<std::string>& lines, bool un
     }
 
     if (!aggTriples.empty())
-    {
-        if (uncensored)
-        {
-            std::ostringstream oss;
-            for (size_t i = 0; i < aggTriples.size(); ++i)
-            {
-                if (i) oss << ", ";
-                std::string sv = tripleToUtf8(aggTriples[i]);
-                oss << sv;
-                sage::Cryptography::cleanseString(sv);
-            }
-            std::cout << oss.str() << "\n";
-        }
-        else
-        {
-            interactiveMaskedWin(aggTriples);
-            std::cout << "(Masked; Click **** to copy)\n";
-        }
-        for (auto& t : aggTriples)
-        {
-            sage::Cryptography::cleanseString(t.primary, t.secondary, t.tertiary);
-        }
-    }
+        displayTriples(aggTriples, uncensored);
 
     for (auto& p : otherPlain)
     {
         if (uncensored)
-        {
             std::cout << p << "\n";
-        }
         else
         {
             (void)sage::Clipboard::copyWithTTL(p);
@@ -364,9 +374,7 @@ void FileOperations::processBatch(const std::vector<std::string>& lines, bool un
     }
 
     for (const auto& hex : encHex)
-    {
         std::cout << hex << "\n";
-    }
 }
 
 // ============================================================================

@@ -15,12 +15,10 @@
 
 namespace sage {
 
-bool Cryptography::ctEqualRaw(const void* a, const void* b, size_t n)
+bool Cryptography::ctEqualRaw(const unsigned char* a, const unsigned char* b, size_t n)
 {
-    const auto* x = static_cast<const unsigned char*>(a);
-    const auto* y = static_cast<const unsigned char*>(b);
     unsigned char v = 0;
-    for (size_t i = 0; i < n; ++i) v |= (unsigned char)(x[i] ^ y[i]);
+    for (size_t i = 0; i < n; ++i) v |= static_cast<unsigned char>(a[i] ^ b[i]);
     return v == 0;
 }
 
@@ -442,9 +440,12 @@ std::vector<unsigned char>
     opensslCheck(EVP_DecryptUpdate(ctx.p, plain.data(), &outlen, ct, (int)ct_len),
         "DecryptUpdate(CT) failed");
 
-    // Set tag and finalize (auth check happens here)
+    // Set tag and finalize (auth check happens here).
+    // Copy tag into a mutable buffer - OpenSSL's API takes void* even though
+    // SET_TAG does not modify the data.
+    std::vector<unsigned char> tagCopy(tag, tag + sage::cfg::TAG_LEN);
     opensslCheck(EVP_CIPHER_CTX_ctrl(ctx.p, EVP_CTRL_GCM_SET_TAG, (int)sage::cfg::TAG_LEN,
-        const_cast<unsigned char*>(tag)),
+        tagCopy.data()),
         "SET_TAG failed");
 
     int ok = EVP_DecryptFinal_ex(ctx.p, plain.data() + outlen, &fin);

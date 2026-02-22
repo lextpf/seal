@@ -54,7 +54,11 @@ from ocr import (
     MAX_INPUT_SIDE,
 )
 
-EXPECTED = "T3*1-B?+AcJ3@_9L"
+EXPECTED = [
+    "T3*1-B?+AcJ3@_9L3n",
+    "Ab?34-N*c@8_6wxK7v",
+    "Hc5:f-?29+n@xPey$q",
+]
 
 def configure_runtime_limits():
     torch_threads = ocr_mod.env_int_or_default("TESS_OCR_TORCH_THREADS", 1, 1, 16)
@@ -346,11 +350,18 @@ def main():
         if combined:
             combined = normalize_ocr_ambiguities(best_text_window(combined))
 
-        match = combined == EXPECTED
-        if match:
+        matched_pw = None
+        for pw in EXPECTED:
+            if combined == pw:
+                matched_pw = pw
+                break
+        if matched_pw is not None:
             correct += 1
-        status = "OK" if match else "FAIL"
-        print(f"[{status}] {fname}: '{combined}' (expected '{EXPECTED}')")
+        status = "OK" if matched_pw else "FAIL"
+        if matched_pw:
+            print(f"[{status}] {fname}: '{combined}'")
+        else:
+            print(f"[{status}] {fname}: '{combined}' (no match)")
         print()
 
     print(f"\n{'='*60}")

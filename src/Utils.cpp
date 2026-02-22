@@ -6,6 +6,8 @@
 
 #include "Utils.h"
 
+#include <algorithm>
+
 namespace sage::utils {
 
 std::string trim(const std::string& s)
@@ -66,8 +68,8 @@ std::vector<std::string> extractHexTokens(const std::string& raw)
     {
         if ((t.size() % 2) == 0 && t.size() >= min_hex_chars)
         {
-            bool allhex = true;
-            for (unsigned char c : t) if (!std::isxdigit(c)) { allhex = false; break; }
+            bool allhex = std::all_of(t.begin(), t.end(),
+                [](unsigned char c) { return std::isxdigit(c) != 0; });
             if (allhex) good.push_back(t);
         }
     }

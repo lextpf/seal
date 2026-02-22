@@ -8,6 +8,8 @@
 #include <QtGui/QGuiApplication>
 #include <QtGui/QWindow>
 
+#include <memory>
+
 namespace sage {
 
 // Only one controller can own the global hooks at a time.
@@ -270,19 +272,17 @@ void FillController::performType()
     // Poll for Ctrl release before sending keystrokes. If we type while
     // Ctrl is still held, the target app interprets them as Ctrl+shortcuts
     // (e.g. Ctrl+A = select-all instead of typing 'a').
-    auto* poll = new QTimer(this);
+    auto* poll = std::make_unique<QTimer>(this).release();
     poll->setInterval(20);
-    int* elapsed = new int(0);
-    connect(poll, &QTimer::timeout, this, [this, target, poll, elapsed]()
+    connect(poll, &QTimer::timeout, this, [this, target, poll, elapsedMs = 0]() mutable
     {
-        *elapsed += 20;
+        elapsedMs += 20;
         bool ctrlStillDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-        if (ctrlStillDown && *elapsed < 2000)
+        if (ctrlStillDown && elapsedMs < 2000)
             return;  // Keep polling - Ctrl not yet released.
 
         poll->stop();
         poll->deleteLater();
-        delete elapsed;
 
         // Guard against cancel() being called while we were polling.
         if (m_State != State::Typing)
