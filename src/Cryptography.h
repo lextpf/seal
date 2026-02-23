@@ -596,7 +596,7 @@ namespace sage {
         static BOOL tryEnableLockPrivilege();
 
         /// @brief Securely wipe and release containers.
-        static void cleanseString() noexcept { /* Base case for variadic fold expression — intentionally empty */ }
+        static void cleanseString() noexcept { /* Base case for variadic fold expression - intentionally empty */ }
 
         template <class... Ts>
         static void cleanseString(Ts&&... xs) noexcept
