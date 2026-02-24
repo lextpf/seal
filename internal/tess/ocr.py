@@ -13,7 +13,7 @@ FAST_MODE = True
 MAX_INPUT_SIDE = 960
 EASYOCR_BEAM_WIDTH = 10
 REC_PIPELINE_BONUS = 0.45
-ALLOWLIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%&*+-=._?"
+ALLOWLIST = "ACDEFHJKMNPRTUVWXYacdefhjkmnprtuvwxy34679!#$%&*+-=._:@^~"
 
 warnings.filterwarnings(
     "ignore",

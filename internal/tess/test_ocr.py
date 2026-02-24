@@ -55,9 +55,11 @@ from ocr import (
 )
 
 EXPECTED = [
-    "T3*1-B?+AcJ3@_9L3n",
-    "Ab?34-N*c@8_6wxK7v",
-    "Hc5:f-?29+n@xPey$q",
+    "A&9@#+wPKDPtYwpP",
+    ":^k*.mEj+KyJJ=FK",
+    "~#4TyWUHKnmYXr+D",
+    "jm:mxvY3xM@w^%f!",
+    "wvXmmPXNPyKfHD^~"
 ]
 
 def configure_runtime_limits():
