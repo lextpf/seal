@@ -474,4 +474,67 @@ sage::basic_secure_string<wchar_t> readPasswordSecureDesktop(
     // ~SecureWCharBuffer and ~CoTaskMemGuard handle all cleanup automatically
 }
 
+sage::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt)
+{
+    std::cout << prompt << std::flush;
+
+    // Read into a narrow secure_string first (one byte per keystroke),
+    // then widen at the end. This keeps the plaintext in locked memory.
+    sage::secure_string<> narrow;
+
+    for (;;)
+    {
+        int ch = _getch();
+
+        if (ch == '\r' || ch == '\n')
+        {
+            std::cout << "\n";
+            break;
+        }
+
+        if (ch == 27)   // Escape
+            throw std::runtime_error("Cancelled");
+        if (ch == 3)    // Ctrl+C
+            throw std::runtime_error("Interrupted");
+
+        // Backspace
+        if (ch == 8)
+        {
+            if (!narrow.empty())
+            {
+                narrow.pop_back();
+                std::cout << "\b \b" << std::flush;
+            }
+            continue;
+        }
+
+        // Skip extended key sequences (arrow keys, function keys)
+        if (ch == 0 || ch == 224)
+        {
+            (void)_getch();
+            continue;
+        }
+
+        narrow.push_back(static_cast<char>(ch));
+        std::cout << '*' << std::flush;
+    }
+
+    // Widen UTF-8 into a secure wchar_t string.
+    sage::basic_secure_string<wchar_t> result;
+    if (!narrow.empty())
+    {
+        int need = MultiByteToWideChar(
+            CP_UTF8, 0, narrow.data(), (int)narrow.size(), nullptr, 0);
+        if (need > 0)
+        {
+            result.s.resize(need);
+            MultiByteToWideChar(
+                CP_UTF8, 0, narrow.data(), (int)narrow.size(),
+                result.s.data(), need);
+        }
+    }
+    // narrow auto-wipes on scope exit
+    return result;
+}
+
 } // namespace sage

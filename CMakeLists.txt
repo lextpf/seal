@@ -62,10 +62,8 @@ if(DEFINED OpenSSL_VERSION AND NOT "${OpenSSL_VERSION}" STREQUAL "" AND OpenSSL_
     message(WARNING "OpenSSL version ${OpenSSL_VERSION} found, but 3.0.0 or higher is recommended")
 endif()
 
-# --- tess OCR (webcam-based password entry) ---
-set(TESS_BUILD_WEBCAM_APP OFF CACHE BOOL "" FORCE)
-set(TESS_OCR_ENABLE_WEBCAM ON  CACHE BOOL "" FORCE)
-add_subdirectory(internal/tess)
+find_package(OpenCV REQUIRED)
+message(STATUS "OpenCV version: ${OpenCV_VERSION}")
 
 set(WINDOWS_LIBS
     Shell32
@@ -87,6 +85,7 @@ set(SAGE_SOURCES
     src/Console.cpp
     src/FileOperations.cpp
     src/Backend.cpp
+    src/QrCapture.cpp
     src/FillController.cpp
     src/VaultModel.cpp
     src/QmlMain.cpp
@@ -109,7 +108,6 @@ qt_add_executable(sage
 target_include_directories(sage PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${OPENSSL_INCLUDE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/internal/tess
 )
 
 if(TARGET OpenSSL::SSL AND TARGET OpenSSL::Crypto)
@@ -134,7 +132,7 @@ target_link_libraries(sage PRIVATE
     Qt6::QuickControls2
     Qt6::Widgets
     ${WINDOWS_LIBS}
-    tess_ocr
+    ${OpenCV_LIBS}
 )
 
 target_compile_definitions(sage PRIVATE
@@ -200,27 +198,6 @@ if(WIN32)
         VERBATIM
     )
 endif()
-
-add_custom_command(TARGET sage POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/internal/tess/ocr.py"
-        "$<TARGET_FILE_DIR:sage>/ocr.py"
-    COMMENT "Copying tess OCR Python script"
-    VERBATIM
-)
-
-add_custom_command(TARGET sage POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E make_directory
-        "$<TARGET_FILE_DIR:sage>/models"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/internal/tess/models/craft_mlt_25k.pth"
-        "$<TARGET_FILE_DIR:sage>/models/craft_mlt_25k.pth"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/internal/tess/models/english_g2.pth"
-        "$<TARGET_FILE_DIR:sage>/models/english_g2.pth"
-    COMMENT "Copying tess OCR model weights"
-    VERBATIM
-)
 
 install(TARGETS sage
     RUNTIME DESTINATION bin

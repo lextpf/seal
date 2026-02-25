@@ -42,9 +42,9 @@ class FillController;
  * The user Ctrl+Clicks in an external application to type the username,
  * then Ctrl+Clicks again for the password. cancelFill() disarms early.
  *
- * ## :material-camera: OCR Capture
+ * ## :material-camera: QR Capture
  *
- * requestOcrCapture() launches the tess_ocr library to read a password
+ * requestQrCapture() launches the tess_qr library to scan a QR code
  * from a phone screen held up to the webcam. On success the captured
  * text is stored as the master password, skipping manual entry.
  */
@@ -257,12 +257,12 @@ public:
     Q_INVOKABLE void submitPassword(const QString& password);
 
     /**
-     * @brief Capture text from the webcam using OCR.
+     * @brief Capture text from the webcam by scanning a QR code.
      *
-     * Launches an asynchronous OCR capture via the tess_ocr library.
-     * Emits ocrCaptureFinished when complete.
+     * Launches a QR capture via the tess_qr library.
+     * Emits qrCaptureFinished when complete.
      */
-    Q_INVOKABLE void requestOcrCapture();
+    Q_INVOKABLE void requestQrCapture();
 
     /**
      * @brief Arm auto-fill hooks for a specific credential.
@@ -313,13 +313,13 @@ signals:
     /// @brief Master password is required before an action can proceed.
     void passwordRequired();
 
-    /// @brief OCR webcam capture has finished.
+    /// @brief QR webcam capture has finished.
     /// @param success True if text was captured, false on error/cancel.
-    void ocrCaptureFinished(bool success);
+    void qrCaptureFinished(bool success);
 
-    /// @brief OCR captured text ready to pre-fill the password dialog.
+    /// @brief QR captured text ready to pre-fill the password dialog.
     /// @param text The captured password text (not yet confirmed).
-    void ocrTextReady(const QString& text);
+    void qrTextReady(const QString& text);
 
     /// @brief Decrypted account data is ready for the edit dialog.
     /// @param data QVariantMap with "service", "username", "password" keys.

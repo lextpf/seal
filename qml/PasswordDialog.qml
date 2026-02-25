@@ -11,9 +11,9 @@ Popup {
     property string errorMessage: ""
 
     signal accepted(string password)
-    signal ocrRequested()
+    signal qrRequested()
 
-    /// Set the password field text (e.g. from OCR) without closing the dialog.
+    /// Set the password field text (e.g. from QR scan) without closing the dialog.
     function fillPassword(text) {
         passwordField.text = text;
         passwordField.forceActiveFocus();
@@ -87,7 +87,7 @@ Popup {
             Layout.topMargin: 8
             Layout.leftMargin: 24
             Layout.rightMargin: 24
-            text: "Type your password or use webcam OCR."
+            text: "Type your password or scan a QR code."
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeMedium
             color: Theme.textSecondary
@@ -106,6 +106,7 @@ Popup {
             font.pixelSize: Theme.fontSizeMedium
             font.weight: Font.Medium
             color: Theme.textError
+            horizontalAlignment: Text.AlignHCenter
             wrapMode: Text.WordWrap
         }
 
@@ -183,35 +184,38 @@ Popup {
 
             Item { Layout.fillWidth: true }
 
-            // OCR button. Dialog stays open; field is filled when capture completes.
+            // QR button. Dialog stays open; field is filled when capture completes.
             Button {
-                id: ocrButton
+                id: qrButton
                 onClicked: {
-                    root.ocrRequested();
+                    root.qrRequested();
                 }
 
-                HoverHandler { id: ocrHover; cursorShape: Qt.PointingHandCursor }
+                HoverHandler { id: qrHover; cursorShape: Qt.PointingHandCursor }
 
                 scale: pressed ? 0.97 : 1.0
                 Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutBack; easing.overshoot: 2.0 } }
 
-                contentItem: RowLayout {
-                    spacing: 6
+                contentItem: Item {
                     SvgIcon {
-                        source: Theme.iconCamera
-                        color: ocrButton.hovered ? Theme.textPrimary : Theme.textGhost
+                        source: Theme.iconQrCode
+                        color: qrButton.hovered ? Theme.textPrimary : Theme.textGhost
                         width: Theme.iconSizeSmall
                         height: Theme.iconSizeSmall
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
+                        anchors.leftMargin: 4
                         Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
                     }
                     Text {
-                        text: "OCR"
+                        text: "QR"
                         font.family: Theme.fontFamily
                         font.pixelSize: Theme.fontSizeMedium
                         font.weight: Font.Medium
-                        color: ocrButton.hovered ? Theme.textPrimary : Theme.textGhost
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
+                        color: qrButton.hovered ? Theme.textPrimary : Theme.textGhost
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.horizontalCenterOffset: 4
                         Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
                     }
                 }
@@ -220,18 +224,18 @@ Popup {
                     implicitHeight: 34
                     radius: Theme.radiusMedium
                     gradient: Gradient {
-                        GradientStop { position: 0; color: ocrButton.pressed ? Theme.ghostBtnPressed : ocrButton.hovered ? Theme.ghostBtnHoverTop : Theme.ghostBtnTop; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
-                        GradientStop { position: 1; color: ocrButton.pressed ? Theme.ghostBtnPressed : ocrButton.hovered ? Theme.ghostBtnHoverEnd : Theme.ghostBtnEnd; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
+                        GradientStop { position: 0; color: qrButton.pressed ? Theme.ghostBtnPressed : qrButton.hovered ? Theme.ghostBtnHoverTop : Theme.ghostBtnTop; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
+                        GradientStop { position: 1; color: qrButton.pressed ? Theme.ghostBtnPressed : qrButton.hovered ? Theme.ghostBtnHoverEnd : Theme.ghostBtnEnd; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
                     }
                     border.width: 1
-                    border.color: ocrButton.pressed ? Theme.borderPressed
-                                : ocrButton.hovered ? Theme.borderFocusHover
+                    border.color: qrButton.pressed ? Theme.borderPressed
+                                : qrButton.hovered ? Theme.borderFocusHover
                                 : Theme.borderSubtle
                     Behavior on border.color { ColorAnimation { duration: Theme.hoverDuration } }
 
-                    RippleEffect { id: ocrRipple; baseColor: Qt.rgba(Theme.ghostBtnHoverTop.r, Theme.ghostBtnHoverTop.g, Theme.ghostBtnHoverTop.b, 0.35) }
+                    RippleEffect { id: qrRipple; baseColor: Qt.rgba(Theme.ghostBtnHoverTop.r, Theme.ghostBtnHoverTop.g, Theme.ghostBtnHoverTop.b, 0.35) }
                 }
-                onPressed: ocrRipple.trigger(ocrHover.point.position.x, ocrHover.point.position.y)
+                onPressed: qrRipple.trigger(qrHover.point.position.x, qrHover.point.position.y)
             }
 
             // OK button. Disabled until non-empty to prevent empty scrypt call.

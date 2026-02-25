@@ -52,14 +52,13 @@ Rectangle {
             color: Theme.textMuted
         }
 
-        // Dot separator, hidden when either side is absent.
-        Rectangle {
+        // Pipe separator, hidden when either side is absent.
+        Text {
             visible: root.vaultFileName !== "" && root.accountCount > 0
-            width: 3
-            height: 3
-            radius: 1.5
+            text: "|"
+            font.family: Theme.fontFamily
+            font.pixelSize: Theme.fontSizeSmall
             color: Theme.textDisabled
-            Layout.alignment: Qt.AlignVCenter
         }
 
         // Account count

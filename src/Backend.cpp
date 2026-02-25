@@ -24,7 +24,7 @@
 #include <memory>
 #include <string>
 
-#include "tess_ocr_api.h"
+#include "QrCapture.h"
 
 namespace sage {
 
@@ -179,49 +179,39 @@ void Backend::submitPassword(const QString& password)
     }
 }
 
-void Backend::requestOcrCapture()
+void Backend::requestQrCapture()
 {
-    // Configure tess_ocr for GPU-accelerated capture with multiple workers.
-    _putenv_s("TESS_OCR_BACKEND", "cuda");
-    _putenv_s("TESS_OCR_WORKERS", "1");
-    _putenv_s("TESS_OCR_PRELOAD_WORKERS", "1");
-    _putenv_s("TESS_OCR_TORCH_THREADS", "8");
-    _putenv_s("TESS_OCR_CV_THREADS", "4");
-    _putenv_s("TESS_OCR_PRIORITY_LEVEL", "2");
     _putenv_s("TESS_CAMERA_WARMUP_MS", "250");
     _putenv_s("TESS_ENTER_CAPTURE_FRAMES", "3");
 
-    // Let the OCR window come to the foreground over our window.
+    // Let the QR scanner window come to the foreground over our window.
     AllowSetForegroundWindow(ASFW_ANY);
 
-    qCInfo(logBackend) << "starting webcam OCR capture";
-    char buf[512] = {};
-    int rc = tess_ocr_capture_from_webcam(nullptr, 0, buf, sizeof(buf));
-    qCInfo(logBackend) << "webcam OCR returned rc=" << rc
-                       << "len=" << strnlen(buf, sizeof(buf));
+    qCInfo(logBackend) << "starting webcam QR capture";
+    sage::secure_string<> qrResult = sage::captureQrFromWebcam();
+    qCInfo(logBackend) << "webcam QR returned len=" << qrResult.size();
 
-    if (rc != TESS_OCR_OK || buf[0] == '\0')
+    if (qrResult.empty())
     {
-        SecureZeroMemory(buf, sizeof(buf));
-        qCWarning(logBackend) << "password NOT set (OCR failed or empty)";
-        setStatus("OCR capture failed or cancelled");
-        emit ocrCaptureFinished(false);
+        qCWarning(logBackend) << "password NOT set (QR capture failed or empty)";
+        setStatus("QR capture failed or cancelled");
+        emit qrCaptureFinished(false);
         return;
     }
 
-    // Convert the UTF-8 OCR result to a QString for pre-filling the
+    // Convert the UTF-8 QR result to a QString for pre-filling the
     // password dialog. Don't set m_Password yet - let the user confirm.
-    QString captured = QString::fromUtf8(buf, (int)strnlen(buf, sizeof(buf)));
-    SecureZeroMemory(buf, sizeof(buf));
+    QString captured = QString::fromUtf8(qrResult.data(), (int)qrResult.size());
+    // qrResult auto-wipes on scope exit
 
-    qCInfo(logBackend) << "OCR captured" << captured.size() << "chars, awaiting confirmation";
-    setStatus("OCR captured - confirm password");
-    emit ocrCaptureFinished(true);
+    qCInfo(logBackend) << "QR captured" << captured.size() << "chars, awaiting confirmation";
+    setStatus("QR captured - confirm password");
+    emit qrCaptureFinished(true);
 
     // Signal the QML layer to re-open the password dialog with the
     // captured text pre-filled. The user can review and press OK to confirm,
     // which flows through the normal submitPassword() path.
-    emit ocrTextReady(captured);
+    emit qrTextReady(captured);
 
     // Wipe the local QString copy.
     captured.fill(QChar(0));

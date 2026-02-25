@@ -16,7 +16,7 @@
  *
  *      A Windows AES-256-GCM encryption utility with Qt6/QML GUI and CLI
  *      providing on-demand credential management, directory encryption,
- *      webcam OCR authentication, and global auto-fill.
+ *      webcam QR authentication, and global auto-fill.
  *
  *    ----------------------------------------------------------------------
  *
@@ -67,14 +67,14 @@ static void printHelp()
     std::cout << "  -d, --decrypt    Stream decryption mode (stdin -> stdout)\n";
     std::cout << "  -u, --ui         Launch graphical user interface\n";
     std::cout << "  --cli            Launch command-line interactive mode\n";
-    std::cout << "  --import DATA OUTPUT  Import credentials into a vault file\n";
+    std::cout << "  --import DATA [OUTPUT]  Import credentials into a vault file\n";
     std::cout << "  -h, --help       Display this help message\n";
     std::cout << "  (no args)        GUI mode (default)\n\n";
     std::cout << "Import format:\n";
     std::cout << "  DATA is comma-separated entries: plat:user:pass, plat:user:pass, ...\n";
     std::cout << "  DATA can also be a path to a text file containing entries\n";
     std::cout << "  (one per line or comma-separated, spaces around commas are OK)\n";
-    std::cout << "  OUTPUT is the vault file path (e.g. myvault.sage)\n\n";
+    std::cout << "  OUTPUT is the vault file path (default: .sage)\n\n";
     std::cout << "Examples:\n";
     std::cout << "  sage -e < input.txt > output.sage\n";
     std::cout << "  sage -d < output.sage > decrypted.txt\n";
@@ -83,6 +83,7 @@ static void printHelp()
     std::cout << "  sage --ui   (Launch GUI mode)\n";
     std::cout << "  sage --cli  (Launch CLI interactive mode)\n";
     std::cout << "  sage --import \"github:alice:pw123, aws:bob:secret\" myvault.sage\n";
+    std::cout << "  sage --import \"github:alice:pw123\"              (saves to .sage)\n";
     std::cout << "  sage --import entries.txt myvault.sage\n";
 }
 
@@ -108,12 +109,15 @@ static int parseArguments(int argc, char* argv[], ProgramOptions& opts)
         }
         else if (arg == "--import") {
             opts.importMode = true;
-            if (i + 2 < argc) {
+            if (i + 1 < argc) {
                 opts.importData = argv[++i];
-                opts.importOutputPath = argv[++i];
+                if (i + 1 < argc)
+                    opts.importOutputPath = argv[++i];
+                else
+                    opts.importOutputPath = ".sage";
             } else {
-                std::cerr << "Error: --import requires two arguments\n";
-                std::cerr << "Usage: sage --import \"plat:user:pass,...\" output.sage\n";
+                std::cerr << "Error: --import requires at least one argument\n";
+                std::cerr << "Usage: sage --import \"plat:user:pass,...\" [output.sage]\n";
                 return 1;
             }
         }
@@ -256,7 +260,7 @@ static int handleImportMode(std::string& importData, const std::string& importOu
 
     sage::basic_secure_string<wchar_t> masterPassword;
     try {
-        masterPassword = sage::readPasswordSecureDesktop();
+        masterPassword = sage::readPasswordConsole();
     } catch (...) {
         std::cerr << "Error: Failed to read master password\n";
         return 1;
@@ -357,7 +361,7 @@ static int handleCliMode(bool streamMode, bool encryptMode, bool decryptMode)
     }
 
     try {
-        sage::basic_secure_string<wchar_t> password = sage::readPasswordSecureDesktop();
+        sage::basic_secure_string<wchar_t> password = sage::readPasswordConsole();
         sage::DPAPIGuard<sage::basic_secure_string<wchar_t>> dpapi(&password);
 
         if (streamMode)

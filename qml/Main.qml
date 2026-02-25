@@ -57,15 +57,15 @@ ApplicationWindow {
             passwordDlg.open();
         }
 
-        // Show error in the already-open dialog on OCR failure.
-        function onOcrCaptureFinished(success) {
+        // Show error in the already-open dialog on QR failure.
+        function onQrCaptureFinished(success) {
             if (!success) {
-                passwordDlg.errorMessage = "OCR capture failed or cancelled.";
+                passwordDlg.errorMessage = "QR capture failed or cancelled.";
             }
         }
 
-        // OCR captured text - fill the password field (dialog is still open).
-        function onOcrTextReady(text) {
+        // QR captured text - fill the password field (dialog is still open).
+        function onQrTextReady(text) {
             passwordDlg.errorMessage = "";
             passwordDlg.fillPassword(text);
         }
@@ -194,6 +194,8 @@ ApplicationWindow {
                 Layout.fillHeight: true
                 model: Backend.vaultModel
                 selectedRow: Backend.selectedIndex
+                searchActive: Backend.searchFilter.length > 0
+                vaultLoaded: Backend.vaultLoaded
 
                 onRowClicked: function(row) {
                     Backend.selectedIndex = (Backend.selectedIndex === row) ? -1 : row;
@@ -274,8 +276,8 @@ ApplicationWindow {
         onAccepted: function(password) {
             Backend.submitPassword(password);
         }
-        onOcrRequested: {
-            Backend.requestOcrCapture();
+        onQrRequested: {
+            Backend.requestQrCapture();
         }
     }
 

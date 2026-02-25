@@ -78,14 +78,14 @@ Popup {
                     source: Theme.iconService
                     width: Theme.iconSizeMedium
                     height: Theme.iconSizeMedium
-                    color: Theme.textSecondary
+                    color: Theme.accent
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
                     text: "Service:"
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeMedium
-                    color: Theme.textSecondary
+                    color: Theme.accent
                 }
             }
             TextField {
@@ -117,14 +117,14 @@ Popup {
                     source: Theme.iconUsername
                     width: Theme.iconSizeMedium
                     height: Theme.iconSizeMedium
-                    color: Theme.textSecondary
+                    color: Theme.accent
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
                     text: "Username:"
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeMedium
-                    color: Theme.textSecondary
+                    color: Theme.accent
                 }
             }
             TextField {
@@ -154,14 +154,14 @@ Popup {
                     source: Theme.iconPassword
                     width: Theme.iconSizeMedium
                     height: Theme.iconSizeMedium
-                    color: Theme.textSecondary
+                    color: Theme.accent
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
                     text: "Password:"
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeMedium
-                    color: Theme.textSecondary
+                    color: Theme.accent
                 }
             }
             TextField {

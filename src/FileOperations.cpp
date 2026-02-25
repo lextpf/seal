@@ -8,10 +8,6 @@
 
 namespace sage {
 
-// ============================================================================
-// tripleToUtf8
-// ============================================================================
-
 std::string FileOperations::tripleToUtf8(const sage::secure_triplet16_t& t)
 {
     auto to_utf8 = [](auto& w) {
@@ -26,10 +22,6 @@ std::string FileOperations::tripleToUtf8(const sage::secure_triplet16_t& t)
     out.append(s).push_back(':'); out.append(u).push_back(':'); out.append(p);
     return out;
 }
-
-// ============================================================================
-// Single-file encrypt / decrypt
-// ============================================================================
 
 template<class SecurePwd>
 bool FileOperations::encryptFileInPlace(const char* path, const SecurePwd& pwd)
@@ -90,10 +82,6 @@ FileOperations::decryptLine(const std::string& rawHex, const SecurePwd& pwd)
     return out;
 }
 
-// ============================================================================
-// Triple helpers
-// ============================================================================
-
 template<class A>
 bool FileOperations::parseTriples(std::string_view plain, std::vector<sage::secure_triplet16<A>>& out)
 {
@@ -137,10 +125,6 @@ bool FileOperations::parseTriples(std::string_view plain, std::vector<sage::secu
     if (!flush(tok)) { out.clear(); return false; }
     return !out.empty();
 }
-
-// ============================================================================
-// Directory and file processing
-// ============================================================================
 
 template<class SecurePwd>
 bool FileOperations::processDirectory(const std::string& dir, const SecurePwd& password, bool recurse)
@@ -377,10 +361,6 @@ void FileOperations::processBatch(const std::vector<std::string>& lines, bool un
         std::cout << hex << "\n";
 }
 
-// ============================================================================
-// Stream encrypt / decrypt
-// ============================================================================
-
 template<class SecurePwd>
 bool FileOperations::streamEncrypt(const SecurePwd& password)
 {
@@ -460,10 +440,6 @@ bool FileOperations::streamDecrypt(const SecurePwd& password)
         return false;
     }
 }
-
-// ============================================================================
-// Explicit template instantiations
-// ============================================================================
 
 using SecNarrow = sage::secure_string<>;
 using SecWide   = sage::basic_secure_string<wchar_t>;

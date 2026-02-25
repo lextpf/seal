@@ -241,6 +241,8 @@ QtObject {
     readonly property string iconUsername:     "qrc:/qt/qml/sage/assets/svgs/user.svg"
     readonly property string iconPassword:     "qrc:/qt/qml/sage/assets/svgs/lock.svg"
     readonly property string iconCamera:       "qrc:/qt/qml/sage/assets/svgs/camera-web.svg"
+    readonly property string iconQrCode:       "qrc:/qt/qml/sage/assets/svgs/qrcode-read.svg"
+    readonly property string iconFilterSlash:  "qrc:/qt/qml/sage/assets/svgs/filter-slash.svg"
     readonly property string iconFingerprint:  "qrc:/qt/qml/sage/assets/svgs/fingerprint.svg"
     readonly property string iconEye:          "qrc:/qt/qml/sage/assets/svgs/eye.svg"
     readonly property string iconEyeSlash:     "qrc:/qt/qml/sage/assets/svgs/eye-slash.svg"

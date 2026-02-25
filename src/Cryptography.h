@@ -635,8 +635,6 @@ namespace sage {
             const SecurePwd& pwd,
             std::span<const unsigned char> salt);
 
-        // --- cleanseOne overloads ---
-
         template <class CharT, class Traits, class Alloc>
         static void cleanseOne(std::basic_string<CharT, Traits, Alloc>& s) noexcept
         {

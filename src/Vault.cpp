@@ -117,12 +117,14 @@ std::vector<VaultRecord> loadVaultIndex(
         if (line.empty())
             continue;
 
-        auto tabPos = line.find('\t');
-        if (tabPos == std::string::npos)
+        auto sepPos = line.find(':');
+        if (sepPos == std::string::npos)
+            sepPos = line.find('|');  // backwards compat with v1 vaults
+        if (sepPos == std::string::npos)
             continue;
 
-        std::string platformHex = line.substr(0, tabPos);
-        std::string credHex     = line.substr(tabPos + 1);
+        std::string platformHex = line.substr(0, sepPos);
+        std::string credHex     = line.substr(sepPos + 1);
 
         std::vector<unsigned char> platformBlob, credBlob;
         if (!sage::utils::from_hex(platformHex, platformBlob))
@@ -192,7 +194,7 @@ bool saveVaultV2(
             platformBlob = encryptString(rec.m_Platform, password);
         }
 
-        out << sage::utils::to_hex(platformBlob) << "\t" << sage::utils::to_hex(rec.m_EncryptedBlob) << "\n";
+        out << sage::utils::to_hex(platformBlob) << ":" << sage::utils::to_hex(rec.m_EncryptedBlob) << "\n";
     }
 
     bool ok = out.good();

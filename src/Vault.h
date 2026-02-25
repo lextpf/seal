@@ -49,7 +49,7 @@ struct DecryptedCredential
  *
  * Decrypts platform names on load so the UI can list accounts.
  * Credentials remain encrypted until explicitly requested.
- * Each line: encrypted_platform \\t encrypted_credential.
+ * Each line: encrypted_platform_hex | encrypted_credential_hex.
  */
 std::vector<VaultRecord> loadVaultIndex(
     const QString& vaultPath,
@@ -59,7 +59,7 @@ std::vector<VaultRecord> loadVaultIndex(
 /**
  * @brief Save vault with fully-encrypted records.
  *
- * Each line: encrypted_platform_hex \\t encrypted_credential_hex.
+ * Each line: encrypted_platform_hex | encrypted_credential_hex.
  * Deleted records are omitted.  Untouched records reuse their existing
  * encrypted blobs (no re-encryption).
  */

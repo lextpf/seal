@@ -168,4 +168,21 @@ sage::basic_secure_string<wchar_t> readPasswordSecureDesktop(
     const wchar_t* caption = L"sage AES-256-GCM",
     const wchar_t* message = L"Enter your master password.");
 
+/**
+ * @brief Read a password from the console with masked echo.
+ *
+ * Prints @p prompt, then reads characters one at a time via `_getch()`.
+ * Each character is echoed as `*`. Backspace removes the last character.
+ * Enter submits. Escape or Ctrl+C throws.
+ *
+ * The password is stored directly in a locked-page secure wide string
+ * so it never sits in pageable `std::string` memory.
+ *
+ * @param prompt Text shown before the masked input (default: "Password: ").
+ * @return The entered password in a secure wide string.
+ * @throw std::runtime_error on Escape or Ctrl+C.
+ */
+sage::basic_secure_string<wchar_t> readPasswordConsole(
+    const char* prompt = "Password: ");
+
 } // namespace sage

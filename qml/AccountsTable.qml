@@ -10,6 +10,8 @@ Rectangle {
 
     property var model
     property int selectedRow: -1
+    property bool searchActive: false
+    property bool vaultLoaded: false
 
     signal rowClicked(int row)
 
@@ -157,10 +159,42 @@ Rectangle {
                 onClicked: root.rowClicked(index)
             }
 
-            // Empty state
+            // Empty state - no search results
             Column {
                 anchors.centerIn: parent
-                visible: listView.count === 0
+                visible: listView.count === 0 && root.searchActive && root.vaultLoaded
+                spacing: 10
+
+                SvgIcon {
+                    source: Theme.iconFilterSlash
+                    width: Theme.px(32)
+                    height: Theme.px(32)
+                    color: Theme.accentMuted
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+
+                Text {
+                    text: "No accounts found"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeLarge
+                    font.weight: Font.Medium
+                    color: Theme.textMuted
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+
+                Text {
+                    text: "Try a different search term"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.textDisabled
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+            }
+
+            // Empty state - no vault loaded
+            Column {
+                anchors.centerIn: parent
+                visible: listView.count === 0 && !root.searchActive
                 spacing: 10
 
                 SvgIcon {

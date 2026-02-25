@@ -189,7 +189,7 @@ RowLayout {
         Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutBack; easing.overshoot: 2.0 } }
 
         background: Rectangle {
-            implicitWidth: 140
+            implicitWidth: 160
             implicitHeight: 38
             radius: Theme.radiusMedium
             // Separate color branches: armed (orange) vs normal (yellow-green).

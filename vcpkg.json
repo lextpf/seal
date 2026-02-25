@@ -22,12 +22,19 @@
     "qtdeclarative",
     "qtquickcontrols2",
     "gtest",
-    "opencv"
+    {
+      "name": "opencv",
+      "default-features": false
+    }
   ],
   "overrides": [
     {
       "name": "openssl",
       "version": "3.4.1"
+    },
+    {
+      "name": "opencv",
+      "version": "4.10.0"
     }
   ],
   "builtin-baseline": "aa2d37682e3318d93aef87efa7b0e88e81cd3d59"
