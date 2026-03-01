@@ -151,15 +151,15 @@ QtObject {
     property color accent2:       dark ? "#50c8c8" : "#4a8858"
     property color accent2Dim:    dark ? "#388888" : "#6aaa70"
 
-    // Fill-armed: opaque orange so the active-hooks state is unmissable.
-    property color fillArmedTop:      "#d87000"
-    property color fillArmedEnd:      "#c06000"
-    property color fillArmedHoverTop: "#f08000"
-    property color fillArmedHoverEnd: "#d87000"
-    property color fillArmedPressTop: "#b85c00"
-    property color fillArmedPressEnd: "#a05000"
-    property color fillArmedDot:      "#ff8c00"
-    property color borderFillArmed:   Qt.rgba(1.0, 0.58, 0.08, 0.45)
+    // Fill-armed: same yellow-green hue as Fill, boosted saturation & alpha.
+    property color fillArmedTop:      dark ? Qt.rgba(0.22, 0.30, 0.08, 0.88) : Qt.rgba(0.72, 0.84, 0.52, 0.92)
+    property color fillArmedEnd:      dark ? Qt.rgba(0.18, 0.26, 0.06, 0.92) : Qt.rgba(0.68, 0.80, 0.46, 0.94)
+    property color fillArmedHoverTop: dark ? Qt.rgba(0.28, 0.38, 0.10, 0.92) : Qt.rgba(0.64, 0.78, 0.42, 0.94)
+    property color fillArmedHoverEnd: dark ? Qt.rgba(0.24, 0.34, 0.08, 0.95) : Qt.rgba(0.60, 0.74, 0.36, 0.96)
+    property color fillArmedPressTop: dark ? Qt.rgba(0.14, 0.18, 0.04, 0.50) : Qt.rgba(0.50, 0.62, 0.32, 0.55)
+    property color fillArmedPressEnd: dark ? Qt.rgba(0.12, 0.16, 0.04, 0.55) : Qt.rgba(0.46, 0.58, 0.28, 0.58)
+    property color fillArmedDot:      dark ? "#c0d848" : "#5a7a20"
+    property color borderFillArmed:   dark ? Qt.rgba(0.55, 0.72, 0.18, 0.45) : Qt.rgba(0.38, 0.52, 0.12, 0.45)
 
     // -- Text colors --
     // Graduated hierarchy: primary > secondary > muted > disabled > subtle.

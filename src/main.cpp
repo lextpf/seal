@@ -63,17 +63,17 @@ static void printHelp()
     std::cout << "Usage:\n";
     std::cout << "  sage [OPTIONS]\n\n";
     std::cout << "Options:\n";
-    std::cout << "  -e, --encrypt    Stream encryption mode (stdin -> stdout)\n";
-    std::cout << "  -d, --decrypt    Stream decryption mode (stdin -> stdout)\n";
-    std::cout << "  -u, --ui         Launch graphical user interface\n";
-    std::cout << "  --cli            Launch command-line interactive mode\n";
-    std::cout << "  --import DATA [OUTPUT]  Import credentials into a vault file\n";
-    std::cout << "  -h, --help       Display this help message\n";
-    std::cout << "  (no args)        GUI mode (default)\n\n";
+    std::cout << "  -e, --encrypt           Stream encryption mode (stdin -> stdout)\n";
+    std::cout << "  -d, --decrypt           Stream decryption mode (stdin -> stdout)\n";
+    std::cout << "  -u, --ui                Launch graphical user interface\n";
+    std::cout << "  --cli                   Launch command-line interactive mode\n";
+    std::cout << "  --import DATA [OUTPUT]  Import credentials into a vault file\n"
+              << "  --import - [OUTPUT]     Read import entries from stdin (pipe or paste)\n";
+    std::cout << "  -h, --help              Display this help message\n";
+    std::cout << "  (no args)               GUI mode (default)\n\n";
     std::cout << "Import format:\n";
-    std::cout << "  DATA is comma-separated entries: plat:user:pass, plat:user:pass, ...\n";
+    std::cout << "  DATA is comma-separated entries: plat:user:pass, plat:user:pass,...\n";
     std::cout << "  DATA can also be a path to a text file containing entries\n";
-    std::cout << "  (one per line or comma-separated, spaces around commas are OK)\n";
     std::cout << "  OUTPUT is the vault file path (default: .sage)\n\n";
     std::cout << "Examples:\n";
     std::cout << "  sage -e < input.txt > output.sage\n";
@@ -82,9 +82,10 @@ static void printHelp()
     std::cout << "  sage        (Launch GUI mode - default)\n";
     std::cout << "  sage --ui   (Launch GUI mode)\n";
     std::cout << "  sage --cli  (Launch CLI interactive mode)\n";
-    std::cout << "  sage --import \"github:alice:pw123, aws:bob:secret\" myvault.sage\n";
     std::cout << "  sage --import \"github:alice:pw123\"              (saves to .sage)\n";
-    std::cout << "  sage --import entries.txt myvault.sage\n";
+    std::cout << "  sage --import entries.txt vault.sage            (saves to vault)\n";
+    std::cout << "  sage --import - vault.sage < entries.txt        (read from stdin)\n";
+    std::cout << "  echo \"github:alice:pw123\" | sage --import -     (pipe into stdin)\n";
 }
 
 // Returns: -1 = parsed OK (continue), 0 = help shown (exit 0), 1 = error (exit 1)
@@ -189,17 +190,27 @@ static std::string importTrim(const std::string& s)
 
 static void loadImportDataFromFile(std::string& importData)
 {
-    std::ifstream testFile(importData);
-    if (!testFile.good()) return;
+    std::string fileContent;
 
-    std::string fileContent((std::istreambuf_iterator<char>(testFile)),
-                             std::istreambuf_iterator<char>());
-    testFile.close();
-    // Replace newlines with commas so entries can be one-per-line or comma-separated
+    if (importData == "-") {
+        // Read from stdin - supports piping and paste (Ctrl+Z to end on Windows).
+        fileContent.assign(std::istreambuf_iterator<char>(std::cin),
+                           std::istreambuf_iterator<char>());
+        std::cout << "Reading entries from stdin...\n";
+    } else {
+        std::ifstream testFile(importData);
+        if (!testFile.good()) return;
+
+        fileContent.assign(std::istreambuf_iterator<char>(testFile),
+                           std::istreambuf_iterator<char>());
+        testFile.close();
+        std::cout << "Reading entries from file...\n";
+    }
+
+    // Replace newlines with commas so entries can be one-per-line or comma-separated.
     std::replace_if(fileContent.begin(), fileContent.end(),
         [](char c) { return c == '\n' || c == '\r'; }, ',');
     importData = fileContent;
-    std::cout << "Reading entries from file...\n";
 }
 
 static int parseImportEntries(const std::string& importData,

@@ -5,11 +5,11 @@ import QtQuick.Layouts
 // CRUD action buttons + Fill auto-type.
 //
 // Each button is color-coded by semantic meaning:
-//   Green       = Add (new credential)
-//   Purple      = Edit (modify existing)
-//   Red         = Delete (soft-delete, committed on save)
+//   Green        = Add (new credential)
+//   Purple       = Edit (modify existing)
+//   Red          = Delete (soft-delete, committed on save)
 //   Yellow-green = Fill (arm auto-type hooks)
-//   Orange      = Fill armed (hooks active, countdown running)
+//   Orange       = Fill armed (hooks active, countdown running)
 //
 // TintedButton is a shared inline component that Add/Edit/Delete instantiate
 // with their own tint* color overrides. Fill is a separate Button because it

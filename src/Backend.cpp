@@ -18,6 +18,7 @@
 #include <windows.h>
 #include <commdlg.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 #include <dwmapi.h>
 
 #include <functional>
@@ -57,19 +58,14 @@ Backend::Backend(QObject* parent)
     connect(m_FillController, &FillController::countdownSecondsChanged,
             this, &Backend::fillCountdownSecondsChanged);
 
-    // On fill complete/error/cancel, restore the sage window so the user
-    // can see the result without alt-tabbing back.
+    // Fill complete/cancel: stay minimized so sage doesn't steal focus from
+    // the app the user just filled credentials into. Only restore on error
+    // so the user can see what went wrong.
     connect(m_FillController, &FillController::fillCompleted,
             this, [this](const QString& msg)
     {
         m_DPAPIGuard.reprotect();
         setStatus(msg);
-        for (QWindow* w : QGuiApplication::topLevelWindows())
-        {
-            w->showNormal();
-            w->raise();
-            w->requestActivate();
-        }
     });
     connect(m_FillController, &FillController::fillError,
             this, [this](const QString& msg)
@@ -89,12 +85,6 @@ Backend::Backend(QObject* parent)
     {
         m_DPAPIGuard.reprotect();
         setStatus("Fill cancelled");
-        for (QWindow* w : QGuiApplication::topLevelWindows())
-        {
-            w->showNormal();
-            w->raise();
-            w->requestActivate();
-        }
     });
 }
 
@@ -288,25 +278,34 @@ QString Backend::saveFileDialog(const QString& title, const QString& filter)
 
 QString Backend::openFolderDialog(const QString& title)
 {
-    std::wstring wTitle = title.toStdWString();
+    IFileDialog* pfd = nullptr;
+    HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                  IID_PPV_ARGS(&pfd));
+    if (FAILED(hr))
+        return {};
 
-    BROWSEINFOW bi = {};
-    bi.hwndOwner = nullptr;
-    bi.lpszTitle = wTitle.c_str();
-    bi.ulFlags   = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    DWORD opts = 0;
+    pfd->GetOptions(&opts);
+    pfd->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR);
+    pfd->SetTitle(title.toStdWString().c_str());
 
-    LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
-    if (pidl)
+    QString result;
+    if (SUCCEEDED(pfd->Show(nullptr)))
     {
-        wchar_t path[MAX_PATH];
-        if (SHGetPathFromIDListW(pidl, path))
+        IShellItem* psi = nullptr;
+        if (SUCCEEDED(pfd->GetResult(&psi)))
         {
-            CoTaskMemFree(pidl);
-            return QString::fromWCharArray(path);
+            PWSTR path = nullptr;
+            if (SUCCEEDED(psi->GetDisplayName(SIGDN_FILESYSPATH, &path)))
+            {
+                result = QString::fromWCharArray(path);
+                CoTaskMemFree(path);
+            }
+            psi->Release();
         }
-        CoTaskMemFree(pidl);
     }
-    return {};
+    pfd->Release();
+    return result;
 }
 
 void Backend::loadVaultFromPath(const QString& filePath, bool isAutoLoad)
@@ -892,7 +891,7 @@ void Backend::armFill(int index)
     setStatus("Fill armed - Ctrl+Click target field");
 
     // Minimize so the user can see and click the target application.
-    // The window is restored automatically by the fill-complete/error/cancel handlers.
+    // Stays minimized after fill completes or is cancelled; only restored on error.
     for (QWindow* w : QGuiApplication::topLevelWindows())
     {
         if (w->isVisible())
