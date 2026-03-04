@@ -158,7 +158,7 @@
         useMaxWidth: true,
         curve: 'curve',
         nodeSpacing: 70,
-        rankSpacing: 90
+        rankSpacing: 90,
       },
       sequence: { useMaxWidth: true },
       themeVariables:
@@ -167,7 +167,7 @@
         lineColor: '#94a3b8',
         clusterBkg: '#0f172a',
         clusterBorder: '#334155',
-        fontSize: '14px',
+        fontSize: '36px',
         // Node colors
         primaryColor: '#3b82f6',
         primaryTextColor: '#f8fafc',
@@ -206,7 +206,18 @@
     const nodes = fixMermaidBlocks();
     if (nodes.length)
     {
+      // Temporarily reset zoom so mermaid measures text correctly
+      document.body.style.zoom = '1';
       await mermaid.run({ nodes });
+
+      // Widen foreignObject elements so Caveat font text isn't clipped
+      document.querySelectorAll('.mermaid foreignObject').forEach(fo =>
+      {
+        const w = parseFloat(fo.getAttribute('width') || 0);
+        if (w > 0) fo.setAttribute('width', w + 8);
+      });
+
+      document.body.style.zoom = '2';
     }
 
     // Inject Material Design Icons into sidebar nav labels

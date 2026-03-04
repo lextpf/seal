@@ -155,9 +155,15 @@ if errorlevel 1 (
         popd
         exit /b %ERRORLEVEL%
     )
-    python scripts\clean_docs.py
+    python scripts\_promote_subgroups.py
     if errorlevel 1 (
-        echo ERROR: clean_docs.py failed
+        echo ERROR: _promote_subgroups.py failed
+        popd
+        exit /b %ERRORLEVEL%
+    )
+    python scripts\_clean_docs.py
+    if errorlevel 1 (
+        echo ERROR: _clean_docs.py failed
         popd
         exit /b %ERRORLEVEL%
     )

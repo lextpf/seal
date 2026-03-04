@@ -7,7 +7,7 @@ Cleans doxide-generated markdown for MkDocs Material compatibility:
 - Adds Material icons to page titles and section headers
 - Trims function summary tables to first-sentence briefs
 - Flattens namespace definition lists into single-line bullets
-- Injects version from src/Version.h into home page subtitle
+- Injects version from CMakeLists.txt into home page subtitle
 
 Only touches files with 'generator: doxide' frontmatter.
 
@@ -284,7 +284,7 @@ def parse_version(repo_root: Path) -> str:
     if not cmakelists.exists():
         return ""
     content = cmakelists.read_text(encoding="utf-8")
-    m = re.search(r"project\s*\(\s*\w+[^)]*VERSION\s+([\d.]+)", content)
+    m = re.search(r"project\s*\([^)]*VERSION\s+(\d+\.\d+\.\d+)", content)
     return m.group(1) if m else ""
 
 
@@ -300,15 +300,6 @@ def inject_version(text: str, version: str) -> str:
         flags=re.MULTILINE,
     )
 
-
-def add_table_row_icons(text: str) -> str:
-    """Prepend :material-package: to links in Types / Functions summary tables."""
-    return re.sub(
-        r"^\| \[([^\]]+)\]",
-        r"| :material-package: [\1]",
-        text,
-        flags=re.MULTILINE,
-    )
 
 
 def clean(text: str) -> str:
