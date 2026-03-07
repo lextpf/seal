@@ -11,6 +11,6 @@ Q_DECLARE_LOGGING_CATEGORY(logFill)
 Q_DECLARE_LOGGING_CATEGORY(logFile)
 Q_DECLARE_LOGGING_CATEGORY(logApp)
 
-void installSageMessageHandler();
+void installSealMessageHandler();
 
-#endif // USE_QT_UI
+#endif  // USE_QT_UI

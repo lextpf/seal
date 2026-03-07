@@ -26,7 +26,7 @@ ApplicationWindow {
     height: 690
     minimumWidth: 1100
     minimumHeight: 540
-    title: "sage"
+    title: "seal"
     color: Theme.bgDeep
     // Smooth cross-fade when the user toggles dark/light mode, so the
     // background doesn't snap harshly.
@@ -282,7 +282,7 @@ ApplicationWindow {
                     confirmDlg.open();
                 }
 
-                // Arms global mouse/keyboard hooks via FillController. The sage
+                // Arms global mouse/keyboard hooks via FillController. The seal
                 // window minimizes so the user can Ctrl+Click in any external app
                 // to type the username, then Ctrl+Click again for the password.
                 // The hooks are removed automatically on completion, timeout, or cancel.

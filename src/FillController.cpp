@@ -10,13 +10,13 @@
 
 #include <memory>
 
-namespace sage {
+namespace seal
+{
 
 // Only one controller can own the global hooks at a time.
 FillController* FillController::s_instance = nullptr;
 
-FillController::FillController(QObject* parent)
-    : QObject(parent)
+FillController::FillController(QObject* parent) : QObject(parent)
 {
     m_TimeoutTimer.setInterval(1000);
     connect(&m_TimeoutTimer, &QTimer::timeout, this, &FillController::onTimeoutTick);
@@ -53,10 +53,14 @@ static const char* stateToString(FillController::State s)
 {
     switch (s)
     {
-        case FillController::State::Idle:          return "Idle";
-        case FillController::State::ArmedUsername:  return "ArmedUsername";
-        case FillController::State::ArmedPassword:  return "ArmedPassword";
-        case FillController::State::Typing:         return "Typing";
+        case FillController::State::Idle:
+            return "Idle";
+        case FillController::State::ArmedUsername:
+            return "ArmedUsername";
+        case FillController::State::ArmedPassword:
+            return "ArmedPassword";
+        case FillController::State::Typing:
+            return "Typing";
     }
     return "Unknown";
 }
@@ -98,9 +102,10 @@ void FillController::updateStatusText()
         emit fillStatusTextChanged();
 }
 
-void FillController::arm(int recordIndex,
-                         const std::vector<sage::VaultRecord>& records,
-                         const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& masterPw)
+void FillController::arm(
+    int recordIndex,
+    const std::vector<seal::VaultRecord>& records,
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPw)
 {
     // If already armed (e.g. user clicked a different record), tear down
     // the previous session before starting a new one.
@@ -109,19 +114,19 @@ void FillController::arm(int recordIndex,
 
     // Borrow pointers - the caller (Backend) owns these and must
     // keep them alive until fillCompleted / fillCancelled / fillError.
-    m_RecordIndex    = recordIndex;
-    m_Records        = &records;
-    m_MasterPw       = &masterPw;
+    m_RecordIndex = recordIndex;
+    m_Records = &records;
+    m_MasterPw = &masterPw;
     m_RemainingSeconds = FILL_TIMEOUT_SECONDS;
-    m_PendingTarget  = TypeTarget::Username;
+    m_PendingTarget = TypeTarget::Username;
 
     // Register as the singleton so the static hook callbacks can find us.
     s_instance = this;
     installHooks();
     transitionTo(State::ArmedUsername);
 
-    qCInfo(logFill) << "armed: recordIndex=" << m_RecordIndex
-                    << "timeout=" << FILL_TIMEOUT_SECONDS << "s";
+    qCInfo(logFill) << "armed: recordIndex=" << m_RecordIndex << "timeout=" << FILL_TIMEOUT_SECONDS
+                    << "s";
     emit countdownSecondsChanged();
     m_TimeoutTimer.start();
 }
@@ -137,9 +142,9 @@ void FillController::cancel()
     transitionTo(State::Idle);
 
     // Clear borrowed pointers so we don't dangle.
-    m_RecordIndex      = -1;
-    m_Records          = nullptr;
-    m_MasterPw         = nullptr;
+    m_RecordIndex = -1;
+    m_Records = nullptr;
+    m_MasterPw = nullptr;
     m_RemainingSeconds = 0;
     emit countdownSecondsChanged();
     emit fillCancelled();
@@ -168,7 +173,7 @@ void FillController::installHooks()
     // WH_MOUSE_LL / WH_KEYBOARD_LL are global low-level hooks that intercept
     // input system-wide. We pass nullptr for hMod and 0 for dwThreadId so
     // the hooks apply to all threads on the desktop.
-    m_MouseHook    = SetWindowsHookExW(WH_MOUSE_LL,    mouseHookProc,    nullptr, 0);
+    m_MouseHook = SetWindowsHookExW(WH_MOUSE_LL, mouseHookProc, nullptr, 0);
     m_KeyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL, keyboardHookProc, nullptr, 0);
     if (m_MouseHook && m_KeyboardHook)
         qCDebug(logFill) << "hooks installed";
@@ -209,7 +214,7 @@ LRESULT CALLBACK FillController::mouseHookProc(int nCode, WPARAM wParam, LPARAM 
             //   Alt    -> force username
             //   Neither -> follow the current state
             bool shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-            bool altDown   = (GetAsyncKeyState(VK_MENU)  & 0x8000) != 0;
+            bool altDown = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
 
             TypeTarget target;
             if (shiftDown)
@@ -222,8 +227,8 @@ LRESULT CALLBACK FillController::mouseHookProc(int nCode, WPARAM wParam, LPARAM 
             }
             else
             {
-                target = (s_instance->m_State == State::ArmedUsername)
-                    ? TypeTarget::Username : TypeTarget::Password;
+                target = (s_instance->m_State == State::ArmedUsername) ? TypeTarget::Username
+                                                                       : TypeTarget::Password;
             }
 
             s_instance->m_PendingTarget = target;
@@ -249,9 +254,8 @@ LRESULT CALLBACK FillController::keyboardHookProc(int nCode, WPARAM wParam, LPAR
         auto* khs = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
 
         // Esc while armed -> cancel. Queued to avoid blocking the hook.
-        if (khs->vkCode == VK_ESCAPE &&
-            (s_instance->m_State == State::ArmedUsername ||
-             s_instance->m_State == State::ArmedPassword))
+        if (khs->vkCode == VK_ESCAPE && (s_instance->m_State == State::ArmedUsername ||
+                                         s_instance->m_State == State::ArmedPassword))
         {
             QMetaObject::invokeMethod(s_instance, "cancel", Qt::QueuedConnection);
             return 1;
@@ -274,104 +278,109 @@ void FillController::performType()
     // (e.g. Ctrl+A = select-all instead of typing 'a').
     auto* poll = std::make_unique<QTimer>(this).release();
     poll->setInterval(20);
-    connect(poll, &QTimer::timeout, this, [this, target, poll, elapsedMs = 0]() mutable
-    {
-        elapsedMs += 20;
-        bool ctrlStillDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-        if (ctrlStillDown && elapsedMs < 2000)
-            return;  // Keep polling - Ctrl not yet released.
-
-        poll->stop();
-        poll->deleteLater();
-
-        // Guard against cancel() being called while we were polling.
-        if (m_State != State::Typing)
-            return;
-
-        // Decrypt the credential on demand - it stays encrypted at rest
-        // and is only decrypted into locked memory for the brief moment
-        // we need to send the keystrokes.
-        sage::DecryptedCredential cred;
-        try
+    connect(
+        poll,
+        &QTimer::timeout,
+        this,
+        [this, target, poll, elapsedMs = 0]() mutable
         {
-            cred = sage::decryptCredentialOnDemand((*m_Records)[m_RecordIndex], *m_MasterPw);
-        }
-        catch (const std::exception& e)
-        {
-            qCWarning(logFill) << "performType: decrypt failed:" << e.what();
-            emit fillError(QString("Decrypt failed: %1").arg(e.what()));
-            cancel();
-            return;
-        }
-        catch (...)
-        {
-            qCWarning(logFill) << "performType: decrypt failed (unknown)";
-            emit fillError(QStringLiteral("Decrypt failed"));
-            cancel();
-            return;
-        }
+            elapsedMs += 20;
+            bool ctrlStillDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+            if (ctrlStillDown && elapsedMs < 2000)
+                return;  // Keep polling - Ctrl not yet released.
 
-        // Warn: auto-fill sends real keystrokes through the normal input
-        // pipeline. If third-party keyboard hooks are present, credentials
-        // could be intercepted. The master password is protected by the
-        // secure desktop dialog, but SendInput-based fill is inherently exposed.
-        qCDebug(logFill) << "performType: note - auto-fill keystrokes pass through global hook chain";
+            poll->stop();
+            poll->deleteLater();
 
-        // Type the selected field via synthesized keystrokes (SendInput).
-        bool success = false;
-        if (target == TypeTarget::Username)
-        {
-            success = sage::typeSecret(cred.m_Username.data(), (int)cred.m_Username.size(), 0);
-        }
-        else
-        {
-            success = sage::typeSecret(cred.m_Password.data(), (int)cred.m_Password.size(), 0);
-        }
+            // Guard against cancel() being called while we were polling.
+            if (m_State != State::Typing)
+                return;
 
-        // Wipe plaintext immediately after typing, then trim working set
-        // so the plaintext doesn't linger in physical RAM.
-        cred.cleanse();
-        sage::Cryptography::trimWorkingSet();
+            // Decrypt the credential on demand - it stays encrypted at rest
+            // and is only decrypted into locked memory for the brief moment
+            // we need to send the keystrokes.
+            seal::DecryptedCredential cred;
+            try
+            {
+                cred = seal::decryptCredentialOnDemand((*m_Records)[m_RecordIndex], *m_MasterPw);
+            }
+            catch (const std::exception& e)
+            {
+                qCWarning(logFill) << "performType: decrypt failed:" << e.what();
+                emit fillError(QString("Decrypt failed: %1").arg(e.what()));
+                cancel();
+                return;
+            }
+            catch (...)
+            {
+                qCWarning(logFill) << "performType: decrypt failed (unknown)";
+                emit fillError(QStringLiteral("Decrypt failed"));
+                cancel();
+                return;
+            }
 
-        if (!success)
-        {
-            qCWarning(logFill) << "performType: SendInput failed";
-            emit fillError(QStringLiteral("Failed to send keystrokes"));
-            cancel();
-            return;
-        }
+            // Warn: auto-fill sends real keystrokes through the normal input
+            // pipeline. If third-party keyboard hooks are present, credentials
+            // could be intercepted. The master password is protected by the
+            // secure desktop dialog, but SendInput-based fill is inherently exposed.
+            qCDebug(logFill)
+                << "performType: note - auto-fill keystrokes pass through global hook chain";
 
-        QString service = QString::fromUtf8((*m_Records)[m_RecordIndex].m_Platform.c_str());
+            // Type the selected field via synthesized keystrokes (SendInput).
+            bool success = false;
+            if (target == TypeTarget::Username)
+            {
+                success = seal::typeSecret(cred.m_Username.data(), (int)cred.m_Username.size(), 0);
+            }
+            else
+            {
+                success = seal::typeSecret(cred.m_Password.data(), (int)cred.m_Password.size(), 0);
+            }
 
-        if (target == TypeTarget::Username)
-        {
-            qCInfo(logFill) << "performType: username typed for" << service;
-            // Username typed - reset the countdown and transition to
-            // ArmedPassword so the user can Ctrl+Click the password field.
-            m_RemainingSeconds = FILL_TIMEOUT_SECONDS;
-            emit countdownSecondsChanged();
-            transitionTo(State::ArmedPassword);
-            m_TimeoutTimer.start();
-        }
-        else
-        {
-            qCInfo(logFill) << "performType: password typed for" << service;
-            // Password typed - both phases complete. Tear down hooks and
-            // notify the backend so it can restore the window.
-            m_TimeoutTimer.stop();
-            removeHooks();
-            transitionTo(State::Idle);
-            m_RecordIndex      = -1;
-            m_Records          = nullptr;
-            m_MasterPw         = nullptr;
-            m_RemainingSeconds = 0;
-            emit countdownSecondsChanged();
-            emit fillCompleted(QString("Filled credentials for '%1'").arg(service));
-        }
-    });
+            // Wipe plaintext immediately after typing, then trim working set
+            // so the plaintext doesn't linger in physical RAM.
+            cred.cleanse();
+            seal::Cryptography::trimWorkingSet();
+
+            if (!success)
+            {
+                qCWarning(logFill) << "performType: SendInput failed";
+                emit fillError(QStringLiteral("Failed to send keystrokes"));
+                cancel();
+                return;
+            }
+
+            QString service = QString::fromUtf8((*m_Records)[m_RecordIndex].m_Platform.c_str());
+
+            if (target == TypeTarget::Username)
+            {
+                qCInfo(logFill) << "performType: username typed for" << service;
+                // Username typed - reset the countdown and transition to
+                // ArmedPassword so the user can Ctrl+Click the password field.
+                m_RemainingSeconds = FILL_TIMEOUT_SECONDS;
+                emit countdownSecondsChanged();
+                transitionTo(State::ArmedPassword);
+                m_TimeoutTimer.start();
+            }
+            else
+            {
+                qCInfo(logFill) << "performType: password typed for" << service;
+                // Password typed - both phases complete. Tear down hooks and
+                // notify the backend so it can restore the window.
+                m_TimeoutTimer.stop();
+                removeHooks();
+                transitionTo(State::Idle);
+                m_RecordIndex = -1;
+                m_Records = nullptr;
+                m_MasterPw = nullptr;
+                m_RemainingSeconds = 0;
+                emit countdownSecondsChanged();
+                emit fillCompleted(QString("Filled credentials for '%1'").arg(service));
+            }
+        });
     poll->start();
 }
 
-} // namespace sage
+}  // namespace seal
 
-#endif // USE_QT_UI
+#endif  // USE_QT_UI

@@ -1,7 +1,7 @@
 /**
  * @file Cryptography.cpp
- * @brief Core cryptographic primitive implementations for sage.
- * @author sage Contributors
+ * @brief Core cryptographic primitive implementations for seal.
+ * @author seal Contributors
  */
 
 #include "Cryptography.h"
@@ -9,16 +9,18 @@
 #include <sddl.h>
 
 #ifdef USE_QT_UI
-#include "Logging.h"
 #include <QtCore/QElapsedTimer>
+#include "Logging.h"
 #endif
 
-namespace sage {
+namespace seal
+{
 
 bool Cryptography::ctEqualRaw(const unsigned char* a, const unsigned char* b, size_t n)
 {
     unsigned char v = 0;
-    for (size_t i = 0; i < n; ++i) v |= static_cast<unsigned char>(a[i] ^ b[i]);
+    for (size_t i = 0; i < n; ++i)
+        v |= static_cast<unsigned char>(a[i] ^ b[i]);
     return v == 0;
 }
 
@@ -44,19 +46,20 @@ void Cryptography::hardenProcessAccess()
     //  (A;;GA;;;SY)     = Allow SYSTEM: GENERIC_ALL
     //  (A;;GA;;;BA)     = Allow Administrators: GENERIC_ALL (so we don't lock out admin tasks)
     BOOL ok = ConvertStringSecurityDescriptorToSecurityDescriptorA(
-        "D:(D;;0x147A;;;WD)(A;;GA;;;SY)(A;;GA;;;BA)",
-        SDDL_REVISION_1,
-        &pSD,
-        nullptr);
+        "D:(D;;0x147A;;;WD)(A;;GA;;;SY)(A;;GA;;;BA)", SDDL_REVISION_1, &pSD, nullptr);
 
-    if (ok && pSD) {
+    if (ok && pSD)
+    {
         BOOL daclPresent = FALSE, daclDefaulted = FALSE;
-        if (GetSecurityDescriptorDacl(pSD, &daclPresent, &pDacl, &daclDefaulted) && daclPresent) {
-            SetSecurityInfo(
-                GetCurrentProcess(),
-                SE_KERNEL_OBJECT,
-                DACL_SECURITY_INFORMATION,
-                nullptr, nullptr, pDacl, nullptr);
+        if (GetSecurityDescriptorDacl(pSD, &daclPresent, &pDacl, &daclDefaulted) && daclPresent)
+        {
+            SetSecurityInfo(GetCurrentProcess(),
+                            SE_KERNEL_OBJECT,
+                            DACL_SECURITY_INFORMATION,
+                            nullptr,
+                            nullptr,
+                            pDacl,
+                            nullptr);
         }
         LocalFree(pSD);
     }
@@ -74,10 +77,12 @@ void Cryptography::disableCrashDumps()
     // Install a custom unhandled exception filter that wipes sensitive memory
     // then terminates immediately, preventing the default handler from
     // writing a crash dump.
-    SetUnhandledExceptionFilter([](PEXCEPTION_POINTERS) -> LONG {
-        TerminateProcess(GetCurrentProcess(), 1);
-        return EXCEPTION_CONTINUE_SEARCH; // unreachable
-    });
+    SetUnhandledExceptionFilter(
+        [](PEXCEPTION_POINTERS) -> LONG
+        {
+            TerminateProcess(GetCurrentProcess(), 1);
+            return EXCEPTION_CONTINUE_SEARCH;  // unreachable
+        });
 
 #ifdef USE_QT_UI
     qCInfo(logCrypto) << "disableCrashDumps: WER suppressed, custom exception filter installed";
@@ -87,11 +92,12 @@ void Cryptography::disableCrashDumps()
 void Cryptography::detectDebugger()
 {
     // Check 1: IsDebuggerPresent (user-mode debugger)
-    if (IsDebuggerPresent()) {
+    if (IsDebuggerPresent())
+    {
 #ifdef USE_QT_UI
         qCWarning(logCrypto) << "detectDebugger: user-mode debugger detected, aborting";
 #else
-        OutputDebugStringA("[sage] FATAL: debugger detected\n");
+        OutputDebugStringA("[seal] FATAL: debugger detected\n");
 #endif
         TerminateProcess(GetCurrentProcess(), 0xDEAD);
         return;
@@ -99,11 +105,12 @@ void Cryptography::detectDebugger()
 
     // Check 2: CheckRemoteDebuggerPresent (remote/kernel debugger)
     BOOL remoteDebugger = FALSE;
-    if (CheckRemoteDebuggerPresent(GetCurrentProcess(), &remoteDebugger) && remoteDebugger) {
+    if (CheckRemoteDebuggerPresent(GetCurrentProcess(), &remoteDebugger) && remoteDebugger)
+    {
 #ifdef USE_QT_UI
         qCWarning(logCrypto) << "detectDebugger: remote debugger detected, aborting";
 #else
-        OutputDebugStringA("[sage] FATAL: remote debugger detected\n");
+        OutputDebugStringA("[seal] FATAL: remote debugger detected\n");
 #endif
         TerminateProcess(GetCurrentProcess(), 0xDEAD);
         return;
@@ -113,18 +120,24 @@ void Cryptography::detectDebugger()
     // Dynamically resolve to avoid a hard dependency on ntdll.
     using PFN_NtQueryInformationProcess = LONG(WINAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
     HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
-    if (hNtdll) {
+    if (hNtdll)
+    {
         auto pNtQIP = reinterpret_cast<PFN_NtQueryInformationProcess>(
             GetProcAddress(hNtdll, "NtQueryInformationProcess"));
-        if (pNtQIP) {
+        if (pNtQIP)
+        {
             ULONG_PTR debugPort = 0;
-            LONG status = pNtQIP(GetCurrentProcess(), 7 /*ProcessDebugPort*/,
-                                 &debugPort, sizeof(debugPort), nullptr);
-            if (status == 0 && debugPort != 0) {
+            LONG status = pNtQIP(GetCurrentProcess(),
+                                 7 /*ProcessDebugPort*/,
+                                 &debugPort,
+                                 sizeof(debugPort),
+                                 nullptr);
+            if (status == 0 && debugPort != 0)
+            {
 #ifdef USE_QT_UI
                 qCWarning(logCrypto) << "detectDebugger: kernel debug port detected, aborting";
 #else
-                OutputDebugStringA("[sage] FATAL: kernel debug port detected\n");
+                OutputDebugStringA("[seal] FATAL: kernel debug port detected\n");
 #endif
                 TerminateProcess(GetCurrentProcess(), 0xDEAD);
                 return;
@@ -150,10 +163,12 @@ using PFN_SetProcessMitigationPolicy = BOOL(WINAPI*)(PROCESS_MITIGATION_POLICY, 
 BOOL Cryptography::setSecureProcessMitigations(bool allowDynamicCode)
 {
     HMODULE hK32 = GetModuleHandleW(L"kernel32.dll");
-    if (!hK32) return FALSE;
+    if (!hK32)
+        return FALSE;
 
     auto pSet = (PFN_SetProcessMitigationPolicy)GetProcAddress(hK32, "SetProcessMitigationPolicy");
-    if (!pSet) return FALSE;
+    if (!pSet)
+        return FALSE;
 
     BOOL allSuccess = TRUE;
 
@@ -261,21 +276,18 @@ void Cryptography::opensslCheck(int ok, const char* msg)
 
 std::span<const unsigned char> Cryptography::aadSpan() noexcept
 {
-    return {
-        reinterpret_cast<const unsigned char*>(sage::cfg::AAD_HDR),
-        static_cast<std::size_t>(sage::cfg::AAD_LEN)
-    };
+    return {reinterpret_cast<const unsigned char*>(seal::cfg::AAD_HDR),
+            static_cast<std::size_t>(seal::cfg::AAD_LEN)};
 }
 
-template<class SecurePwd>
-std::vector<unsigned char> Cryptography::deriveKey(
-    const SecurePwd& pwd,
-    std::span<const unsigned char> salt)
+template <class SecurePwd>
+std::vector<unsigned char> Cryptography::deriveKey(const SecurePwd& pwd,
+                                                   std::span<const unsigned char> salt)
 {
     using CharT = std::remove_pointer_t<decltype(pwd.s.data())>;
-    std::vector<unsigned char> key(sage::cfg::KEY_LEN);
+    std::vector<unsigned char> key(seal::cfg::KEY_LEN);
 
-    sage::RWGuard<CharT> guard(pwd.s.data());
+    seal::RWGuard<CharT> guard(pwd.s.data());
 
     // scrypt parameters
     constexpr uint64_t N = 1ULL << 16;  // Increase N for higher security
@@ -298,12 +310,9 @@ std::vector<unsigned char> Cryptography::deriveKey(
 #endif
 
     opensslCheck(
-        EVP_PBE_scrypt(pass, passlen,
-            salt.data(), salt.size(),
-            N, r, p, maxmem,
-            key.data(), key.size()),
-        "scrypt failed"
-    );
+        EVP_PBE_scrypt(
+            pass, passlen, salt.data(), salt.size(), N, r, p, maxmem, key.data(), key.size()),
+        "scrypt failed");
 
 #ifdef USE_QT_UI
     qCDebug(logCrypto) << "deriveKey: scrypt completed in" << timer.elapsed() << "ms";
@@ -312,59 +321,58 @@ std::vector<unsigned char> Cryptography::deriveKey(
     return key;
 }
 
-template<class SecurePwd>
-std::vector<unsigned char>
-    Cryptography::encryptPacket(std::span<const unsigned char> plaintext,
-        const SecurePwd& password)
+template <class SecurePwd>
+std::vector<unsigned char> Cryptography::encryptPacket(std::span<const unsigned char> plaintext,
+                                                       const SecurePwd& password)
 {
     std::span<const unsigned char> aad = aadSpan();
 
     // salt and key
-    std::vector<unsigned char> salt(sage::cfg::SALT_LEN);
+    std::vector<unsigned char> salt(seal::cfg::SALT_LEN);
     opensslCheck(RAND_bytes(salt.data(), (int)salt.size()), "RAND_bytes(salt) failed");
     auto key = deriveKey(password, std::span<const unsigned char>(salt));
 
     // iv
-    std::vector<unsigned char> iv(sage::cfg::IV_LEN);
+    std::vector<unsigned char> iv(seal::cfg::IV_LEN);
     opensslCheck(RAND_bytes(iv.data(), (int)iv.size()), "RAND_bytes(iv) failed");
 
-    sage::EVP_CTX ctx;
+    seal::EVP_CTX ctx;
     opensslCheck(EVP_EncryptInit_ex(ctx.p, EVP_aes_256_gcm(), nullptr, nullptr, nullptr),
-        "EncryptInit(cipher) failed");
+                 "EncryptInit(cipher) failed");
     opensslCheck(EVP_CIPHER_CTX_ctrl(ctx.p, EVP_CTRL_GCM_SET_IVLEN, (int)iv.size(), nullptr),
-        "SET_IVLEN failed");
+                 "SET_IVLEN failed");
     opensslCheck(EVP_EncryptInit_ex(ctx.p, nullptr, nullptr, key.data(), iv.data()),
-        "EncryptInit(key/iv) failed");
+                 "EncryptInit(key/iv) failed");
 
     // AAD (optional)
     if (!aad.empty())
     {
         int tmp = 0;
         opensslCheck(EVP_EncryptUpdate(ctx.p, nullptr, &tmp, aad.data(), (int)aad.size()),
-            "EncryptUpdate(AAD) failed");
+                     "EncryptUpdate(AAD) failed");
     }
 
     // Encrypt
     std::vector<unsigned char> ct(plaintext.size() + 16 /*block slop*/);
     int outlen = 0, fin = 0;
-    opensslCheck(EVP_EncryptUpdate(ctx.p, ct.data(), &outlen,
-        plaintext.data(), (int)plaintext.size()),
+    opensslCheck(
+        EVP_EncryptUpdate(ctx.p, ct.data(), &outlen, plaintext.data(), (int)plaintext.size()),
         "EncryptUpdate(PT) failed");
     int total = outlen;
-    opensslCheck(EVP_EncryptFinal_ex(ctx.p, ct.data() + total, &fin),
-        "EncryptFinal failed");
+    opensslCheck(EVP_EncryptFinal_ex(ctx.p, ct.data() + total, &fin), "EncryptFinal failed");
     total += fin;
     ct.resize((size_t)total);
 
     // Tag
-    std::vector<unsigned char> tag(sage::cfg::TAG_LEN);
+    std::vector<unsigned char> tag(seal::cfg::TAG_LEN);
     opensslCheck(EVP_CIPHER_CTX_ctrl(ctx.p, EVP_CTRL_GCM_GET_TAG, (int)tag.size(), tag.data()),
-        "GET_TAG failed");
+                 "GET_TAG failed");
 
     // Serialize packet
     std::vector<unsigned char> out;
     out.reserve(aad.size() + salt.size() + iv.size() + ct.size() + tag.size());
-    if (!aad.empty()) out.insert(out.end(), aad.begin(), aad.end());
+    if (!aad.empty())
+        out.insert(out.end(), aad.begin(), aad.end());
     out.insert(out.end(), salt.begin(), salt.end());
     out.insert(out.end(), iv.begin(), iv.end());
     out.insert(out.end(), ct.begin(), ct.end());
@@ -378,10 +386,9 @@ std::vector<unsigned char>
     return out;
 }
 
-template<class SecurePwd>
-std::vector<unsigned char>
-    Cryptography::decryptPacket(std::span<const unsigned char> packet,
-        const SecurePwd& password)
+template <class SecurePwd>
+std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned char> packet,
+                                                       const SecurePwd& password)
 {
     std::span<const unsigned char> aad_expected = aadSpan();
     const unsigned char* p = packet.data();
@@ -399,38 +406,38 @@ std::vector<unsigned char>
     }
 
     // Structure sizes
-    if (n < off + sage::cfg::SALT_LEN + sage::cfg::IV_LEN + sage::cfg::TAG_LEN)
+    if (n < off + seal::cfg::SALT_LEN + seal::cfg::IV_LEN + seal::cfg::TAG_LEN)
         throw std::runtime_error("Ciphertext too short");
 
     const unsigned char* salt = p + off;
-    const unsigned char* iv = p + off + sage::cfg::SALT_LEN;
-    const unsigned char* ct = p + off + sage::cfg::SALT_LEN + sage::cfg::IV_LEN;
+    const unsigned char* iv = p + off + seal::cfg::SALT_LEN;
+    const unsigned char* ct = p + off + seal::cfg::SALT_LEN + seal::cfg::IV_LEN;
 
-    size_t ct_len_with_tag = n - off - sage::cfg::SALT_LEN - sage::cfg::IV_LEN;
-    if (ct_len_with_tag < sage::cfg::TAG_LEN)
+    size_t ct_len_with_tag = n - off - seal::cfg::SALT_LEN - seal::cfg::IV_LEN;
+    if (ct_len_with_tag < seal::cfg::TAG_LEN)
         throw std::runtime_error("Invalid ciphertext/tag sizes");
 
-    size_t ct_len = ct_len_with_tag - sage::cfg::TAG_LEN;
+    size_t ct_len = ct_len_with_tag - seal::cfg::TAG_LEN;
     const unsigned char* tag = ct + ct_len;
 
     // Derive key
-    auto key = deriveKey(password,
-        std::span<const unsigned char>(salt, sage::cfg::SALT_LEN));
+    auto key = deriveKey(password, std::span<const unsigned char>(salt, seal::cfg::SALT_LEN));
 
-    sage::EVP_CTX ctx;
+    seal::EVP_CTX ctx;
     opensslCheck(EVP_DecryptInit_ex(ctx.p, EVP_aes_256_gcm(), nullptr, nullptr, nullptr),
-        "DecryptInit(cipher) failed");
-    opensslCheck(EVP_CIPHER_CTX_ctrl(ctx.p, EVP_CTRL_GCM_SET_IVLEN, (int)sage::cfg::IV_LEN, nullptr),
+                 "DecryptInit(cipher) failed");
+    opensslCheck(
+        EVP_CIPHER_CTX_ctrl(ctx.p, EVP_CTRL_GCM_SET_IVLEN, (int)seal::cfg::IV_LEN, nullptr),
         "SET_IVLEN failed");
     opensslCheck(EVP_DecryptInit_ex(ctx.p, nullptr, nullptr, key.data(), iv),
-        "DecryptInit(key/iv) failed");
+                 "DecryptInit(key/iv) failed");
 
     // AAD (if required)
     if (!aad_expected.empty())
     {
         int tmp = 0;
-        opensslCheck(EVP_DecryptUpdate(ctx.p, nullptr, &tmp,
-            aad_expected.data(), (int)aad_expected.size()),
+        opensslCheck(
+            EVP_DecryptUpdate(ctx.p, nullptr, &tmp, aad_expected.data(), (int)aad_expected.size()),
             "DecryptUpdate(AAD) failed");
     }
 
@@ -438,14 +445,14 @@ std::vector<unsigned char>
     std::vector<unsigned char> plain(ct_len);
     int outlen = 0, fin = 0;
     opensslCheck(EVP_DecryptUpdate(ctx.p, plain.data(), &outlen, ct, (int)ct_len),
-        "DecryptUpdate(CT) failed");
+                 "DecryptUpdate(CT) failed");
 
     // Set tag and finalize (auth check happens here).
     // Copy tag into a mutable buffer - OpenSSL's API takes void* even though
     // SET_TAG does not modify the data.
-    std::vector<unsigned char> tagCopy(tag, tag + sage::cfg::TAG_LEN);
-    opensslCheck(EVP_CIPHER_CTX_ctrl(ctx.p, EVP_CTRL_GCM_SET_TAG, (int)sage::cfg::TAG_LEN,
-        tagCopy.data()),
+    std::vector<unsigned char> tagCopy(tag, tag + seal::cfg::TAG_LEN);
+    opensslCheck(
+        EVP_CIPHER_CTX_ctrl(ctx.p, EVP_CTRL_GCM_SET_TAG, (int)seal::cfg::TAG_LEN, tagCopy.data()),
         "SET_TAG failed");
 
     int ok = EVP_DecryptFinal_ex(ctx.p, plain.data() + outlen, &fin);
@@ -463,19 +470,19 @@ std::vector<unsigned char>
     return plain;
 }
 
-template std::vector<unsigned char> Cryptography::deriveKey(
-    const secure_string<>&, std::span<const unsigned char>);
-template std::vector<unsigned char> Cryptography::deriveKey(
-    const basic_secure_string<wchar_t>&, std::span<const unsigned char>);
+template std::vector<unsigned char> Cryptography::deriveKey(const secure_string<>&,
+                                                            std::span<const unsigned char>);
+template std::vector<unsigned char> Cryptography::deriveKey(const basic_secure_string<wchar_t>&,
+                                                            std::span<const unsigned char>);
 
-template std::vector<unsigned char> Cryptography::encryptPacket(
-    std::span<const unsigned char>, const secure_string<>&);
+template std::vector<unsigned char> Cryptography::encryptPacket(std::span<const unsigned char>,
+                                                                const secure_string<>&);
 template std::vector<unsigned char> Cryptography::encryptPacket(
     std::span<const unsigned char>, const basic_secure_string<wchar_t>&);
 
-template std::vector<unsigned char> Cryptography::decryptPacket(
-    std::span<const unsigned char>, const secure_string<>&);
+template std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned char>,
+                                                                const secure_string<>&);
 template std::vector<unsigned char> Cryptography::decryptPacket(
     std::span<const unsigned char>, const basic_secure_string<wchar_t>&);
 
-} // namespace sage
+}  // namespace seal

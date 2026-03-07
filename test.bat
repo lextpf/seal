@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM test.bat - Run sage unit tests using Google Test
+REM test.bat - Run seal unit tests using Google Test
 REM ============================================================================
 REM This script:
 REM   1. Configures CMake if needed
@@ -11,7 +11,7 @@ REM ============================================================================
 setlocal
 
 echo ============================================================================
-echo                            SAGE TEST RUNNER
+echo                            SEAL TEST RUNNER
 echo ============================================================================
 echo.
 
@@ -44,7 +44,7 @@ REM STEP 2: Build Tests
 REM ============================================================================
 echo [2/3] Building test executable...
 echo ----------------------------------------------------------------------------
-cmake --build "%BUILD_DIR%" --config Release --target sage_tests
+cmake --build "%BUILD_DIR%" --config Release --target seal_tests
 if errorlevel 1 (
     echo ERROR: Build failed!
     pause
@@ -61,15 +61,15 @@ echo.
 
 set ALL_PASSED=1
 
-echo === sage_tests ===
-if exist "%BUILD_DIR%\bin\Release\sage_tests.exe" (
-    "%BUILD_DIR%\bin\Release\sage_tests.exe" --gtest_color=yes
+echo === seal_tests ===
+if exist "%BUILD_DIR%\bin\Release\seal_tests.exe" (
+    "%BUILD_DIR%\bin\Release\seal_tests.exe" --gtest_color=yes
     if errorlevel 1 set ALL_PASSED=0
-) else if exist "%BUILD_DIR%\bin\sage_tests.exe" (
-    "%BUILD_DIR%\bin\sage_tests.exe" --gtest_color=yes
+) else if exist "%BUILD_DIR%\bin\seal_tests.exe" (
+    "%BUILD_DIR%\bin\seal_tests.exe" --gtest_color=yes
     if errorlevel 1 set ALL_PASSED=0
 ) else (
-    echo ERROR: sage_tests.exe not found!
+    echo ERROR: seal_tests.exe not found!
     set ALL_PASSED=0
 )
 echo.

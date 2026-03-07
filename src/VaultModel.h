@@ -10,7 +10,8 @@
 #include "Cryptography.h"
 #include "Vault.h"
 
-namespace sage {
+namespace seal
+{
 
 /**
  * @class VaultListModel
@@ -58,7 +59,7 @@ public:
     /// @brief Custom data roles for vault record display.
     enum class Roles
     {
-        Platform = Qt::UserRole + 1, ///< Cleartext service/platform name.
+        Platform = Qt::UserRole + 1,  ///< Cleartext service/platform name.
         MaskedUsername,               ///< Fixed asterisk placeholder for username.
         MaskedPassword,               ///< Fixed asterisk placeholder for password.
         RecordIndex                   ///< Real index for decrypt-on-demand lookups.
@@ -71,7 +72,7 @@ public:
     QHash<int, QByteArray> roleNames() const override;
 
     /// @brief Set the backing record store (non-owning pointer).
-    void setRecords(const std::vector<sage::VaultRecord>* records);
+    void setRecords(const std::vector<seal::VaultRecord>* records);
 
     /// @brief Set the current platform-name filter text.
     void setFilter(const QString& filter);
@@ -91,11 +92,11 @@ signals:
 private:
     void rebuildFilteredIndices();
 
-    const std::vector<sage::VaultRecord>* m_Records = nullptr;
+    const std::vector<seal::VaultRecord>* m_Records = nullptr;
     QString m_Filter;
     std::vector<int> m_FilteredIndices;
 };
 
-} // namespace sage
+}  // namespace seal
 
-#endif // USE_QT_UI
+#endif  // USE_QT_UI

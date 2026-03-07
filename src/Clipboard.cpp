@@ -17,10 +17,7 @@ struct ClipboardLock
 {
     bool ok = false;
 
-    ClipboardLock()
-    {
-        ok = !!OpenClipboard(nullptr);
-    }
+    ClipboardLock() { ok = !!OpenClipboard(nullptr); }
 
     ~ClipboardLock()
     {
@@ -34,9 +31,10 @@ struct ClipboardLock
     ClipboardLock& operator=(const ClipboardLock&) = delete;
 };
 
-} // namespace
+}  // namespace
 
-namespace sage {
+namespace seal
+{
 
 bool Clipboard::setText(const std::string& text)
 {
@@ -55,9 +53,7 @@ bool Clipboard::setText(const std::string& text)
     }
 
     int wlen = MultiByteToWideChar(
-        CP_UTF8, MB_ERR_INVALID_CHARS,
-        text.data(), static_cast<int>(text.size()),
-        nullptr, 0);
+        CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
     if (wlen <= 0)
     {
         return false;
@@ -78,9 +74,7 @@ bool Clipboard::setText(const std::string& text)
     }
 
     int written = MultiByteToWideChar(
-        CP_UTF8, MB_ERR_INVALID_CHARS,
-        text.data(), static_cast<int>(text.size()),
-        p, wlen);
+        CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), p, wlen);
     if (written <= 0)
     {
         GlobalUnlock(hMem);
@@ -110,48 +104,48 @@ bool Clipboard::copyWithTTL(const char* data, size_t n, DWORD ttl_ms)
     }
 
     // Detached thread: sleeps, then scrubs the clipboard if content is unchanged
-    std::thread([val = std::move(val), ttl_ms]() mutable
-    {
-        Sleep(ttl_ms);
-
-        // Open clipboard without emptying - we only want to read-compare
-        ClipboardLock lock;
-        if (!lock.ok)
+    std::thread(
+        [val = std::move(val), ttl_ms]() mutable
         {
-            sage::Cryptography::cleanseString(val);
-            sage::Cryptography::trimWorkingSet();
-            return;
-        }
+            Sleep(ttl_ms);
 
-        bool same = false;
-        HANDLE h = GetClipboardData(CF_UNICODETEXT);
-        wchar_t* w = h ? static_cast<wchar_t*>(GlobalLock(h)) : nullptr;
-        if (w)
-        {
-            // Round-trip current clipboard UTF-16 back to UTF-8 for comparison
-            int need = WideCharToMultiByte(
-                CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
-            std::string cur(need ? static_cast<size_t>(need) - 1 : 0, '\0');
-            if (need)
+            // Open clipboard without emptying - we only want to read-compare
+            ClipboardLock lock;
+            if (!lock.ok)
             {
-                WideCharToMultiByte(
-                    CP_UTF8, 0, w, -1, cur.data(), need, nullptr, nullptr);
+                seal::Cryptography::cleanseString(val);
+                seal::Cryptography::trimWorkingSet();
+                return;
             }
-            GlobalUnlock(h);
 
-            // Constant-time compare to avoid timing leaks
-            same = sage::Cryptography::ctEqualAny(cur, val);
-        }
+            bool same = false;
+            HANDLE h = GetClipboardData(CF_UNICODETEXT);
+            wchar_t* w = h ? static_cast<wchar_t*>(GlobalLock(h)) : nullptr;
+            if (w)
+            {
+                // Round-trip current clipboard UTF-16 back to UTF-8 for comparison
+                int need = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+                std::string cur(need ? static_cast<size_t>(need) - 1 : 0, '\0');
+                if (need)
+                {
+                    WideCharToMultiByte(CP_UTF8, 0, w, -1, cur.data(), need, nullptr, nullptr);
+                }
+                GlobalUnlock(h);
 
-        // Only clear if nobody else has changed the clipboard
-        if (same)
-        {
-            EmptyClipboard();
-        }
+                // Constant-time compare to avoid timing leaks
+                same = seal::Cryptography::ctEqualAny(cur, val);
+            }
 
-        sage::Cryptography::cleanseString(val);
-        sage::Cryptography::trimWorkingSet();
-    }).detach();
+            // Only clear if nobody else has changed the clipboard
+            if (same)
+            {
+                EmptyClipboard();
+            }
+
+            seal::Cryptography::cleanseString(val);
+            seal::Cryptography::trimWorkingSet();
+        })
+        .detach();
 
     return true;
 }
@@ -166,7 +160,7 @@ bool Clipboard::copyWithTTL(const char* s, DWORD ttl_ms)
 bool Clipboard::copyInputFile()
 {
     std::string buf;
-    if (!utils::read_bin("sage", buf))
+    if (!utils::read_bin("seal", buf))
     {
         return false;
     }
@@ -184,19 +178,23 @@ static bool isKeyboardHookPresent()
     // A transparent overlay injecting hooks would own the foreground but have
     // a suspicious class name or zero-sized window rect.
     HWND fg = GetForegroundWindow();
-    if (fg) {
+    if (fg)
+    {
         RECT rc{};
         GetWindowRect(fg, &rc);
         // A zero-size foreground window is suspicious (hook overlay).
-        if (rc.right - rc.left <= 0 || rc.bottom - rc.top <= 0) {
-            OutputDebugStringA("[sage] WARN: foreground window has zero size (possible hook overlay)\n");
+        if (rc.right - rc.left <= 0 || rc.bottom - rc.top <= 0)
+        {
+            OutputDebugStringA(
+                "[seal] WARN: foreground window has zero size (possible hook overlay)\n");
             return true;
         }
     }
 
     // Timing-based heuristic: install a temporary low-level keyboard hook
     // and measure the round-trip latency of the hook chain.
-    struct HookCtx {
+    struct HookCtx
+    {
         LARGE_INTEGER freq{};
         LARGE_INTEGER start{};
         LARGE_INTEGER end{};
@@ -204,13 +202,15 @@ static bool isKeyboardHookPresent()
     } ctx;
     QueryPerformanceFrequency(&ctx.freq);
 
-    HHOOK hHook = SetWindowsHookExW(WH_KEYBOARD_LL,
-        [](int nCode, WPARAM wParam, LPARAM lParam) -> LRESULT {
-            return CallNextHookEx(nullptr, nCode, wParam, lParam);
-        }, nullptr, 0);
+    HHOOK hHook = SetWindowsHookExW(
+        WH_KEYBOARD_LL,
+        [](int nCode, WPARAM wParam, LPARAM lParam) -> LRESULT
+        { return CallNextHookEx(nullptr, nCode, wParam, lParam); },
+        nullptr,
+        0);
 
     if (!hHook)
-        return false; // Can't install hook - inconclusive, proceed
+        return false;  // Can't install hook - inconclusive, proceed
 
     // Send a dummy keystroke and time the hook chain processing
     QueryPerformanceCounter(&ctx.start);
@@ -224,7 +224,8 @@ static bool isKeyboardHookPresent()
 
     // Pump messages briefly to let the hook fire
     MSG msg;
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < 10; ++i)
+    {
         if (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
             DispatchMessageW(&msg);
         Sleep(1);
@@ -235,9 +236,11 @@ static bool isKeyboardHookPresent()
 
     // If processing took more than 15ms, another hook in the chain
     // is adding latency (normal chain with no hooks: < 2ms).
-    double elapsed_ms = (double)(ctx.end.QuadPart - ctx.start.QuadPart) * 1000.0 / (double)ctx.freq.QuadPart;
-    if (elapsed_ms > 15.0) {
-        OutputDebugStringA("[sage] WARN: keyboard hook chain latency suggests third-party hooks\n");
+    double elapsed_ms =
+        (double)(ctx.end.QuadPart - ctx.start.QuadPart) * 1000.0 / (double)ctx.freq.QuadPart;
+    if (elapsed_ms > 15.0)
+    {
+        OutputDebugStringA("[seal] WARN: keyboard hook chain latency suggests third-party hooks\n");
         return true;
     }
 
@@ -253,8 +256,9 @@ bool typeSecret(const wchar_t* bytes, int len, DWORD delay_ms)
 
     // Heuristic: warn if keyboard hooks are detected (keylogger risk).
     // This is best-effort - a determined attacker can evade detection.
-    if (isKeyboardHookPresent()) {
-        OutputDebugStringA("[sage] WARN: suspicious keyboard hooks detected before auto-type\n");
+    if (isKeyboardHookPresent())
+    {
+        OutputDebugStringA("[seal] WARN: suspicious keyboard hooks detected before auto-type\n");
     }
 
     std::wstring w;
@@ -317,13 +321,12 @@ bool typeSecret(const wchar_t* bytes, int len, DWORD delay_ms)
 
 bool openInputInNotepad()
 {
-    const char* file = "sage";
-    HINSTANCE h = ShellExecuteA(
-        nullptr, "open", "notepad.exe", file, nullptr, SW_SHOWNORMAL);
+    const char* file = "seal";
+    HINSTANCE h = ShellExecuteA(nullptr, "open", "notepad.exe", file, nullptr, SW_SHOWNORMAL);
     if (reinterpret_cast<INT_PTR>(h) <= 32)
     {
         // Fallback: ShellExecuteA can fail on restricted accounts
-        int ret = system("cmd /c start \"\" notepad.exe sage");
+        int ret = system("cmd /c start \"\" notepad.exe seal");
         return (ret == 0);
     }
     return true;
@@ -344,7 +347,7 @@ void wipeConsoleBuffer()
     }
 
     DWORD cells = static_cast<DWORD>(info.dwSize.X) * static_cast<DWORD>(info.dwSize.Y);
-    COORD home{ 0, 0 };
+    COORD home{0, 0};
     DWORD written = 0;
 
     // Overwrite every character cell, then reset attributes and cursor
@@ -353,4 +356,4 @@ void wipeConsoleBuffer()
     SetConsoleCursorPosition(hOut, home);
 }
 
-} // namespace sage
+}  // namespace seal

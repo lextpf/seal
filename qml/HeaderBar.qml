@@ -71,7 +71,7 @@ RowLayout {
         spacing: 2
 
         Text {
-            text: "sage"
+            text: "seal"
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeTitle
             font.bold: true

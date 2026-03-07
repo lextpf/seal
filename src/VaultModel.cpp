@@ -3,12 +3,10 @@
 #include "VaultModel.h"
 #include "Logging.h"
 
-namespace sage {
-
-VaultListModel::VaultListModel(QObject* parent)
-    : QAbstractListModel(parent)
+namespace seal
 {
-}
+
+VaultListModel::VaultListModel(QObject* parent) : QAbstractListModel(parent) {}
 
 int VaultListModel::rowCount(const QModelIndex& parent) const
 {
@@ -32,30 +30,29 @@ QVariant VaultListModel::data(const QModelIndex& index, int role) const
 
     switch (role)
     {
-    case static_cast<int>(Roles::Platform):
-        return QString::fromUtf8(rec.m_Platform.c_str());
-    case static_cast<int>(Roles::MaskedUsername):
-        return QStringLiteral("\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022");
-    case static_cast<int>(Roles::MaskedPassword):
-        return QStringLiteral("\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022");
-    case static_cast<int>(Roles::RecordIndex):
-        return realIdx;
-    default:
-        return {};
+        case static_cast<int>(Roles::Platform):
+            return QString::fromUtf8(rec.m_Platform.c_str());
+        case static_cast<int>(Roles::MaskedUsername):
+            return QStringLiteral("\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022");
+        case static_cast<int>(Roles::MaskedPassword):
+            return QStringLiteral(
+                "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022");
+        case static_cast<int>(Roles::RecordIndex):
+            return realIdx;
+        default:
+            return {};
     }
 }
 
 QHash<int, QByteArray> VaultListModel::roleNames() const
 {
-    return {
-        {static_cast<int>(Roles::Platform), "platform"},
-        {static_cast<int>(Roles::MaskedUsername), "maskedUsername"},
-        {static_cast<int>(Roles::MaskedPassword), "maskedPassword"},
-        {static_cast<int>(Roles::RecordIndex), "recordIndex"}
-    };
+    return {{static_cast<int>(Roles::Platform), "platform"},
+            {static_cast<int>(Roles::MaskedUsername), "maskedUsername"},
+            {static_cast<int>(Roles::MaskedPassword), "maskedPassword"},
+            {static_cast<int>(Roles::RecordIndex), "recordIndex"}};
 }
 
-void VaultListModel::setRecords(const std::vector<sage::VaultRecord>* records)
+void VaultListModel::setRecords(const std::vector<seal::VaultRecord>* records)
 {
     m_Records = records;
     refresh();
@@ -112,6 +109,6 @@ void VaultListModel::rebuildFilteredIndices()
     }
 }
 
-} // namespace sage
+}  // namespace seal
 
-#endif // USE_QT_UI
+#endif  // USE_QT_UI

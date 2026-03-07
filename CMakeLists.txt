@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(sage
+project(seal
     VERSION 1.0.0
     DESCRIPTION "AES-256-GCM encrypt/decrypt console utility with locked memory and guard pages"
     LANGUAGES CXX
@@ -77,7 +77,7 @@ set(WINDOWS_LIBS
     dwmapi
 )
 
-set(SAGE_SOURCES
+set(SEAL_SOURCES
     src/main.cpp
     src/Cryptography.cpp
     src/Utils.cpp
@@ -93,6 +93,16 @@ set(SAGE_SOURCES
     src/Logging.cpp
 )
 
+find_program(CLANG_FORMAT_EXE NAMES clang-format)
+if(CLANG_FORMAT_EXE)
+    file(GLOB_RECURSE ALL_SOURCE_FILES src/*.cpp src/*.h)
+    add_custom_target(clang-format
+        COMMAND ${CLANG_FORMAT_EXE} -i ${ALL_SOURCE_FILES}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Running clang-format on src/"
+    )
+endif()
+
 qt_standard_project_setup()
 qt_policy(SET QTP0001 NEW)
 qt_policy(SET QTP0004 NEW)
@@ -101,30 +111,30 @@ set_source_files_properties(qml/Theme.qml PROPERTIES
     QT_QML_SINGLETON_TYPE TRUE
 )
 
-qt_add_executable(sage
-    ${SAGE_SOURCES}
+qt_add_executable(seal
+    ${SEAL_SOURCES}
 )
 
-target_include_directories(sage PRIVATE
+target_include_directories(seal PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${OPENSSL_INCLUDE_DIR}
 )
 
 if(TARGET OpenSSL::SSL AND TARGET OpenSSL::Crypto)
-    target_link_libraries(sage PRIVATE
+    target_link_libraries(seal PRIVATE
         OpenSSL::SSL
         OpenSSL::Crypto
     )
 else()
-    target_link_libraries(sage PRIVATE
+    target_link_libraries(seal PRIVATE
         ${OPENSSL_LIBRARIES}
     )
     if(OPENSSL_LIB_DIR)
-        target_link_directories(sage PRIVATE ${OPENSSL_LIB_DIR})
+        target_link_directories(seal PRIVATE ${OPENSSL_LIB_DIR})
     endif()
 endif()
 
-target_link_libraries(sage PRIVATE
+target_link_libraries(seal PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Qml
@@ -135,16 +145,16 @@ target_link_libraries(sage PRIVATE
     ${OpenCV_LIBS}
 )
 
-target_compile_definitions(sage PRIVATE
+target_compile_definitions(seal PRIVATE
     NOMINMAX
     _WIN32_WINNT=0x0A00
     USE_QT_UI
 )
 
-file(GLOB SAGE_SVGS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} assets/svgs/*.svg)
+file(GLOB SEAL_SVGS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} assets/svgs/*.svg)
 
-qt_add_qml_module(sage
-    URI sage
+qt_add_qml_module(seal
+    URI seal
     VERSION 1.0
     RESOURCE_PREFIX /qt/qml
     QML_FILES
@@ -164,7 +174,7 @@ qt_add_qml_module(sage
         qml/SvgIcon.qml
     RESOURCES
         "assets/fonts/b0a4eabe-5fe5-41e3-8dc3-2df2b82ec4eb.ttf"
-        ${SAGE_SVGS}
+        ${SEAL_SVGS}
 )
 
 if(WIN32)
@@ -180,26 +190,26 @@ if(WIN32)
         message(FATAL_ERROR "windeployqt not found. Install Qt6 tools from vcpkg (qtbase).")
     endif()
 
-    add_custom_command(TARGET sage POST_BUILD
+    add_custom_command(TARGET seal POST_BUILD
         COMMAND "${WINDEPLOYQT_EXECUTABLE}"
             --no-compiler-runtime
             --qmldir "${CMAKE_CURRENT_SOURCE_DIR}/qml"
-            --dir "$<TARGET_FILE_DIR:sage>"
-            "$<TARGET_FILE:sage>"
+            --dir "$<TARGET_FILE_DIR:seal>"
+            "$<TARGET_FILE:seal>"
         COMMENT "Deploying Qt runtime and QML modules"
         VERBATIM
     )
 
-    add_custom_command(TARGET sage POST_BUILD
+    add_custom_command(TARGET seal POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/qt.conf"
-            "$<TARGET_FILE_DIR:sage>/qt.conf"
+            "$<TARGET_FILE_DIR:seal>/qt.conf"
         COMMENT "Copying qt.conf for QML import paths"
         VERBATIM
     )
 endif()
 
-install(TARGETS sage
+install(TARGETS seal
     RUNTIME DESTINATION bin
 )
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/qt.conf"
@@ -210,7 +220,7 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 write_basic_package_version_file(
-    "${CMAKE_CURRENT_BINARY_DIR}/sageConfigVersion.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/sealConfigVersion.cmake"
     VERSION ${PROJECT_VERSION}
     COMPATIBILITY AnyNewerVersion
 )
@@ -219,7 +229,7 @@ if(ENABLE_TESTS)
     enable_testing()
     find_package(GTest REQUIRED CONFIG)
 
-    add_executable(sage_tests
+    add_executable(seal_tests
         tests/test_crypto.cpp
         tests/test_utils.cpp
         tests/test_integration.cpp
@@ -230,33 +240,33 @@ if(ENABLE_TESTS)
         src/FileOperations.cpp
     )
 
-    target_include_directories(sage_tests PRIVATE
+    target_include_directories(seal_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
 
-    target_link_libraries(sage_tests PRIVATE
+    target_link_libraries(seal_tests PRIVATE
         GTest::gtest_main
         ${WINDOWS_LIBS}
     )
 
     if(TARGET OpenSSL::SSL AND TARGET OpenSSL::Crypto)
-        target_link_libraries(sage_tests PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+        target_link_libraries(seal_tests PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     else()
-        target_link_libraries(sage_tests PRIVATE ${OPENSSL_LIBRARIES})
+        target_link_libraries(seal_tests PRIVATE ${OPENSSL_LIBRARIES})
     endif()
 
-    target_compile_definitions(sage_tests PRIVATE
+    target_compile_definitions(seal_tests PRIVATE
         NOMINMAX
         _WIN32_WINNT=0x0A00
     )
 
     include(GoogleTest)
-    gtest_discover_tests(sage_tests)
+    gtest_discover_tests(seal_tests)
 endif()
 
-set(CPACK_PACKAGE_NAME "sage")
-set(CPACK_PACKAGE_VENDOR "sage Contributors")
+set(CPACK_PACKAGE_NAME "seal")
+set(CPACK_PACKAGE_VENDOR "seal Contributors")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "AES-256-GCM encryption utility")
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 set(CPACK_GENERATOR "ZIP;NSIS")

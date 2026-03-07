@@ -1,7 +1,8 @@
 #pragma once
 #include "Cryptography.h"
 
-namespace sage {
+namespace seal
+{
 
 /**
  * @brief Webcam QR code capture with secure memory handling.
@@ -10,7 +11,7 @@ namespace sage {
  *
  * Provides a single entry point for scanning a QR code from a webcam
  * and returning the decoded text directly in locked, guard-paged memory
- * (`sage::secure_string`).
+ * (`seal::secure_string`).
  *
  * ## :material-camera: Capture Flow
  *
@@ -43,5 +44,4 @@ namespace sage {
  */
 secure_string<> captureQrFromWebcam();
 
-} // namespace sage
-
+}  // namespace seal

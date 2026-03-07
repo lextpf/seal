@@ -1,7 +1,7 @@
 /**
  * @file test_crypto.cpp
  * @brief Unit tests for core encryption/decryption functions
- * @author sage Contributors
+ * @author seal Contributors
  * @date 2024
  */
 
@@ -39,19 +39,15 @@ TEST_F(CryptoTest, BasicRoundtrip)
     std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
 
     // Encrypt
-    auto packet = sage::Cryptography::encryptPacket(
-        std::span<const unsigned char>(plainBytes),
-        password
-    );
+    auto packet =
+        seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
 
     EXPECT_FALSE(packet.empty());
-    EXPECT_GT(packet.size(), plaintext.size()); // Should include salt, IV, tag, etc.
+    EXPECT_GT(packet.size(), plaintext.size());  // Should include salt, IV, tag, etc.
 
     // Decrypt
-    auto decrypted = sage::Cryptography::decryptPacket(
-        std::span<const unsigned char>(packet),
-        password
-    );
+    auto decrypted =
+        seal::Cryptography::decryptPacket(std::span<const unsigned char>(packet), password);
 
     EXPECT_EQ(decrypted.size(), plaintext.size());
     std::string decryptedStr(decrypted.begin(), decrypted.end());
@@ -66,15 +62,11 @@ TEST_F(CryptoTest, DifferentPlaintextsProduceDifferentCiphertexts)
     std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
 
     // Encrypt twice
-    auto packet1 = sage::Cryptography::encryptPacket(
-        std::span<const unsigned char>(plainBytes),
-        password
-    );
+    auto packet1 =
+        seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
 
-    auto packet2 = sage::Cryptography::encryptPacket(
-        std::span<const unsigned char>(plainBytes),
-        password
-    );
+    auto packet2 =
+        seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
 
     // Should produce different ciphertexts (due to random salt/IV)
     EXPECT_NE(packet1, packet2);
@@ -89,16 +81,13 @@ TEST_F(CryptoTest, WrongPasswordFailsAuthentication)
     std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
 
     // Encrypt with correct password
-    auto packet = sage::Cryptography::encryptPacket(
-        std::span<const unsigned char>(plainBytes),
-        correctPassword
-    );
+    auto packet = seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes),
+                                                    correctPassword);
 
     // Try to decrypt with wrong password
     EXPECT_THROW(
-        sage::Cryptography::decryptPacket(std::span<const unsigned char>(packet), wrongPassword),
-        std::runtime_error
-    );
+        seal::Cryptography::decryptPacket(std::span<const unsigned char>(packet), wrongPassword),
+        std::runtime_error);
 }
 
 TEST_F(CryptoTest, CorruptedPacketFailsAuthentication)
@@ -109,10 +98,8 @@ TEST_F(CryptoTest, CorruptedPacketFailsAuthentication)
     std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
 
     // Encrypt
-    auto packet = sage::Cryptography::encryptPacket(
-        std::span<const unsigned char>(plainBytes),
-        password
-    );
+    auto packet =
+        seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
 
     // Corrupt the packet (modify a byte)
     std::vector<unsigned char> corrupted = packet;
@@ -120,20 +107,18 @@ TEST_F(CryptoTest, CorruptedPacketFailsAuthentication)
 
     // Should fail authentication
     EXPECT_THROW(
-        sage::Cryptography::decryptPacket(std::span<const unsigned char>(corrupted), password),
-        std::runtime_error
-    );
+        seal::Cryptography::decryptPacket(std::span<const unsigned char>(corrupted), password),
+        std::runtime_error);
 }
 
 TEST_F(CryptoTest, TooShortPacketThrows)
 {
     auto password = make_secure_string("test_password");
-    std::vector<unsigned char> shortPacket(10); // Too short
+    std::vector<unsigned char> shortPacket(10);  // Too short
 
     EXPECT_THROW(
-        sage::Cryptography::decryptPacket(std::span<const unsigned char>(shortPacket), password),
-        std::runtime_error
-    );
+        seal::Cryptography::decryptPacket(std::span<const unsigned char>(shortPacket), password),
+        std::runtime_error);
 }
 
 TEST_F(CryptoTest, EmptyPlaintext)
@@ -142,18 +127,14 @@ TEST_F(CryptoTest, EmptyPlaintext)
     std::vector<unsigned char> empty;
 
     // Should handle empty input
-    auto packet = sage::Cryptography::encryptPacket(
-        std::span<const unsigned char>(empty),
-        password
-    );
+    auto packet =
+        seal::Cryptography::encryptPacket(std::span<const unsigned char>(empty), password);
 
-    EXPECT_FALSE(packet.empty()); // Should still produce a packet
+    EXPECT_FALSE(packet.empty());  // Should still produce a packet
 
     // Should decrypt to empty
-    auto decrypted = sage::Cryptography::decryptPacket(
-        std::span<const unsigned char>(packet),
-        password
-    );
+    auto decrypted =
+        seal::Cryptography::decryptPacket(std::span<const unsigned char>(packet), password);
 
     EXPECT_TRUE(decrypted.empty());
 }
@@ -161,21 +142,17 @@ TEST_F(CryptoTest, EmptyPlaintext)
 TEST_F(CryptoTest, LargePlaintext)
 {
     auto password = make_secure_string("test_password");
-    std::vector<unsigned char> largePlaintext(10000, 0x42); // 10KB of 0x42
+    std::vector<unsigned char> largePlaintext(10000, 0x42);  // 10KB of 0x42
 
     // Encrypt
-    auto packet = sage::Cryptography::encryptPacket(
-        std::span<const unsigned char>(largePlaintext),
-        password
-    );
+    auto packet =
+        seal::Cryptography::encryptPacket(std::span<const unsigned char>(largePlaintext), password);
 
     EXPECT_FALSE(packet.empty());
 
     // Decrypt
-    auto decrypted = sage::Cryptography::decryptPacket(
-        std::span<const unsigned char>(packet),
-        password
-    );
+    auto decrypted =
+        seal::Cryptography::decryptPacket(std::span<const unsigned char>(packet), password);
 
     EXPECT_EQ(decrypted, largePlaintext);
 }
@@ -186,16 +163,12 @@ TEST_F(CryptoTest, BinaryData)
     std::vector<unsigned char> binaryData = {0x00, 0xFF, 0x80, 0x7F, 0x01, 0xFE};
 
     // Encrypt
-    auto packet = sage::Cryptography::encryptPacket(
-        std::span<const unsigned char>(binaryData),
-        password
-    );
+    auto packet =
+        seal::Cryptography::encryptPacket(std::span<const unsigned char>(binaryData), password);
 
     // Decrypt
-    auto decrypted = sage::Cryptography::decryptPacket(
-        std::span<const unsigned char>(packet),
-        password
-    );
+    auto decrypted =
+        seal::Cryptography::decryptPacket(std::span<const unsigned char>(packet), password);
 
     EXPECT_EQ(decrypted, binaryData);
 }
@@ -208,16 +181,12 @@ TEST_F(CryptoTest, UnicodeText)
     std::vector<unsigned char> plainBytes(unicodeText.begin(), unicodeText.end());
 
     // Encrypt
-    auto packet = sage::Cryptography::encryptPacket(
-        std::span<const unsigned char>(plainBytes),
-        password
-    );
+    auto packet =
+        seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
 
     // Decrypt
-    auto decrypted = sage::Cryptography::decryptPacket(
-        std::span<const unsigned char>(packet),
-        password
-    );
+    auto decrypted =
+        seal::Cryptography::decryptPacket(std::span<const unsigned char>(packet), password);
 
     std::string decryptedStr(decrypted.begin(), decrypted.end());
     EXPECT_EQ(decryptedStr, unicodeText);

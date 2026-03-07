@@ -11,7 +11,8 @@
 #include "Cryptography.h"
 #include "Vault.h"
 
-namespace sage {
+namespace seal
+{
 
 /**
  * @class FillController
@@ -133,8 +134,8 @@ public:
      * @param masterPw    Master password for on-demand decryption (must outlive the fill)
      */
     void arm(int recordIndex,
-             const std::vector<sage::VaultRecord>& records,
-             const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& masterPw);
+             const std::vector<seal::VaultRecord>& records,
+             const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPw);
 
     /**
      * @brief Cancel the current fill operation and remove all hooks.
@@ -145,9 +146,9 @@ public:
     Q_INVOKABLE void cancel();
 
 signals:
-    void armedChanged();              ///< Armed state toggled on or off.
-    void fillStatusTextChanged();     ///< Status text updated.
-    void countdownSecondsChanged();   ///< Countdown tick or reset.
+    void armedChanged();             ///< Armed state toggled on or off.
+    void fillStatusTextChanged();    ///< Status text updated.
+    void countdownSecondsChanged();  ///< Countdown tick or reset.
 
     /// @brief Both credentials were typed successfully.
     /// @param statusMessage Summary for the status bar (e.g. "Filled credentials for 'GitHub'").
@@ -193,26 +194,33 @@ private:
     static FillController* s_instance;
 
     /// @brief Which credential field to type next.
-    enum class TypeTarget { Username, Password };
+    enum class TypeTarget
+    {
+        Username,
+        Password
+    };
 
-    State                               m_State          = State::Idle;  ///< Current state machine state.
-    int                                 m_RecordIndex    = -1;           ///< Index of the armed vault record.
-    const std::vector<sage::VaultRecord>*    m_Records   = nullptr;      ///< Borrowed pointer to vault records.
-    const sage::basic_secure_string<wchar_t,
-          sage::locked_allocator<wchar_t>>*  m_MasterPw  = nullptr;      ///< Borrowed pointer to master password.
+    State m_State = State::Idle;  ///< Current state machine state.
+    int m_RecordIndex = -1;       ///< Index of the armed vault record.
+    const std::vector<seal::VaultRecord>* m_Records =
+        nullptr;  ///< Borrowed pointer to vault records.
+    const seal::basic_secure_string<wchar_t,
+                                    seal::locked_allocator<wchar_t>>* m_MasterPw =
+        nullptr;  ///< Borrowed pointer to master password.
 
-    HHOOK                               m_MouseHook      = nullptr;      ///< WH_MOUSE_LL hook handle.
-    HHOOK                               m_KeyboardHook   = nullptr;      ///< WH_KEYBOARD_LL hook handle.
+    HHOOK m_MouseHook = nullptr;     ///< WH_MOUSE_LL hook handle.
+    HHOOK m_KeyboardHook = nullptr;  ///< WH_KEYBOARD_LL hook handle.
 
-    QTimer                              m_TimeoutTimer;                           ///< 1-second tick for countdown.
-    int                                 m_RemainingSeconds = 0;                   ///< Seconds until auto-cancel.
-    QString                             m_StatusText;                             ///< Human-readable status for QML.
-    TypeTarget                          m_PendingTarget  = TypeTarget::Username;  ///< Field to type on next click.
+    QTimer m_TimeoutTimer;                              ///< 1-second tick for countdown.
+    int m_RemainingSeconds = 0;                         ///< Seconds until auto-cancel.
+    QString m_StatusText;                               ///< Human-readable status for QML.
+    TypeTarget m_PendingTarget = TypeTarget::Username;  ///< Field to type on next click.
 
-    static constexpr int FILL_TIMEOUT_SECONDS = 30;   ///< Max seconds to wait for user click.
-    static constexpr int PRE_TYPE_DELAY_MS    = 150;  ///< Reserved delay before typing (unused currently).
+    static constexpr int FILL_TIMEOUT_SECONDS = 30;  ///< Max seconds to wait for user click.
+    static constexpr int PRE_TYPE_DELAY_MS =
+        150;  ///< Reserved delay before typing (unused currently).
 };
 
-} // namespace sage
+}  // namespace seal
 
-#endif // USE_QT_UI
+#endif  // USE_QT_UI

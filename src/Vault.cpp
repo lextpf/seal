@@ -1,7 +1,7 @@
 /**
  * @file Vault.cpp
- * @brief Vault file management implementation for sage
- * @author sage Contributors
+ * @brief Vault file management implementation for seal
+ * @author seal Contributors
  * @date 2024
  */
 
@@ -14,10 +14,10 @@
 #include "Logging.h"
 #include "Utils.h"
 
-#include <QtCore/QString>
-#include <QtCore/QFile>
 #include <QtCore/QDir>
+#include <QtCore/QFile>
 #include <QtCore/QFileInfo>
+#include <QtCore/QString>
 
 #include <windows.h>
 
@@ -46,10 +46,10 @@ static std::string wcharToUtf8(const wchar_t* data, size_t len)
     return out;
 }
 
-static sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>
-utf8ToSecureWide(const std::string& utf8)
+static seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> utf8ToSecureWide(
+    const std::string& utf8)
 {
-    sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>> result;
+    seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> result;
     if (utf8.empty())
         return result;
     int need = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), nullptr, 0);
@@ -61,42 +61,38 @@ utf8ToSecureWide(const std::string& utf8)
     return result;
 }
 
-namespace sage {
+namespace seal
+{
 
 void DecryptedCredential::cleanse()
 {
-    sage::Cryptography::cleanseString(m_Username, m_Password);
+    seal::Cryptography::cleanseString(m_Username, m_Password);
 }
 
 static std::vector<unsigned char> encryptString(
     const std::string& plaintext,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& masterPassword
-)
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPassword)
 {
-    return sage::Cryptography::encryptPacket(
-        std::span<const unsigned char>(
-            reinterpret_cast<const unsigned char*>(plaintext.data()),
-            plaintext.size()),
+    return seal::Cryptography::encryptPacket(
+        std::span<const unsigned char>(reinterpret_cast<const unsigned char*>(plaintext.data()),
+                                       plaintext.size()),
         masterPassword);
 }
 
 static std::string decryptToString(
     const std::vector<unsigned char>& packet,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& password
-)
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password)
 {
-    auto plainBytes = sage::Cryptography::decryptPacket(
-        std::span<const unsigned char>(packet), password);
-    std::string result(reinterpret_cast<const char*>(plainBytes.data()),
-                       plainBytes.size());
-    sage::Cryptography::cleanseString(plainBytes);
+    auto plainBytes =
+        seal::Cryptography::decryptPacket(std::span<const unsigned char>(packet), password);
+    std::string result(reinterpret_cast<const char*>(plainBytes.data()), plainBytes.size());
+    seal::Cryptography::cleanseString(plainBytes);
     return result;
 }
 
 std::vector<VaultRecord> loadVaultIndex(
     const QString& vaultPath,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& password
-)
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password)
 {
     qCInfo(logVault) << "loadVaultIndex:" << QFileInfo(vaultPath).fileName();
     std::ifstream in(qstringToStd(vaultPath), std::ios::in);
@@ -124,12 +120,12 @@ std::vector<VaultRecord> loadVaultIndex(
             continue;
 
         std::string platformHex = line.substr(0, sepPos);
-        std::string credHex     = line.substr(sepPos + 1);
+        std::string credHex = line.substr(sepPos + 1);
 
         std::vector<unsigned char> platformBlob, credBlob;
-        if (!sage::utils::from_hex(platformHex, platformBlob))
+        if (!seal::utils::from_hex(platformHex, platformBlob))
             continue;
-        if (!sage::utils::from_hex(credHex, credBlob))
+        if (!seal::utils::from_hex(credHex, credBlob))
             continue;
 
         try
@@ -138,11 +134,11 @@ std::vector<VaultRecord> loadVaultIndex(
             std::string platformName = decryptToString(platformBlob, password);
 
             VaultRecord rec;
-            rec.m_Platform          = std::move(platformName);
+            rec.m_Platform = std::move(platformName);
             rec.m_EncryptedPlatform = std::move(platformBlob);
-            rec.m_EncryptedBlob     = std::move(credBlob);
-            rec.m_Dirty             = false;
-            rec.m_Deleted           = false;
+            rec.m_EncryptedBlob = std::move(credBlob);
+            rec.m_Dirty = false;
+            rec.m_Deleted = false;
             records.push_back(std::move(rec));
         }
         catch (...)
@@ -153,21 +149,20 @@ std::vector<VaultRecord> loadVaultIndex(
 
     if (decryptAttempted > 0 && records.empty())
     {
-        qCWarning(logVault) << "loadVaultIndex: wrong password (parsed"
-                            << decryptAttempted << "record(s), 0 decrypted)";
+        qCWarning(logVault) << "loadVaultIndex: wrong password (parsed" << decryptAttempted
+                            << "record(s), 0 decrypted)";
         throw std::runtime_error("Wrong password");
     }
 
-    qCInfo(logVault) << "loadVaultIndex: parsed" << records.size()
-                     << "record(s) from" << decryptAttempted << "line(s)";
+    qCInfo(logVault) << "loadVaultIndex: parsed" << records.size() << "record(s) from"
+                     << decryptAttempted << "line(s)";
     return records;
 }
 
 bool saveVaultV2(
     const QString& vaultPath,
     const std::vector<VaultRecord>& records,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& password
-)
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password)
 {
     qCInfo(logVault) << "saveVaultV2:" << QFileInfo(vaultPath).fileName()
                      << "records=" << records.size();
@@ -194,7 +189,8 @@ bool saveVaultV2(
             platformBlob = encryptString(rec.m_Platform, password);
         }
 
-        out << sage::utils::to_hex(platformBlob) << ":" << sage::utils::to_hex(rec.m_EncryptedBlob) << "\n";
+        out << seal::utils::to_hex(platformBlob) << ":" << seal::utils::to_hex(rec.m_EncryptedBlob)
+            << "\n";
     }
 
     bool ok = out.good();
@@ -207,11 +203,10 @@ bool saveVaultV2(
 
 DecryptedCredential decryptCredentialOnDemand(
     const VaultRecord& record,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& password
-)
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password)
 {
     qCDebug(logVault) << "decryptCredentialOnDemand: platform=" << record.m_Platform.c_str();
-    auto plainBytes = sage::Cryptography::decryptPacket(
+    auto plainBytes = seal::Cryptography::decryptPacket(
         std::span<const unsigned char>(record.m_EncryptedBlob), password);
 
     const char* data = reinterpret_cast<const char*>(plainBytes.data());
@@ -233,21 +228,20 @@ DecryptedCredential decryptCredentialOnDemand(
     {
         passUtf8.assign(data + sep + 1, len - sep - 1);
     }
-    sage::Cryptography::cleanseString(plainBytes);
+    seal::Cryptography::cleanseString(plainBytes);
 
     DecryptedCredential cred;
     cred.m_Username = utf8ToSecureWide(userUtf8);
     cred.m_Password = utf8ToSecureWide(passUtf8);
-    sage::Cryptography::cleanseString(userUtf8, passUtf8);
+    seal::Cryptography::cleanseString(userUtf8, passUtf8);
     return cred;
 }
 
 VaultRecord encryptCredential(
     const std::string& platform,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& username,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& password,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& masterPassword
-)
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& username,
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password,
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPassword)
 {
     qCDebug(logVault) << "encryptCredential: platform=" << platform.c_str();
     std::string userUtf8 = wcharToUtf8(username.data(), username.size());
@@ -258,30 +252,28 @@ VaultRecord encryptCredential(
     credPlain.append(userUtf8);
     credPlain.push_back('\0');
     credPlain.append(passUtf8);
-    sage::Cryptography::cleanseString(userUtf8, passUtf8);
+    seal::Cryptography::cleanseString(userUtf8, passUtf8);
 
-    auto credBlob = sage::Cryptography::encryptPacket(
-        std::span<const unsigned char>(
-            reinterpret_cast<const unsigned char*>(credPlain.data()),
-            credPlain.size()),
+    auto credBlob = seal::Cryptography::encryptPacket(
+        std::span<const unsigned char>(reinterpret_cast<const unsigned char*>(credPlain.data()),
+                                       credPlain.size()),
         masterPassword);
-    sage::Cryptography::cleanseString(credPlain);
+    seal::Cryptography::cleanseString(credPlain);
 
     auto platformBlob = encryptString(platform, masterPassword);
 
     VaultRecord rec;
-    rec.m_Platform          = platform;
+    rec.m_Platform = platform;
     rec.m_EncryptedPlatform = std::move(platformBlob);
-    rec.m_EncryptedBlob     = std::move(credBlob);
-    rec.m_Dirty             = true;
-    rec.m_Deleted           = false;
+    rec.m_EncryptedBlob = std::move(credBlob);
+    rec.m_Dirty = true;
+    rec.m_Deleted = false;
     return rec;
 }
 
 int encryptDirectory(
     const QString& dirPath,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& password
-)
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password)
 {
     std::string path = qstringToStd(dirPath);
     int count = 0;
@@ -297,10 +289,8 @@ int encryptDirectory(
 
             std::string lowerPath = filePath;
             std::transform(lowerPath.begin(), lowerPath.end(), lowerPath.begin(), ::tolower);
-            if (lowerPath.ends_with(".sage") ||
-                lowerPath.ends_with(".sage") ||
-                lowerPath.ends_with(".exe")   ||
-                lowerPath.ends_with(".dll")   ||
+            if (lowerPath.ends_with(".seal") || lowerPath.ends_with(".seal") ||
+                lowerPath.ends_with(".exe") || lowerPath.ends_with(".dll") ||
                 lowerPath.ends_with(".pdb"))
             {
                 continue;
@@ -308,7 +298,7 @@ int encryptDirectory(
 
             if (FileOperations::encryptFileInPlace(filePath.c_str(), password))
             {
-                std::string newPath = filePath + ".sage";
+                std::string newPath = filePath + ".seal";
                 if (std::filesystem::exists(newPath))
                     std::filesystem::remove(newPath);
                 std::filesystem::rename(filePath, newPath);
@@ -327,8 +317,7 @@ int encryptDirectory(
 
 int decryptDirectory(
     const QString& dirPath,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& password
-)
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password)
 {
     std::string path = qstringToStd(dirPath);
     int count = 0;
@@ -344,7 +333,7 @@ int decryptDirectory(
 
             std::string lowerPath = filePath;
             std::transform(lowerPath.begin(), lowerPath.end(), lowerPath.begin(), ::tolower);
-            if (!lowerPath.ends_with(".sage"))
+            if (!lowerPath.ends_with(".seal"))
                 continue;
 
             if (FileOperations::decryptFileInPlace(filePath.c_str(), password))
@@ -366,6 +355,6 @@ int decryptDirectory(
     return count;
 }
 
-} // namespace sage
+}  // namespace seal
 
-#endif // USE_QT_UI
+#endif  // USE_QT_UI

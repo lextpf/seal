@@ -3,17 +3,18 @@
 #ifdef USE_QT_UI
 #include <QObject>
 #include <QString>
-#include <QVariantMap>
 #include <QTimer>
+#include <QVariantMap>
 
-#include <vector>
 #include <functional>
+#include <vector>
 
 #include "Cryptography.h"
 #include "Vault.h"
 #include "VaultModel.h"
 
-namespace sage {
+namespace seal
+{
 
 class FillController;
 
@@ -24,14 +25,14 @@ class FillController;
  * @author Alex (https://github.com/lextpf)
  * @ingroup Backend
  *
- * Bridges the sage crypto core with the QML front-end. Owns the vault
+ * Bridges the seal crypto core with the QML front-end. Owns the vault
  * record list, master password, vault model, and the FillController used
  * for auto-typing credentials into external windows.
  *
  * ## :material-lock: Vault Lifecycle
  *
  * 1. User supplies a master password via submitPassword().
- * 2. loadVault() opens a `.sage` file and populates m_Records.
+ * 2. loadVault() opens a `.seal` file and populates m_Records.
  * 3. Credentials are displayed through the VaultListModel (vaultModel property).
  * 4. saveVault() encrypts and writes records back to disk.
  * 5. unloadVault() clears records and wipes the master password.
@@ -60,12 +61,14 @@ class Backend : public QObject
     Q_PROPERTY(int selectedIndex READ selectedIndex WRITE setSelectedIndex NOTIFY selectionChanged)
     Q_PROPERTY(QString statusText READ statusText NOTIFY statusTextChanged)
     Q_PROPERTY(bool passwordSet READ isPasswordSet NOTIFY passwordSetChanged)
-    Q_PROPERTY(QString searchFilter READ searchFilter WRITE setSearchFilter NOTIFY searchFilterChanged)
+    Q_PROPERTY(
+        QString searchFilter READ searchFilter WRITE setSearchFilter NOTIFY searchFilterChanged)
     Q_PROPERTY(QString countdownText READ countdownText NOTIFY countdownTextChanged)
     Q_PROPERTY(bool isBusy READ isBusy NOTIFY busyChanged)
     Q_PROPERTY(bool isFillArmed READ isFillArmed NOTIFY fillArmedChanged)
     Q_PROPERTY(QString fillStatusText READ fillStatusText NOTIFY fillStatusTextChanged)
-    Q_PROPERTY(int fillCountdownSeconds READ fillCountdownSeconds NOTIFY fillCountdownSecondsChanged)
+    Q_PROPERTY(
+        int fillCountdownSeconds READ fillCountdownSeconds NOTIFY fillCountdownSecondsChanged)
 
 public:
     /// @brief Construct the backend, creating the vault model and fill controller.
@@ -225,9 +228,9 @@ public:
     Q_INVOKABLE void encryptDirectory();
 
     /**
-     * @brief Decrypt all `.sage` files in a user-selected directory.
+     * @brief Decrypt all `.seal` files in a user-selected directory.
      *
-     * Opens a folder picker, then decrypts every `.sage` file in the
+     * Opens a folder picker, then decrypts every `.seal` file in the
      * directory with the master password. Prompts for password if not set.
      */
     Q_INVOKABLE void decryptDirectory();
@@ -235,7 +238,7 @@ public:
     /**
      * @brief Attempt to auto-load a vault from a well-known location.
      *
-     * Checks for a `.sage` vault file next to the executable. If found,
+     * Checks for a `.seal` vault file next to the executable. If found,
      * loads it automatically (still requires master password).
      */
     Q_INVOKABLE void autoLoadVault();
@@ -288,14 +291,14 @@ public:
     Q_INVOKABLE void updateWindowTheme(bool dark);
 
 signals:
-    void vaultLoadedChanged();          ///< Vault open/close state changed.
-    void vaultFileNameChanged();        ///< Vault file name changed.
-    void selectionChanged();            ///< Selected row index changed.
-    void statusTextChanged();           ///< Status bar text updated.
-    void passwordSetChanged();          ///< Master password set or cleared.
-    void searchFilterChanged();         ///< Search filter text changed.
-    void countdownTextChanged();        ///< Countdown display text changed.
-    void busyChanged();                 ///< Background operation started or finished.
+    void vaultLoadedChanged();    ///< Vault open/close state changed.
+    void vaultFileNameChanged();  ///< Vault file name changed.
+    void selectionChanged();      ///< Selected row index changed.
+    void statusTextChanged();     ///< Status bar text updated.
+    void passwordSetChanged();    ///< Master password set or cleared.
+    void searchFilterChanged();   ///< Search filter text changed.
+    void countdownTextChanged();  ///< Countdown display text changed.
+    void busyChanged();           ///< Background operation started or finished.
 
     /// @brief An error occurred that should be shown to the user.
     /// @param title   Dialog title
@@ -331,9 +334,9 @@ signals:
     /// @param message Error message to display in the password dialog.
     void passwordRetryRequired(const QString& message);
 
-    void fillArmedChanged();              ///< Auto-fill armed state toggled.
-    void fillStatusTextChanged();         ///< Auto-fill status message updated.
-    void fillCountdownSecondsChanged();   ///< Auto-fill countdown tick.
+    void fillArmedChanged();             ///< Auto-fill armed state toggled.
+    void fillStatusTextChanged();        ///< Auto-fill status message updated.
+    void fillCountdownSecondsChanged();  ///< Auto-fill countdown tick.
 
 private:
     /**
@@ -353,7 +356,7 @@ private:
      * the pending action, and emits passwordRetryRequired() so the UI
      * can re-prompt.
      *
-     * @param filePath Absolute path to the .sage vault file
+     * @param filePath Absolute path to the .seal vault file
      * @param isAutoLoad True when called from autoLoadVault()
      */
     void loadVaultFromPath(const QString& filePath, bool isAutoLoad = false);
@@ -380,13 +383,13 @@ private:
      * @param qstr Input QString
      * @return Secure wchar_t string backed by a locked allocator
      */
-    static sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>
-        qstringToSecureWide(const QString& qstr);
+    static seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> qstringToSecureWide(
+        const QString& qstr);
 
     /**
      * @brief Open a Win32 file-open dialog.
      * @param title  Dialog title
-     * @param filter File type filter (e.g. "Vault Files (*.sage)")
+     * @param filter File type filter (e.g. "Vault Files (*.seal)")
      * @return Selected file path, or empty string if cancelled
      */
     QString openFileDialog(const QString& title, const QString& filter);
@@ -394,7 +397,7 @@ private:
     /**
      * @brief Open a Win32 file-save dialog.
      * @param title  Dialog title
-     * @param filter File type filter (e.g. "Vault Files (*.sage)")
+     * @param filter File type filter (e.g. "Vault Files (*.seal)")
      * @return Selected file path, or empty string if cancelled
      */
     QString saveFileDialog(const QString& title, const QString& filter);
@@ -406,26 +409,27 @@ private:
      */
     QString openFolderDialog(const QString& title);
 
-    std::function<void()>               m_PendingAction;             ///< Action deferred until password is entered.
+    std::function<void()> m_PendingAction;  ///< Action deferred until password is entered.
 
-    VaultListModel*                     m_Model          = nullptr;  ///< Vault list model for QML binding.
-    FillController*                     m_FillController = nullptr;  ///< Auto-fill hook controller.
+    VaultListModel* m_Model = nullptr;           ///< Vault list model for QML binding.
+    FillController* m_FillController = nullptr;  ///< Auto-fill hook controller.
 
-    sage::basic_secure_string<wchar_t>  m_Password;                  ///< Master password in locked memory.
-    sage::DPAPIGuard<sage::basic_secure_string<wchar_t>> m_DPAPIGuard; ///< DPAPI in-memory encryption for m_Password.
-    bool                                m_PasswordSet    = false;    ///< Whether master password has been entered.
+    seal::basic_secure_string<wchar_t> m_Password;  ///< Master password in locked memory.
+    seal::DPAPIGuard<seal::basic_secure_string<wchar_t>>
+        m_DPAPIGuard;            ///< DPAPI in-memory encryption for m_Password.
+    bool m_PasswordSet = false;  ///< Whether master password has been entered.
 
-    QString                             m_CurrentVaultPath;          ///< Path to the currently loaded vault file.
-    std::vector<sage::VaultRecord>      m_Records;                   ///< In-memory vault records.
-    QString                             m_AutoEncryptDirectory;      ///< Directory for auto-encrypt on save.
+    QString m_CurrentVaultPath;                ///< Path to the currently loaded vault file.
+    std::vector<seal::VaultRecord> m_Records;  ///< In-memory vault records.
+    QString m_AutoEncryptDirectory;            ///< Directory for auto-encrypt on save.
 
-    int                                 m_SelectedIndex  = -1;                       ///< Currently selected row (-1 = none).
-    QString                             m_StatusText     = QStringLiteral("Ready");  ///< Status bar text.
-    QString                             m_SearchFilter;                              ///< Active search/filter string.
-    QString                             m_CountdownText;                             ///< Countdown display for timed ops.
-    bool                                m_Busy           = false;                    ///< Background operation in progress.
+    int m_SelectedIndex = -1;                        ///< Currently selected row (-1 = none).
+    QString m_StatusText = QStringLiteral("Ready");  ///< Status bar text.
+    QString m_SearchFilter;                          ///< Active search/filter string.
+    QString m_CountdownText;                         ///< Countdown display for timed ops.
+    bool m_Busy = false;                             ///< Background operation in progress.
 };
 
-} // namespace sage
+}  // namespace seal
 
-#endif // USE_QT_UI
+#endif  // USE_QT_UI

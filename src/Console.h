@@ -1,17 +1,18 @@
 #pragma once
 
+#include "Clipboard.h"
 #include "Cryptography.h"
 #include "Utils.h"
-#include "Clipboard.h"
 
-#include <wincred.h>
 #include <conio.h>
+#include <wincred.h>
 
 #include <iostream>
 #include <string>
 #include <vector>
 
-namespace sage {
+namespace seal
+{
 
 /**
  * @class MaskedCredentialView
@@ -52,7 +53,7 @@ public:
      *
      * @pre The process must own a console with valid input and output handles.
      */
-    explicit MaskedCredentialView(const std::vector<sage::secure_triplet16_t>& entries);
+    explicit MaskedCredentialView(const std::vector<seal::secure_triplet16_t>& entries);
 
     MaskedCredentialView(const MaskedCredentialView&) = delete;
     MaskedCredentialView& operator=(const MaskedCredentialView&) = delete;
@@ -62,7 +63,7 @@ public:
      *
      * Enables mouse input, then blocks until the user presses Enter or
      * Escape. Mouse clicks on masked fields trigger a countdown and
-     * keystroke injection via `sage::typeSecret`. Console input mode
+     * keystroke injection via `seal::typeSecret`. Console input mode
      * is restored automatically when the method returns.
      */
     void run();
@@ -88,7 +89,7 @@ private:
 
     HANDLE m_Input;
     HANDLE m_Output;
-    const std::vector<sage::secure_triplet16_t>& m_Entries;
+    const std::vector<seal::secure_triplet16_t>& m_Entries;
     std::vector<HitRegion> m_Regions;
     SHORT m_StatusRow = 0;
     SHORT m_Width = 0;
@@ -109,7 +110,7 @@ private:
  *
  * @see MaskedCredentialView
  */
-void interactiveMaskedWin(const std::vector<sage::secure_triplet16_t>& entries);
+void interactiveMaskedWin(const std::vector<seal::secure_triplet16_t>& entries);
 
 /**
  * @brief Read multiple non-empty lines from a stream until a terminator.
@@ -132,8 +133,8 @@ std::pair<std::vector<std::string>, bool> readBulkLinesDualFrom(std::istream& in
  * - **Escape** to cancel (returns `false`)
  * - **Ctrl+C** / **Ctrl+Z** to interrupt / signal EOF
  * - `?` or `!` on its own line to terminate (sets uncensored flag)
- * - `:open` / `:edit` to launch the sage file in Notepad
- * - `:copy` / `:clip` to copy the sage file to the clipboard
+ * - `:open` / `:edit` to launch the seal file in Notepad
+ * - `:copy` / `:clip` to copy the seal file to the clipboard
  * - `:clear` / `:none` to empty the clipboard
  *
  * @param[out] out Receives the collected lines and uncensored flag on success.
@@ -154,7 +155,7 @@ bool readBulkLinesDualOrEsc(std::pair<std::vector<std::string>, bool>& out);
  * dialog is extracted into a `basic_secure_string<wchar_t>`, and all
  * intermediate credential buffers are securely wiped via RAII guards.
  *
- * @param caption Dialog title bar text (default `"sage AES-256-GCM"`).
+ * @param caption Dialog title bar text (default `"seal AES-256-GCM"`).
  * @param message Dialog body text (default `"Enter your master password."`).
  * @return The entered password in a secure wide string.
  *
@@ -164,8 +165,8 @@ bool readBulkLinesDualOrEsc(std::pair<std::vector<std::string>, bool>& out);
  * @post All intermediate buffers (packed credentials, username, domain,
  *       password) are scrubbed with `SecureZeroMemory`.
  */
-sage::basic_secure_string<wchar_t> readPasswordSecureDesktop(
-    const wchar_t* caption = L"sage AES-256-GCM",
+seal::basic_secure_string<wchar_t> readPasswordSecureDesktop(
+    const wchar_t* caption = L"seal AES-256-GCM",
     const wchar_t* message = L"Enter your master password.");
 
 /**
@@ -182,7 +183,6 @@ sage::basic_secure_string<wchar_t> readPasswordSecureDesktop(
  * @return The entered password in a secure wide string.
  * @throw std::runtime_error on Escape or Ctrl+C.
  */
-sage::basic_secure_string<wchar_t> readPasswordConsole(
-    const char* prompt = "Password: ");
+seal::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt = "Password: ");
 
-} // namespace sage
+}  // namespace seal

@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM build.bat - Complete build pipeline for sage
+REM build.bat - Complete build pipeline for seal
 REM ============================================================================
 REM This script:
 REM   1. Configures the project using CMake with vcpkg toolchain
@@ -41,7 +41,7 @@ if exist "%REPO_OVERLAY_TRIPLETS%" set "VCPKG_OVERLAY_TRIPLETS_ARG=-DVCPKG_OVERL
 
 REM --- Build output and vcpkg buildtrees (avoid MAX_PATH) ---
 set "BUILD_DIR=%REPO_ROOT%\build"
-if not defined VCPKG_BUILDTREES_ROOT set "VCPKG_BUILDTREES_ROOT=C:\b\sage-vcpkg"
+if not defined VCPKG_BUILDTREES_ROOT set "VCPKG_BUILDTREES_ROOT=C:\b\seal-vcpkg"
 if not exist "%VCPKG_BUILDTREES_ROOT%" mkdir "%VCPKG_BUILDTREES_ROOT%" >nul 2>&1
 set "VCPKG_INSTALL_OPTIONS_ARG=-DVCPKG_INSTALL_OPTIONS=--x-buildtrees-root=%VCPKG_BUILDTREES_ROOT%"
 
@@ -103,7 +103,7 @@ if defined PINNED_TOOLSET if exist "%BUILD_DIR%\CMakeCache.txt" (
 )
 
 echo ============================================================================
-echo                             SAGE BUILD PIPELINE
+echo                             SEAL BUILD PIPELINE
 echo ============================================================================
 echo Repo Root:            %REPO_ROOT%
 echo vcpkg Root:           %VCPKG_ROOT%
@@ -182,7 +182,7 @@ echo                           BUILD PIPELINE COMPLETE
 echo ============================================================================
 echo.
 echo Build Output:
-echo   - EXE: %BUILD_DIR%\bin\Release\sage.exe
+echo   - EXE: %BUILD_DIR%\bin\Release\seal.exe
 echo.
 echo Documentation:
 echo   - API: %REPO_ROOT%\site\ (if doxide available)

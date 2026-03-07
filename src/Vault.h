@@ -9,7 +9,8 @@
 
 #include "Cryptography.h"
 
-namespace sage {
+namespace seal
+{
 
 /**
  * @brief One record in the vault index.
@@ -22,11 +23,11 @@ namespace sage {
  */
 struct VaultRecord
 {
-    std::string m_Platform;                              ///< Cleartext platform name (in-memory only, UTF-8)
-    std::vector<unsigned char> m_EncryptedPlatform;      ///< AES-256-GCM packet of platform name
-    std::vector<unsigned char> m_EncryptedBlob;          ///< AES-256-GCM packet of "username\0password"
-    bool m_Dirty   = false;                              ///< True if created or modified since last save
-    bool m_Deleted = false;                              ///< Soft-deleted; skipped on save and display
+    std::string m_Platform;  ///< Cleartext platform name (in-memory only, UTF-8)
+    std::vector<unsigned char> m_EncryptedPlatform;  ///< AES-256-GCM packet of platform name
+    std::vector<unsigned char> m_EncryptedBlob;      ///< AES-256-GCM packet of "username\0password"
+    bool m_Dirty = false;    ///< True if created or modified since last save
+    bool m_Deleted = false;  ///< Soft-deleted; skipped on save and display
 };
 
 /**
@@ -38,8 +39,8 @@ struct VaultRecord
  */
 struct DecryptedCredential
 {
-    sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>> m_Username;
-    sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>> m_Password;
+    seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> m_Username;
+    seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> m_Password;
 
     void cleanse();
 };
@@ -54,8 +55,7 @@ struct DecryptedCredential
  */
 std::vector<VaultRecord> loadVaultIndex(
     const QString& vaultPath,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& password
-);
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password);
 
 /**
  * @brief Save vault with fully-encrypted records.
@@ -67,8 +67,7 @@ std::vector<VaultRecord> loadVaultIndex(
 bool saveVaultV2(
     const QString& vaultPath,
     const std::vector<VaultRecord>& records,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& password
-);
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password);
 
 /**
  * @brief Decrypt a single record on demand.
@@ -78,8 +77,7 @@ bool saveVaultV2(
  */
 DecryptedCredential decryptCredentialOnDemand(
     const VaultRecord& record,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& password
-);
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password);
 
 /**
  * @brief Encrypt a credential pair into a new VaultRecord.
@@ -88,23 +86,20 @@ DecryptedCredential decryptCredentialOnDemand(
  */
 VaultRecord encryptCredential(
     const std::string& platform,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& username,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& password,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& masterPassword
-);
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& username,
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password,
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPassword);
 
-/// @brief Encrypt a directory recursively (skips .sage, .exe, .dll, and .pdb files).
+/// @brief Encrypt a directory recursively (skips .seal, .exe, .dll, and .pdb files).
 int encryptDirectory(
     const QString& dirPath,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& password
-);
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password);
 
-/// @brief Decrypt .sage files in a directory recursively.
+/// @brief Decrypt .seal files in a directory recursively.
 int decryptDirectory(
     const QString& dirPath,
-    const sage::basic_secure_string<wchar_t, sage::locked_allocator<wchar_t>>& password
-);
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password);
 
-} // namespace sage
+}  // namespace seal
 
-#endif // USE_QT_UI
+#endif  // USE_QT_UI

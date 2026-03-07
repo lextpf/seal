@@ -1,9 +1,9 @@
 #pragma once
 
-#include "Cryptography.h"
-#include "Utils.h"
 #include "Clipboard.h"
 #include "Console.h"
+#include "Cryptography.h"
+#include "Utils.h"
 
 #include <filesystem>
 #include <fstream>
@@ -11,7 +11,8 @@
 #include <iostream>
 #include <iterator>
 
-namespace sage {
+namespace seal
+{
 
 /**
  * @class FileOperations
@@ -28,15 +29,14 @@ namespace sage {
  * ## :material-file-lock: Single-File Operations
  *
  * encryptFileInPlace() / decryptFileInPlace() read a file into memory,
- * encrypt or decrypt the contents via `Cryptography::encryptPacket` / `Cryptography::decryptPacket`,
- * and overwrite the original file. encryptLine() / decryptLine() do the
- * same for hex-encoded text strings, returning the result rather than
- * writing to disk.
+ * encrypt or decrypt the contents via `Cryptography::encryptPacket` /
+ * `Cryptography::decryptPacket`, and overwrite the original file. encryptLine() / decryptLine() do
+ * the same for hex-encoded text strings, returning the result rather than writing to disk.
  *
  * ## :material-folder-lock: Directory & Batch Processing
  *
  * processDirectory() walks a directory tree with `FindFirstFileA`,
- * encrypting or decrypting each file based on its `.sage` extension
+ * encrypting or decrypting each file based on its `.seal` extension
  * and renaming in place. processBatch() dispatches mixed CLI input
  * (file paths, hex tokens, raw plaintext) through the appropriate
  * encrypt/decrypt path, with support for masked credential display
@@ -45,7 +45,7 @@ namespace sage {
  * ## :material-pipe: Stream Mode
  *
  * streamEncrypt() / streamDecrypt() provide stdin-to-stdout binary
- * piping for shell integration (`sage -e < input > output.sage`).
+ * piping for shell integration (`seal -e < input > output.seal`).
  *
  * ## :material-format-list-group: Triple Helpers
  *
@@ -73,7 +73,7 @@ public:
      * @param pwd  Master password for key derivation.
      * @return `true` on success, `false` if the file cannot be opened/written.
      */
-    template<class SecurePwd>
+    template <class SecurePwd>
     static bool encryptFileInPlace(const char* path, const SecurePwd& pwd);
 
     /**
@@ -88,7 +88,7 @@ public:
      * @param pwd  Master password for key derivation.
      * @return `true` on success, `false` on I/O or authentication error.
      */
-    template<class SecurePwd>
+    template <class SecurePwd>
     static bool decryptFileInPlace(const char* path, const SecurePwd& pwd);
 
     /**
@@ -99,7 +99,7 @@ public:
      * @param pwd Master password for key derivation.
      * @return Hex-encoded encrypted packet.
      */
-    template<class SecurePwd>
+    template <class SecurePwd>
     [[nodiscard]] static std::string encryptLine(const std::string& s, const SecurePwd& pwd);
 
     /**
@@ -114,15 +114,15 @@ public:
      *
      * @throws std::runtime_error on invalid hex or authentication failure.
      */
-    template<class SecurePwd>
-    [[nodiscard]] static sage::secure_string<sage::locked_allocator<char>>
-        decryptLine(const std::string& rawHex, const SecurePwd& pwd);
+    template <class SecurePwd>
+    [[nodiscard]] static seal::secure_string<seal::locked_allocator<char>> decryptLine(
+        const std::string& rawHex, const SecurePwd& pwd);
 
     /**
      * @brief Compute serialized length of a UTF-16 triple rendered as `s:u:p`.
      */
-    template<class A>
-    static size_t tripleLen(const sage::secure_triplet16<A>& t)
+    template <class A>
+    static size_t tripleLen(const seal::secure_triplet16<A>& t)
     {
         return t.primary.size() + 1 + t.secondary.size() + 1 + t.tertiary.size();
     }
@@ -130,7 +130,7 @@ public:
     /**
      * @brief Convert a UTF-16 triple to a single UTF-8 line `service:username:password`.
      */
-    static std::string tripleToUtf8(const sage::secure_triplet16_t& t);
+    static std::string tripleToUtf8(const seal::secure_triplet16_t& t);
 
     /**
      * @brief Parse one or more `service:username:password` items from plain text.
@@ -144,15 +144,15 @@ public:
      * @param out   Destination vector of secure UTF-16 triplets.
      * @return `true` on success (non-empty result with only well-formed items).
      */
-    template<class A>
-    static bool parseTriples(std::string_view plain, std::vector<sage::secure_triplet16<A>>& out);
+    template <class A>
+    static bool parseTriples(std::string_view plain, std::vector<seal::secure_triplet16<A>>& out);
 
     /**
      * @brief Encrypt/decrypt all files in a directory tree.
      *
      * Walks the directory with `FindFirstFileA`, skipping `.exe` and the
-     * `sage` binary itself. Each file is encrypted or decrypted based on
-     * its `.sage` extension and renamed in place after successful I/O.
+     * `seal` binary itself. Each file is encrypted or decrypted based on
+     * its `.seal` extension and renamed in place after successful I/O.
      * Subdirectories are processed in parallel via `std::async`.
      *
      * @tparam SecurePwd Secure password container.
@@ -161,23 +161,25 @@ public:
      * @param recurse  Recurse into subdirectories when `true`.
      * @return `true` if all processed files succeeded.
      */
-    template<class SecurePwd>
-    static bool processDirectory(const std::string& dir, const SecurePwd& password, bool recurse = true);
+    template <class SecurePwd>
+    static bool processDirectory(const std::string& dir,
+                                 const SecurePwd& password,
+                                 bool recurse = true);
 
     /**
      * @brief Process a single file path or convenience token.
      *
      * - `.` expands to the current directory (recursive).
      * - Directories delegate to processDirectory().
-     * - Regular files: encrypt to `<name>.sage` or decrypt based on extension.
-     * - Skips `.exe` and `sage`.
+     * - Regular files: encrypt to `<name>.seal` or decrypt based on extension.
+     * - Skips `.exe` and `seal`.
      *
      * @tparam SecurePwd Secure password container.
      * @param raw      Raw path string (may be quoted).
      * @param password Master password for key derivation.
      * @return `true` if the path was recognized and processed successfully.
      */
-    template<class SecurePwd>
+    template <class SecurePwd>
     static bool processFilePath(const std::string& raw, const SecurePwd& password);
 
     /**
@@ -199,21 +201,23 @@ public:
      * @param uncensored Print plaintext when `true`, mask when `false`.
      * @param password   Master password for key derivation.
      */
-    template<class SecurePwd>
-    static void processBatch(const std::vector<std::string>& lines, bool uncensored, const SecurePwd& password);
+    template <class SecurePwd>
+    static void processBatch(const std::vector<std::string>& lines,
+                             bool uncensored,
+                             const SecurePwd& password);
 
     /**
      * @brief Stream encryption: read from stdin, encrypt, write binary to stdout.
      *
      * Reads all data from `std::cin`, encrypts via AES-256-GCM, and writes
      * the binary packet to `std::cout`. Use with shell redirection:
-     * `sage -e < input.txt > output.sage`
+     * `seal -e < input.txt > output.seal`
      *
      * @tparam SecurePwd Secure password container.
      * @param password Master password for key derivation.
      * @return `true` on success, `false` on error (errors go to stderr).
      */
-    template<class SecurePwd>
+    template <class SecurePwd>
     static bool streamEncrypt(const SecurePwd& password);
 
     /**
@@ -221,14 +225,14 @@ public:
      *
      * Reads a binary encrypted packet from `std::cin`, decrypts via
      * AES-256-GCM, and writes the plaintext to `std::cout`. Use with
-     * shell redirection: `sage -d < input.sage > output.txt`
+     * shell redirection: `seal -d < input.seal > output.txt`
      *
      * @tparam SecurePwd Secure password container.
      * @param password Master password for key derivation.
      * @return `true` on success, `false` on error (errors go to stderr).
      */
-    template<class SecurePwd>
+    template <class SecurePwd>
     static bool streamDecrypt(const SecurePwd& password);
 };
 
-} // namespace sage
+}  // namespace seal

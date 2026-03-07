@@ -5,7 +5,8 @@
 #include <cstddef>
 #include <string>
 
-namespace sage {
+namespace seal
+{
 
 /**
  * @class Clipboard
@@ -38,7 +39,7 @@ namespace sage {
  *
  * ## :material-file-lock: Input-File Helper
  *
- * copyInputFile() reads the `sage` binary input file into memory
+ * copyInputFile() reads the `seal` binary input file into memory
  * and delegates to copyWithTTL, giving CLI users a one-shot
  * "read-and-scrub" workflow.
  */
@@ -101,7 +102,7 @@ public:
      * @param ttl_ms Scrub delay in milliseconds (default 6000).
      * @return `true` if the clipboard was set successfully.
      */
-    template<std::ranges::contiguous_range S>
+    template <std::ranges::contiguous_range S>
         requires std::same_as<std::remove_cv_t<std::ranges::range_value_t<S>>, char>
     [[nodiscard]] static bool copyWithTTL(const S& s, DWORD ttl_ms = 6000)
     {
@@ -119,8 +120,8 @@ public:
      * @param ttl_ms Scrub delay in milliseconds (default 6000).
      * @return `true` if the clipboard was set successfully.
      */
-    template<size_t N>
-    [[nodiscard]] static bool copyWithTTL(const char(&s)[N], DWORD ttl_ms = 6000)
+    template <size_t N>
+    [[nodiscard]] static bool copyWithTTL(const char (&s)[N], DWORD ttl_ms = 6000)
     {
         static_assert(N > 0, "empty char array?");
         return copyWithTTL(s, N - 1, ttl_ms);
@@ -139,7 +140,7 @@ public:
     [[nodiscard]] static bool copyWithTTL(const char* s, DWORD ttl_ms = 6000);
 
     /**
-     * @brief Read the `sage` input file and copy its contents to the clipboard.
+     * @brief Read the `seal` input file and copy its contents to the clipboard.
      *
      * Reads the file via `utils::read_bin`, then delegates to copyWithTTL so the
      * clipboard is automatically scrubbed after the default TTL.
@@ -147,7 +148,7 @@ public:
      * @return `true` if the file was read and clipboard was set successfully.
      *
      * @see copyWithTTL
-     * @see sage::utils::read_bin
+     * @see seal::utils::read_bin
      */
     [[nodiscard]] static bool copyInputFile();
 };
@@ -175,7 +176,7 @@ public:
 [[nodiscard]] bool typeSecret(const wchar_t* bytes, int len, DWORD delay_ms = 4000);
 
 /**
- * @brief Open the `sage` input file in Notepad.
+ * @brief Open the `seal` input file in Notepad.
  *
  * Attempts `ShellExecuteA` first; falls back to `cmd /c start notepad.exe`
  * if `ShellExecuteA` fails (e.g. on restricted accounts).
@@ -193,4 +194,4 @@ public:
  */
 void wipeConsoleBuffer();
 
-} // namespace sage
+}  // namespace seal

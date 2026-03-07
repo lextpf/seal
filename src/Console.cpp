@@ -31,7 +31,7 @@ struct CoTaskMemGuard
 };
 
 // RAII guard that securely wipes a fixed-size wchar_t buffer on scope exit.
-template<size_t N>
+template <size_t N>
 struct SecureWCharBuffer
 {
     wchar_t data[N]{};
@@ -39,23 +39,21 @@ struct SecureWCharBuffer
 
     SecureWCharBuffer() = default;
 
-    ~SecureWCharBuffer()
-    {
-        SecureZeroMemory(data, sizeof(data));
-    }
+    ~SecureWCharBuffer() { SecureZeroMemory(data, sizeof(data)); }
 
     SecureWCharBuffer(const SecureWCharBuffer&) = delete;
     SecureWCharBuffer& operator=(const SecureWCharBuffer&) = delete;
 };
 
-} // namespace
+}  // namespace
 
-namespace sage {
+namespace seal
+{
 
-MaskedCredentialView::MaskedCredentialView(const std::vector<sage::secure_triplet16_t>& entries)
-    : m_Input(GetStdHandle(STD_INPUT_HANDLE))
-    , m_Output(GetStdHandle(STD_OUTPUT_HANDLE))
-    , m_Entries(entries)
+MaskedCredentialView::MaskedCredentialView(const std::vector<seal::secure_triplet16_t>& entries)
+    : m_Input(GetStdHandle(STD_INPUT_HANDLE)),
+      m_Output(GetStdHandle(STD_OUTPUT_HANDLE)),
+      m_Entries(entries)
 {
     CONSOLE_SCREEN_BUFFER_INFO info{};
     GetConsoleScreenBufferInfo(m_Output, &info);
@@ -67,7 +65,8 @@ MaskedCredentialView::MaskedCredentialView(const std::vector<sage::secure_triple
 
     // Reserve rows for header + entries + status line
     int maxItems = std::max<SHORT>(0, static_cast<SHORT>(winH - 2));
-    m_ShowCount = static_cast<int>(std::min<size_t>(static_cast<size_t>(maxItems), m_Entries.size()));
+    m_ShowCount =
+        static_cast<int>(std::min<size_t>(static_cast<size_t>(maxItems), m_Entries.size()));
 
     render();
 }
@@ -91,19 +90,21 @@ void MaskedCredentialView::render()
     std::string blank(static_cast<size_t>(m_Width), ' ');
     for (SHORT r = startY; r < startY + needed && r <= winBot; ++r)
     {
-        COORD c{ 0, r };
+        COORD c{0, r};
         DWORD written = 0;
         SetConsoleCursorPosition(m_Output, c);
         WriteConsoleA(m_Output, blank.c_str(), static_cast<DWORD>(blank.size()), &written, nullptr);
     }
 
     // Header line
-    SetConsoleCursorPosition(m_Output, { 0, startY });
+    SetConsoleCursorPosition(m_Output, {0, startY});
     DWORD written;
     WriteConsoleA(m_Output,
-        "--- Decrypted entries (Click **** to copy; Enter/Esc to continue) ---",
-        69, &written, nullptr);
-    SetConsoleCursorPosition(m_Output, { 0, static_cast<SHORT>(startY + 1) });
+                  "--- Decrypted entries (Click **** to copy; Enter/Esc to continue) ---",
+                  69,
+                  &written,
+                  nullptr);
+    SetConsoleCursorPosition(m_Output, {0, static_cast<SHORT>(startY + 1)});
 
     // Masked credential rows
     m_Regions.clear();
@@ -118,7 +119,8 @@ void MaskedCredentialView::render()
         // Space needed for ":********:********"
         constexpr int MASKED_TAIL = 1 + MASKED_WIDTH + 1 + MASKED_WIDTH;
 
-        int maxService = std::max<SHORT>(0, static_cast<SHORT>(m_Width - static_cast<int>(idx.size()) - MASKED_TAIL));
+        int maxService = std::max<SHORT>(
+            0, static_cast<SHORT>(m_Width - static_cast<int>(idx.size()) - MASKED_TAIL));
 
         std::wstring svc(m_Entries[static_cast<size_t>(i)].primary.data(),
                          m_Entries[static_cast<size_t>(i)].primary.size());
@@ -140,15 +142,15 @@ void MaskedCredentialView::render()
         std::wstring prefix = idx + svc + L":";
         std::wstring line = prefix + L"********:********";
 
-        SetConsoleCursorPosition(m_Output, { 0, y });
+        SetConsoleCursorPosition(m_Output, {0, y});
         WriteConsoleW(m_Output, line.c_str(), static_cast<DWORD>(line.size()), &written, nullptr);
-        SetConsoleCursorPosition(m_Output, { 0, static_cast<SHORT>(y + 1) });
+        SetConsoleCursorPosition(m_Output, {0, static_cast<SHORT>(y + 1)});
 
         SHORT u0 = static_cast<SHORT>(prefix.size());
         SHORT u1 = static_cast<SHORT>(u0 + MASKED_WIDTH - 1);
         SHORT p0 = static_cast<SHORT>(u1 + 2);
         SHORT p1 = static_cast<SHORT>(p0 + MASKED_WIDTH - 1);
-        m_Regions.push_back(HitRegion{ y, u0, u1, p0, p1 });
+        m_Regions.push_back(HitRegion{y, u0, u1, p0, p1});
     }
 
     GetConsoleScreenBufferInfo(m_Output, &info);
@@ -157,7 +159,8 @@ void MaskedCredentialView::render()
     // Show overflow indicator if not all entries fit
     if (static_cast<size_t>(m_ShowCount) < m_Entries.size())
     {
-        setStatus("[showing " + std::to_string(m_ShowCount) + " of " + std::to_string(m_Entries.size()) + "]");
+        setStatus("[showing " + std::to_string(m_ShowCount) + " of " +
+                  std::to_string(m_Entries.size()) + "]");
     }
 }
 
@@ -166,7 +169,7 @@ void MaskedCredentialView::setStatus(const std::string& msg)
     CONSOLE_SCREEN_BUFFER_INFO info{};
     GetConsoleScreenBufferInfo(m_Output, &info);
     std::string blank(static_cast<size_t>(info.dwSize.X), ' ');
-    COORD c{ 0, m_StatusRow };
+    COORD c{0, m_StatusRow};
     DWORD written;
     SetConsoleCursorPosition(m_Output, c);
     WriteConsoleA(m_Output, blank.c_str(), static_cast<DWORD>(blank.size()), &written, nullptr);
@@ -179,7 +182,7 @@ void MaskedCredentialView::setStatusW(const std::wstring& msg)
     CONSOLE_SCREEN_BUFFER_INFO info{};
     GetConsoleScreenBufferInfo(m_Output, &info);
     std::string blank(static_cast<size_t>(info.dwSize.X), ' ');
-    COORD c{ 0, m_StatusRow };
+    COORD c{0, m_StatusRow};
     DWORD written;
     SetConsoleCursorPosition(m_Output, c);
     WriteConsoleA(m_Output, blank.c_str(), static_cast<DWORD>(blank.size()), &written, nullptr);
@@ -207,7 +210,8 @@ void MaskedCredentialView::handleClick(SHORT x, SHORT y)
                 setStatus("Focus target field; typing USERNAME in " + std::to_string(s) + "s");
                 Sleep(1000);
             }
-            (void)sage::typeSecret(entry.secondary.data(), static_cast<int>(entry.secondary.size()), 0);
+            (void)seal::typeSecret(
+                entry.secondary.data(), static_cast<int>(entry.secondary.size()), 0);
             setStatusW(L"[typed] " + svc + L" username");
         }
         else if (x >= m_Regions[i].passwordStart && x <= m_Regions[i].passwordEnd)
@@ -218,7 +222,8 @@ void MaskedCredentialView::handleClick(SHORT x, SHORT y)
                 setStatus("Focus target field; typing PASSWORD in " + std::to_string(s) + "s");
                 Sleep(1000);
             }
-            (void)sage::typeSecret(entry.tertiary.data(), static_cast<int>(entry.tertiary.size()), 0);
+            (void)seal::typeSecret(
+                entry.tertiary.data(), static_cast<int>(entry.tertiary.size()), 0);
             setStatusW(L"[typed] " + svc + L" password");
         }
         break;
@@ -230,8 +235,9 @@ void MaskedCredentialView::run()
     // Enable mouse input for click detection on masked fields
     DWORD oldMode = 0;
     GetConsoleMode(m_Input, &oldMode);
-    DWORD newMode = (oldMode | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS) & ~ENABLE_QUICK_EDIT_MODE;
-    sage::scoped_console modeGuard(m_Input, newMode);
+    DWORD newMode =
+        (oldMode | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS) & ~ENABLE_QUICK_EDIT_MODE;
+    seal::scoped_console modeGuard(m_Input, newMode);
     FlushConsoleInputBuffer(m_Input);
 
     INPUT_RECORD rec{};
@@ -258,10 +264,10 @@ void MaskedCredentialView::run()
     }
 
     // Move cursor below the status line for subsequent output
-    SetConsoleCursorPosition(m_Output, { 0, static_cast<SHORT>(m_StatusRow + 1) });
+    SetConsoleCursorPosition(m_Output, {0, static_cast<SHORT>(m_StatusRow + 1)});
 }
 
-void interactiveMaskedWin(const std::vector<sage::secure_triplet16_t>& entries)
+void interactiveMaskedWin(const std::vector<seal::secure_triplet16_t>& entries)
 {
     MaskedCredentialView view(entries);
     view.run();
@@ -278,7 +284,7 @@ std::pair<std::vector<std::string>, bool> readBulkLinesDualFrom(std::istream& in
         {
             break;
         }
-        std::string t = sage::utils::trim(l);
+        std::string t = seal::utils::trim(l);
         if (t == "?" || t == "!")
         {
             uncensored = (t == "!");
@@ -289,13 +295,13 @@ std::pair<std::vector<std::string>, bool> readBulkLinesDualFrom(std::istream& in
             lines.push_back(l);
         }
     }
-    return { std::move(lines), uncensored };
+    return {std::move(lines), uncensored};
 }
 
 // Returns: 1 = terminator found (break), 0 = line handled (continue)
 static int handleNewline(std::string& cur, std::vector<std::string>& lines, bool& uncensored)
 {
-    std::string t = sage::utils::trim(cur);
+    std::string t = seal::utils::trim(cur);
 
     // Terminator: '?' for censored, '!' for uncensored output
     if (t == "?" || t == "!")
@@ -308,7 +314,7 @@ static int handleNewline(std::string& cur, std::vector<std::string>& lines, bool
     // Console commands
     if (t == ":open" || t == ":o" || t == ":edit")
     {
-        if (!sage::openInputInNotepad())
+        if (!seal::openInputInNotepad())
             std::cerr << "(failed to launch Notepad)\n";
         cur.clear();
         std::cout << "\n";
@@ -317,7 +323,7 @@ static int handleNewline(std::string& cur, std::vector<std::string>& lines, bool
 
     if (t == ":copy" || t == ":clip" || t == ":copyfile" || t == ":copyinput")
     {
-        bool ok = sage::Clipboard::copyInputFile();
+        bool ok = seal::Clipboard::copyInputFile();
         std::cout << (ok ? "(fence copied to clipboard)" : "(failed to copy fence)") << "\n";
         cur.clear();
         return 0;
@@ -325,7 +331,7 @@ static int handleNewline(std::string& cur, std::vector<std::string>& lines, bool
 
     if (t == ":none" || t == ":clear")
     {
-        (void)sage::Clipboard::copyWithTTL("");
+        (void)seal::Clipboard::copyWithTTL("");
         std::cout << "(clipboard cleaned)\n";
         cur.clear();
         return 0;
@@ -386,13 +392,12 @@ bool readBulkLinesDualOrEsc(std::pair<std::vector<std::string>, bool>& out)
         std::cout << static_cast<char>(ch) << std::flush;
     }
 
-    out = { std::move(lines), uncensored };
+    out = {std::move(lines), uncensored};
     return true;
 }
 
-sage::basic_secure_string<wchar_t> readPasswordSecureDesktop(
-    const wchar_t* caption,
-    const wchar_t* message)
+seal::basic_secure_string<wchar_t> readPasswordSecureDesktop(const wchar_t* caption,
+                                                             const wchar_t* message)
 {
     CREDUI_INFOW ui{};
     ui.cbSize = sizeof(ui);
@@ -416,11 +421,15 @@ sage::basic_secure_string<wchar_t> readPasswordSecureDesktop(
     DWORD authPkg = 0;
     CoTaskMemGuard cred;
 
-    HRESULT hr = CredUIPromptForWindowsCredentialsW(
-        &ui, 0, &authPkg,
-        inBuf.data(), inLen,
-        &cred.ptr, &cred.size,
-        nullptr, CREDUIWIN_ENUMERATE_CURRENT_USER);
+    HRESULT hr = CredUIPromptForWindowsCredentialsW(&ui,
+                                                    0,
+                                                    &authPkg,
+                                                    inBuf.data(),
+                                                    inLen,
+                                                    &cred.ptr,
+                                                    &cred.size,
+                                                    nullptr,
+                                                    CREDUIWIN_ENUMERATE_CURRENT_USER);
 
     if (hr != ERROR_SUCCESS)
     {
@@ -432,12 +441,15 @@ sage::basic_secure_string<wchar_t> readPasswordSecureDesktop(
     SecureWCharBuffer<256> dom;
     SecureWCharBuffer<512> pass;
 
-    BOOL ok = CredUnPackAuthenticationBufferW(
-        CRED_PACK_PROTECTED_CREDENTIALS,
-        cred.ptr, cred.size,
-        user.data, &user.count,
-        dom.data, &dom.count,
-        pass.data, &pass.count);
+    BOOL ok = CredUnPackAuthenticationBufferW(CRED_PACK_PROTECTED_CREDENTIALS,
+                                              cred.ptr,
+                                              cred.size,
+                                              user.data,
+                                              &user.count,
+                                              dom.data,
+                                              &dom.count,
+                                              pass.data,
+                                              &pass.count);
 
     // Fallback: some systems don't support protected credentials
     if (!ok)
@@ -448,11 +460,15 @@ sage::basic_secure_string<wchar_t> readPasswordSecureDesktop(
             user.count = static_cast<DWORD>(256);
             dom.count = static_cast<DWORD>(256);
             pass.count = static_cast<DWORD>(512);
-            ok = CredUnPackAuthenticationBufferW(
-                0, cred.ptr, cred.size,
-                user.data, &user.count,
-                dom.data, &dom.count,
-                pass.data, &pass.count);
+            ok = CredUnPackAuthenticationBufferW(0,
+                                                 cred.ptr,
+                                                 cred.size,
+                                                 user.data,
+                                                 &user.count,
+                                                 dom.data,
+                                                 &dom.count,
+                                                 pass.data,
+                                                 &pass.count);
         }
     }
 
@@ -463,7 +479,7 @@ sage::basic_secure_string<wchar_t> readPasswordSecureDesktop(
 
     // Copy password into a secure string
     size_t passLen = wcsnlen(pass.data, pass.count);
-    sage::basic_secure_string<wchar_t> out;
+    seal::basic_secure_string<wchar_t> out;
     out.s.resize(passLen);
     for (size_t i = 0; i < passLen; ++i)
     {
@@ -474,13 +490,13 @@ sage::basic_secure_string<wchar_t> readPasswordSecureDesktop(
     // ~SecureWCharBuffer and ~CoTaskMemGuard handle all cleanup automatically
 }
 
-sage::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt)
+seal::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt)
 {
     std::cout << prompt << std::flush;
 
     // Read into a narrow secure_string first (one byte per keystroke),
     // then widen at the end. This keeps the plaintext in locked memory.
-    sage::secure_string<> narrow;
+    seal::secure_string<> narrow;
 
     for (;;)
     {
@@ -492,9 +508,9 @@ sage::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt)
             break;
         }
 
-        if (ch == 27)   // Escape
+        if (ch == 27)  // Escape
             throw std::runtime_error("Cancelled");
-        if (ch == 3)    // Ctrl+C
+        if (ch == 3)  // Ctrl+C
             throw std::runtime_error("Interrupted");
 
         // Backspace
@@ -520,21 +536,19 @@ sage::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt)
     }
 
     // Widen UTF-8 into a secure wchar_t string.
-    sage::basic_secure_string<wchar_t> result;
+    seal::basic_secure_string<wchar_t> result;
     if (!narrow.empty())
     {
-        int need = MultiByteToWideChar(
-            CP_UTF8, 0, narrow.data(), (int)narrow.size(), nullptr, 0);
+        int need = MultiByteToWideChar(CP_UTF8, 0, narrow.data(), (int)narrow.size(), nullptr, 0);
         if (need > 0)
         {
             result.s.resize(need);
             MultiByteToWideChar(
-                CP_UTF8, 0, narrow.data(), (int)narrow.size(),
-                result.s.data(), need);
+                CP_UTF8, 0, narrow.data(), (int)narrow.size(), result.s.data(), need);
         }
     }
     // narrow auto-wipes on scope exit
     return result;
 }
 
-} // namespace sage
+}  // namespace seal
