@@ -9,7 +9,7 @@ on:
 
 jobs:
   test:
-    name: Run tests
+    name: test
     runs-on: windows-latest
 
     env:
