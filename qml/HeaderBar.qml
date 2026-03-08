@@ -81,7 +81,7 @@ RowLayout {
             text: "Password Manager"
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeSubtitle
-            color: Theme.accentDim
+            color: Theme.accent2Dim
         }
     }
 

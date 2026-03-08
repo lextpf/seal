@@ -62,25 +62,26 @@ QtObject {
 
     // -- Background layers --
     // Semi-transparent bgCard lets background blobs bleed through for depth.
-    property color bgDeep:       dark ? "#121826" : "#f7f0e4"
-    property color bgSurface:    dark ? "#161e2e" : "#f2eadc"
-    property color bgCard:       dark ? Qt.rgba(0.08, 0.10, 0.16, 0.78)   : Qt.rgba(1.0, 0.98, 0.95, 0.88)
-    property color bgCardEnd:    dark ? Qt.rgba(0.07, 0.08, 0.14, 0.86)   : Qt.rgba(0.98, 0.96, 0.92, 0.92)
-    property color bgDialog:     dark ? "#1a2236" : "#fdf8f0"
-    property color bgInput:      dark ? Qt.rgba(0.07, 0.09, 0.15, 0.92)   : Qt.rgba(1.0, 1.0, 0.99, 0.92)
-    property color bgInputFocus: dark ? Qt.rgba(0.09, 0.11, 0.19, 0.96)   : Qt.rgba(1.0, 1.0, 1.0, 0.96)
-    property color bgOverlay:    dark ? Qt.rgba(0.02, 0.03, 0.07, 0.58)   : Qt.rgba(0.28, 0.22, 0.15, 0.35)
-    property color bgHover:      dark ? Qt.rgba(0.14, 0.16, 0.28, 0.50)   : Qt.rgba(0.55, 0.40, 0.20, 0.06)
+    property color bgDeep:       dark ? "#121826" : "#f5ede0"
+    property color bgSurface:    dark ? "#161e2e" : "#f0e8d8"
+    property color bgCard:       dark ? Qt.rgba(0.08, 0.10, 0.16, 0.78)   : Qt.rgba(1.0, 0.97, 0.93, 0.88)
+    property color bgCardEnd:    dark ? Qt.rgba(0.07, 0.08, 0.14, 0.86)   : Qt.rgba(0.97, 0.94, 0.89, 0.92)
+    property color bgDialog:     dark ? "#1c2540" : "#fef8ec"
+    property color bgInput:      dark ? Qt.rgba(0.07, 0.09, 0.15, 0.92)   : Qt.rgba(1.0, 0.99, 0.96, 0.92)
+    property color bgInputFocus: dark ? Qt.rgba(0.09, 0.11, 0.19, 0.96)   : Qt.rgba(1.0, 0.99, 0.97, 0.96)
+    property color bgOverlay:    dark ? Qt.rgba(0.02, 0.03, 0.07, 0.58)   : Qt.rgba(0.26, 0.20, 0.12, 0.38)
+    property color bgHover:      dark ? Qt.rgba(0.14, 0.16, 0.28, 0.50)   : Qt.rgba(0.55, 0.38, 0.18, 0.08)
     property color bgTableHeader:dark ? Qt.rgba(0.08, 0.10, 0.17, 0.65)   : Qt.rgba(0.96, 0.93, 0.87, 0.72)
-    property color bgTableHeaderTop: dark ? Qt.rgba(0.12, 0.13, 0.25, 0.97) : Qt.rgba(0.95, 0.91, 0.84, 0.97)
-    property color bgTableHeaderEnd: dark ? Qt.rgba(0.10, 0.11, 0.22, 0.98) : Qt.rgba(0.93, 0.89, 0.81, 0.98)
-    property color bgTooltip:    dark ? "#222e48" : "#3e3020"
-    property color bgBadge:      dark ? Qt.rgba(0.14, 0.16, 0.30, 0.82)   : Qt.rgba(0.94, 0.90, 0.82, 0.82)
+    property color bgTableHeaderEdge:dark ? Qt.rgba(0.20, 0.22, 0.52, 0.97) : Qt.rgba(0.88, 0.82, 0.68, 0.97)
+    property color bgTableHeaderTop: dark ? Qt.rgba(0.12, 0.14, 0.27, 0.97) : Qt.rgba(0.94, 0.90, 0.80, 0.97)
+    property color bgTableHeaderEnd: dark ? Qt.rgba(0.10, 0.12, 0.24, 0.98) : Qt.rgba(0.92, 0.88, 0.78, 0.98)
+    property color bgTooltip:    dark ? "#253252" : "#3a2c1a"
+    property color bgBadge:      dark ? Qt.rgba(0.16, 0.14, 0.32, 0.84)   : Qt.rgba(0.92, 0.87, 0.76, 0.85)
 
-    property color bgHeaderTop:  dark ? Qt.rgba(0.11, 0.12, 0.22, 0.96)   : Qt.rgba(0.97, 0.94, 0.89, 0.96)
-    property color bgHeaderEnd:  dark ? Qt.rgba(0.09, 0.10, 0.19, 0.98)   : Qt.rgba(0.95, 0.92, 0.86, 0.98)
-    property color bgFooterTop:  dark ? Qt.rgba(0.07, 0.10, 0.15, 0.96)   : Qt.rgba(0.95, 0.92, 0.86, 0.96)
-    property color bgFooterEnd:  dark ? Qt.rgba(0.05, 0.08, 0.12, 1.0)    : Qt.rgba(0.93, 0.90, 0.84, 1.0)
+    property color bgHeaderTop:  dark ? Qt.rgba(0.13, 0.11, 0.24, 0.96)   : Qt.rgba(0.96, 0.92, 0.85, 0.96)
+    property color bgHeaderEnd:  dark ? Qt.rgba(0.11, 0.09, 0.21, 0.98)   : Qt.rgba(0.94, 0.90, 0.82, 0.98)
+    property color bgFooterTop:  dark ? Qt.rgba(0.06, 0.10, 0.17, 0.96)   : Qt.rgba(0.93, 0.91, 0.86, 0.96)
+    property color bgFooterEnd:  dark ? Qt.rgba(0.04, 0.08, 0.14, 1.0)    : Qt.rgba(0.91, 0.89, 0.84, 1.0)
 
     // -- Button palettes --
     // Each button type carries four gradient states: rest, hover, pressed, disabled.
@@ -136,20 +137,25 @@ QtObject {
     property color btnDisabledTop: dark ? "#1c2640" : "#dcd2c4"
     property color btnDisabledBot: dark ? "#182038" : "#d2c8ba"
 
-    property color accent:        dark ? "#7eaaff" : "#b86830"
-    property color accentBright:  dark ? "#5e8aff" : "#d07830"
-    property color accentDim:     dark ? "#586aa0" : "#c0a078"
+    property color accent:        dark ? "#80b0ff" : "#be6628"
+    property color accentBright:  dark ? "#6090ff" : "#d47630"
+    property color accentDim:     dark ? "#5a6ea8" : "#c49870"
     property color accentSoft:    dark ? Qt.rgba(0.35, 0.50, 1.0, 0.14)  : Qt.rgba(0.72, 0.42, 0.18, 0.12)
-    property color accentMuted:   dark ? "#344870" : "#d0b090"
-    property color btnGradTop:    dark ? "#4878f0" : "#c07030"
-    property color btnGradBot:    dark ? "#3460d8" : "#a86028"
-    property color btnHoverTop:   dark ? "#5e8aff" : "#d88038"
-    property color btnHoverBot:   dark ? "#4878f0" : "#c07030"
-    property color btnPressTop:   dark ? "#2c50b8" : "#905828"
-    property color btnPressBot:   dark ? "#2444a0" : "#784820"
+    property color accentMuted:   dark ? "#384c78" : "#d4a880"
+    property color btnGradTop:    dark ? "#4a7ef0" : "#c46c2a"
+    property color btnGradBot:    dark ? "#3664d8" : "#ac5e24"
+    property color btnHoverTop:   dark ? "#6090ff" : "#dc7c34"
+    property color btnHoverBot:   dark ? "#4a7ef0" : "#c46c2a"
+    property color btnPressTop:   dark ? "#2e52b8" : "#925626"
+    property color btnPressBot:   dark ? "#2646a0" : "#7a461e"
 
-    property color accent2:       dark ? "#50c8c8" : "#4a8858"
-    property color accent2Dim:    dark ? "#388888" : "#6aaa70"
+    property color accent2:       dark ? "#50d0cc" : "#428a50"
+    property color accent2Dim:    dark ? "#4a8a88" : "#5a7a58"
+
+    // Tertiary accent (rose in dark, violet in light) completing the
+    // three-color system used across table columns and dialog labels.
+    property color accent3:       dark ? "#d89090" : "#8868a0"
+    property color accent3Dim:    dark ? "#907070" : "#7a6888"
 
     // Fill-armed: same yellow-green hue as Fill, boosted saturation & alpha.
     property color fillArmedTop:      dark ? Qt.rgba(0.22, 0.30, 0.08, 0.88) : Qt.rgba(0.72, 0.84, 0.52, 0.92)
@@ -177,7 +183,7 @@ QtObject {
     property color textError:       dark ? "#ff6868" : "#c83030"
     property color textSuccess:     dark ? "#48d878" : "#187838"
     property color textWarning:     dark ? "#ffc040" : "#c88008"
-    property color textLink:        dark ? "#50c8c8" : "#2e7858"
+    property color textLink:        dark ? "#50d0cc" : "#2e7858"
     property color textTooltip:     dark ? "#c8d0e8" : "#f0e4d0"
     property color textBadge:       dark ? "#a0b0d0" : "#584838"
 
@@ -202,26 +208,29 @@ QtObject {
 
     property color rowAlt:          dark ? Qt.rgba(0.10, 0.12, 0.20, 0.32) : Qt.rgba(0.50, 0.38, 0.18, 0.05)
 
-    property color selectionBg:     dark ? Qt.rgba(0.30, 0.25, 0.85, 0.24)  : Qt.rgba(0.70, 0.55, 0.15, 0.14)
-    property color selectionHover:  dark ? Qt.rgba(0.35, 0.30, 0.90, 0.10)  : Qt.rgba(0.70, 0.55, 0.15, 0.07)
-    property color selectionActive: dark ? Qt.rgba(0.30, 0.25, 0.85, 0.32)  : Qt.rgba(0.70, 0.55, 0.15, 0.22)
+    property color selectionBg:     dark ? Qt.rgba(0.32, 0.24, 0.88, 0.28)  : Qt.rgba(0.72, 0.50, 0.10, 0.18)
+    property color selectionHover:  dark ? Qt.rgba(0.35, 0.28, 0.92, 0.12)  : Qt.rgba(0.72, 0.50, 0.10, 0.10)
+    property color selectionActive: dark ? Qt.rgba(0.32, 0.24, 0.88, 0.36)  : Qt.rgba(0.72, 0.50, 0.10, 0.26)
 
     property color scrollThumb:      dark ? Qt.rgba(0.22, 0.28, 0.48, 0.48) : Qt.rgba(0.55, 0.42, 0.22, 0.26)
     property color scrollThumbHover: dark ? Qt.rgba(0.28, 0.35, 0.58, 0.62) : Qt.rgba(0.55, 0.42, 0.22, 0.40)
 
     property color rippleColor: dark ? Qt.rgba(1.0, 1.0, 1.0, 0.25) : Qt.rgba(0.0, 0.0, 0.0, 0.18)
 
-    // Background blobs: three hues at 3-5% alpha. Dark gets slightly more opacity.
-    property color blobColor1: dark ? Qt.rgba(0.30, 0.25, 0.85, 0.045) : Qt.rgba(0.72, 0.50, 0.15, 0.038)
-    property color blobColor2: dark ? Qt.rgba(0.10, 0.55, 0.65, 0.040) : Qt.rgba(0.35, 0.58, 0.28, 0.035)
-    property color blobColor3: dark ? Qt.rgba(0.60, 0.15, 0.50, 0.035) : Qt.rgba(0.60, 0.32, 0.18, 0.032)
+    // Background blobs: three distinct hues at 5-6% alpha for visible layered
+    // depth. Dark gets slightly more opacity. Each hue is chosen to contrast
+    // with the others (purple / teal / magenta in dark; gold / teal / rose in
+    // light) for color variety that bleeds through semi-transparent surfaces.
+    property color blobColor1: dark ? Qt.rgba(0.32, 0.22, 0.88, 0.060) : Qt.rgba(0.78, 0.46, 0.10, 0.052)
+    property color blobColor2: dark ? Qt.rgba(0.08, 0.58, 0.68, 0.055) : Qt.rgba(0.15, 0.52, 0.50, 0.048)
+    property color blobColor3: dark ? Qt.rgba(0.65, 0.12, 0.55, 0.050) : Qt.rgba(0.62, 0.25, 0.25, 0.044)
 
     // Selection glow: fades from selectionGlow to transparent at row edges.
-    property color selectionGlow:     dark ? Qt.rgba(0.35, 0.30, 0.90, 0.35) : Qt.rgba(0.72, 0.55, 0.18, 0.30)
-    property color selectionGlowEdge: dark ? Qt.rgba(0.35, 0.30, 0.90, 0.0)  : Qt.rgba(0.72, 0.55, 0.18, 0.0)
-    property color selectionStripe:   dark ? Qt.rgba(0.50, 0.45, 1.0, 0.55)  : Qt.rgba(0.72, 0.55, 0.18, 0.50)
+    property color selectionGlow:     dark ? Qt.rgba(0.38, 0.28, 0.92, 0.40) : Qt.rgba(0.74, 0.50, 0.12, 0.35)
+    property color selectionGlowEdge: dark ? Qt.rgba(0.38, 0.28, 0.92, 0.0)  : Qt.rgba(0.74, 0.50, 0.12, 0.0)
+    property color selectionStripe:   dark ? Qt.rgba(0.52, 0.42, 1.0, 0.62)  : Qt.rgba(0.74, 0.50, 0.12, 0.56)
 
-    property color shadow: dark ? Qt.rgba(0, 0, 0, 0.45) : Qt.rgba(0.28, 0.18, 0.08, 0.16)
+    property color shadow: dark ? Qt.rgba(0, 0, 0, 0.48) : Qt.rgba(0.28, 0.18, 0.08, 0.20)
 
     // -- Animation timing --
     readonly property int hoverDuration:  150

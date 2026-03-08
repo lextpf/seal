@@ -55,7 +55,7 @@ Rectangle {
             text: root.vaultFileName
             font.family: Theme.fontMono
             font.pixelSize: Theme.fontSizeSmall
-            color: Theme.textMuted
+            color: Theme.accent2Dim
         }
 
         // Pipe separator, hidden when either side is absent.

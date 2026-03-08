@@ -128,14 +128,14 @@ Popup {
                     source: Theme.iconUsername
                     width: Theme.iconSizeMedium
                     height: Theme.iconSizeMedium
-                    color: Theme.accent
+                    color: Theme.accent2
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
                     text: "Username:"
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeMedium
-                    color: Theme.accent
+                    color: Theme.accent2
                 }
             }
             TextField {
@@ -165,14 +165,14 @@ Popup {
                     source: Theme.iconPassword
                     width: Theme.iconSizeMedium
                     height: Theme.iconSizeMedium
-                    color: Theme.accent
+                    color: Theme.accent3
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
                     text: "Password:"
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeMedium
-                    color: Theme.accent
+                    color: Theme.accent3
                 }
             }
             TextField {
@@ -213,7 +213,7 @@ Popup {
                     anchors.rightMargin: 8
                     anchors.verticalCenter: parent.verticalCenter
                     source: passwordField.showPassword ? Theme.iconEyeSlash : Theme.iconEye
-                    color: eyeArea.containsMouse ? Theme.accent : Theme.textMuted
+                    color: eyeArea.containsMouse ? Theme.accent3 : Theme.textMuted
                     width: Theme.iconSizeMedium
                     height: Theme.iconSizeMedium
 

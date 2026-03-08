@@ -113,12 +113,14 @@ Item {
 
             // Monospace font ensures masked characters ("********") align
             // consistently across rows regardless of the underlying value length.
+            // Each column uses its own accent family (teal for username, rose/violet
+            // for password) so the three data domains are visually distinct.
             Text {
                 Layout.preferredWidth: 200
                 text: root.maskedUsername
                 font.family: Theme.fontMono
                 font.pixelSize: Theme.fontSizeMedium
-                color: root.isHovered ? Theme.textSubtle : Theme.textMuted
+                color: root.isHovered ? Theme.accent2 : Theme.accent2Dim
                 Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
             }
 
@@ -127,7 +129,7 @@ Item {
                 text: root.maskedPassword
                 font.family: Theme.fontMono
                 font.pixelSize: Theme.fontSizeMedium
-                color: root.isHovered ? Theme.textSubtle : Theme.textMuted
+                color: root.isHovered ? Theme.accent3 : Theme.accent3Dim
                 Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
             }
         }

@@ -45,8 +45,9 @@ Rectangle {
             Layout.fillWidth: true
             implicitHeight: 44
             gradient: Gradient {
-                GradientStop { position: 0; color: Theme.bgTableHeaderTop }
-                GradientStop { position: 1; color: Theme.bgTableHeaderEnd }
+                GradientStop { position: 0.0;  color: Theme.bgTableHeaderEdge }
+                GradientStop { position: 0.07; color: Theme.bgTableHeaderTop }
+                GradientStop { position: 1;    color: Theme.bgTableHeaderEnd }
             }
             radius: Theme.radiusLarge
 
@@ -106,7 +107,7 @@ Rectangle {
                         source: Theme.iconUsername
                         width: Theme.iconSizeSmall
                         height: Theme.iconSizeSmall
-                        color: Theme.accent
+                        color: Theme.accent2
                         anchors.verticalCenter: parent.verticalCenter
                     }
                     Text {
@@ -115,7 +116,7 @@ Rectangle {
                         font.pixelSize: Theme.fontSizeSmall
                         font.bold: true
                         font.letterSpacing: 1.0
-                        color: Theme.accent
+                        color: Theme.accent2
                     }
                 }
                 Row {
@@ -126,7 +127,7 @@ Rectangle {
                         source: Theme.iconPassword
                         width: Theme.iconSizeSmall
                         height: Theme.iconSizeSmall
-                        color: Theme.accent
+                        color: Theme.accent3
                         anchors.verticalCenter: parent.verticalCenter
                     }
                     Text {
@@ -135,7 +136,7 @@ Rectangle {
                         font.pixelSize: Theme.fontSizeSmall
                         font.bold: true
                         font.letterSpacing: 1.0
-                        color: Theme.accent
+                        color: Theme.accent3
                     }
                 }
             }
