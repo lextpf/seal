@@ -184,7 +184,9 @@ basic_secure_string<wchar_t, locked_allocator<wchar_t>> Backend::qstringToSecure
 }
 
 Backend::Backend(QObject* parent)
-    : QObject(parent), m_Model(new VaultListModel(this)), m_FillController(new FillController(this))
+    : QObject(parent),
+      m_Model(new VaultListModel(this)),
+      m_FillController(new FillController(this))
 {
     m_Model->setRecords(&m_Records);
 

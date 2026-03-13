@@ -9,6 +9,11 @@ UseTab: Never
 AccessModifierOffset: -4
 
 BreakBeforeBraces: Allman
+BreakConstructorInitializers: BeforeColon
+PackConstructorInitializers: Never
+ConstructorInitializerIndentWidth: 4
+SpaceBeforeCtorInitializerColon: true
+
 AllowShortFunctionsOnASingleLine: Inline
 AllowShortIfStatementsOnASingleLine: Never
 AllowShortLoopsOnASingleLine: false
@@ -27,8 +32,10 @@ SpaceAfterCStyleCast: false
 SpaceBeforeParens: ControlStatements
 SpaceInEmptyBlock: false
 
-AlignAfterOpenBracket: Align
+AlignAfterOpenBracket: true
 AlignOperands: Align
+AlignTrailingComments:
+  Kind: Always
 BinPackArguments: false
 BinPackParameters: false
 

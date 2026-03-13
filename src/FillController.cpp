@@ -19,7 +19,8 @@ namespace seal
 // controller's hook chain, breaking cancel/timeout for the original session.
 std::atomic<FillController*> FillController::s_instance{nullptr};
 
-FillController::FillController(QObject* parent) : QObject(parent)
+FillController::FillController(QObject* parent)
+    : QObject(parent)
 {
     m_TimeoutTimer.setInterval(1000);
     connect(&m_TimeoutTimer, &QTimer::timeout, this, &FillController::onTimeoutTick);

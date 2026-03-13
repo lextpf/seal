@@ -417,7 +417,10 @@ struct secure_string
     secure_string() = default;
     secure_string(const secure_string&) = delete;
     secure_string& operator=(const secure_string&) = delete;
-    secure_string(secure_string&& o) noexcept : s(std::move(o.s)) {}
+    secure_string(secure_string&& o) noexcept
+        : s(std::move(o.s))
+    {
+    }
     secure_string& operator=(secure_string&& o) noexcept
     {
         if (this != &o)
@@ -537,7 +540,10 @@ struct basic_secure_string
     basic_secure_string() = default;
     basic_secure_string(const basic_secure_string&) = delete;
     basic_secure_string& operator=(const basic_secure_string&) = delete;
-    basic_secure_string(basic_secure_string&& o) noexcept : s(std::move(o.s)) {}
+    basic_secure_string(basic_secure_string&& o) noexcept
+        : s(std::move(o.s))
+    {
+    }
     basic_secure_string& operator=(basic_secure_string&& o) noexcept
     {
         if (this != &o)
@@ -653,7 +659,8 @@ struct RWGuard
     const T* p{};
     DWORD oldProt{};
     bool changed{false};
-    explicit RWGuard(const T* ptr) : p(ptr)
+    explicit RWGuard(const T* ptr)
+        : p(ptr)
     {
         if (!p)
             return;
@@ -704,12 +711,18 @@ struct DPAPIGuard
     size_t m_OriginalSize = 0;  ///< Pre-pad logical size, restored after unprotect.
 
     DPAPIGuard() = default;
-    explicit DPAPIGuard(SecStr* str) : m_Str(str) { protect(); }
+    explicit DPAPIGuard(SecStr* str)
+        : m_Str(str)
+    {
+        protect();
+    }
 
     DPAPIGuard(const DPAPIGuard&) = delete;
     DPAPIGuard& operator=(const DPAPIGuard&) = delete;
     DPAPIGuard(DPAPIGuard&& o) noexcept
-        : m_Str(o.m_Str), m_Protected(o.m_Protected), m_OriginalSize(o.m_OriginalSize)
+        : m_Str(o.m_Str),
+          m_Protected(o.m_Protected),
+          m_OriginalSize(o.m_OriginalSize)
     {
         o.m_Str = nullptr;
         o.m_Protected = false;
@@ -730,7 +743,16 @@ struct DPAPIGuard
         return *this;
     }
 
-    ~DPAPIGuard() { release(); }
+    ~DPAPIGuard()
+    {
+        try
+        {
+            release();
+        }
+        catch (...)
+        {
+        }
+    }
 
     /// @return true if DPAPI encryption succeeded, false on failure or no-op.
     bool protect()
@@ -815,7 +837,8 @@ struct scoped_console
     /// @brief Snapshot the current console mode and apply @p mode.
     /// @param handle Console input or output handle.
     /// @param mode   Desired console mode flags (e.g. ENABLE_MOUSE_INPUT).
-    scoped_console(HANDLE handle, DWORD mode) : h(handle)
+    scoped_console(HANDLE handle, DWORD mode)
+        : h(handle)
     {
         // Snapshot the current mode so we can restore it in the destructor,
         // then apply the requested mode (e.g. ENABLE_MOUSE_INPUT for
@@ -848,7 +871,8 @@ struct scoped_console
 struct EVP_CTX
 {
     EVP_CIPHER_CTX* p{nullptr};
-    EVP_CTX() : p(EVP_CIPHER_CTX_new())
+    EVP_CTX()
+        : p(EVP_CIPHER_CTX_new())
     {
         if (!p)
             throw std::runtime_error("EVP_CIPHER_CTX_new failed");
@@ -1132,7 +1156,9 @@ struct secure_triplet
     secure_triplet(seal::secure_string<A>&& s,
                    seal::secure_string<A>&& u,
                    seal::secure_string<A>&& p) noexcept
-        : service(std::move(s)), user(std::move(u)), pass(std::move(p))
+        : service(std::move(s)),
+          user(std::move(u)),
+          pass(std::move(p))
     {
     }
 
@@ -1163,7 +1189,9 @@ struct secure_triplet16
     string_type tertiary;   ///< Password.
 
     secure_triplet16(string_type&& s, string_type&& u, string_type&& p) noexcept
-        : primary(std::move(s)), secondary(std::move(u)), tertiary(std::move(p))
+        : primary(std::move(s)),
+          secondary(std::move(u)),
+          tertiary(std::move(p))
     {
     }
 

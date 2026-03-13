@@ -6,7 +6,10 @@
 namespace seal
 {
 
-VaultListModel::VaultListModel(QObject* parent) : QAbstractListModel(parent) {}
+VaultListModel::VaultListModel(QObject* parent)
+    : QAbstractListModel(parent)
+{
+}
 
 // m_FilteredIndices maps visible model rows to indices in the real m_Records
 // vector.  This lets QML see only the non-deleted, filter-matching subset

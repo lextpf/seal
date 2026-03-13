@@ -23,15 +23,22 @@ class ScopedDpapiUnprotect
 {
 public:
     explicit ScopedDpapiUnprotect(GuardT& guard) noexcept
-        : m_Guard(guard), m_Changed(guard.unprotect())
+        : m_Guard(guard),
+          m_Changed(guard.unprotect())
     {
     }
 
     ~ScopedDpapiUnprotect()
     {
-        if (m_Changed)
+        try
         {
-            m_Guard.reprotect();
+            if (m_Changed)
+            {
+                m_Guard.reprotect();
+            }
+        }
+        catch (...)
+        {
         }
     }
 
