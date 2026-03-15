@@ -276,7 +276,7 @@ QtObject {
     readonly property string iconCamera:       "qrc:/qt/qml/seal/assets/svgs/camera-web.svg"
     readonly property string iconQrCode:       "qrc:/qt/qml/seal/assets/svgs/qrcode-read.svg"
     readonly property string iconFilterSlash:  "qrc:/qt/qml/seal/assets/svgs/filter-slash.svg"
-    readonly property string iconFingerprint:  "qrc:/qt/qml/seal/assets/svgs/fingerprint.svg"
+    readonly property string iconNarwhal:      "qrc:/qt/qml/seal/assets/svgs/narwhal.svg"
     readonly property string iconEye:          "qrc:/qt/qml/seal/assets/svgs/eye.svg"
     readonly property string iconEyeSlash:     "qrc:/qt/qml/seal/assets/svgs/eye-slash.svg"
     readonly property string iconCrosshairs:   "qrc:/qt/qml/seal/assets/svgs/crosshairs.svg"

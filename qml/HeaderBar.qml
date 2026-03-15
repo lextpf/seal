@@ -3,7 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
 
-// Top header bar. Layout: [fingerprint icon] [title] [theme toggle] ... [Load] [Save] [Unload]
+// Top header bar. Layout: [narwhal icon] [title] [theme toggle] ... [Load] [Save] [Unload]
 //
 // Save and Unload are disabled until a vault is loaded (bound to vaultLoaded).
 // Load is always enabled so the user can open a vault from any state.
@@ -45,36 +45,150 @@ Item {
         anchors.fill: parent
         spacing: Theme.spacingMedium
 
-    // App identity icon. Clicking triggers a rainbow color cycle easter egg:
-    // the icon transitions through seven hues then returns to the theme accent.
+    // App identity icon. Clicking triggers a sonar-pulse rainbow easter egg:
+    // a ring expands outward from the icon while its color sweeps through
+    // the spectrum, then returns to the theme accent.
     SvgIcon {
-        id: fingerprintIcon
-        source: Theme.iconFingerprint
+        id: narwhalIcon
+        source: Theme.iconNarwhal
         width: Theme.px(32)
         height: Theme.px(32)
         color: Theme.accent
 
-        property bool cycling: false
-        property int colorIndex: 0
-        readonly property var rainbow: ["#ff4444", "#ff8800", "#ffcc00", "#44cc44", "#4488ff", "#8844ff", "#ff44cc"]
+        property bool active: false
 
-        ColorAnimation on color {
-            id: rainbowAnim
-            running: false
-            duration: 120
-            onFinished: {
-                if (fingerprintIcon.cycling) {
-                    fingerprintIcon.colorIndex++;
-                    if (fingerprintIcon.colorIndex < fingerprintIcon.rainbow.length) {
-                        rainbowAnim.to = fingerprintIcon.rainbow[fingerprintIcon.colorIndex];
-                        rainbowAnim.restart();
-                    } else {
-                        // Return to accent
-                        rainbowAnim.to = Theme.accent;
-                        rainbowAnim.restart();
-                        fingerprintIcon.cycling = false;
+        // Staggered sonar rings - three concentric rings with conic
+        // rainbow / aurora gradients rippling outward from the icon center.
+        Canvas {
+            id: ringWarm
+            anchors.centerIn: parent
+            width: 0; height: width; opacity: 0
+            onPaint: {
+                var ctx = getContext("2d"); ctx.reset();
+                if (width < 4) return;
+                var cx = width/2, cy = height/2, r = Math.max(1, width/2 - 1.5);
+                var g = ctx.createConicalGradient(cx, cy, 0);
+                g.addColorStop(0.00, "#ff0044");
+                g.addColorStop(0.16, "#ff8800");
+                g.addColorStop(0.33, "#ffee00");
+                g.addColorStop(0.50, "#00dd66");
+                g.addColorStop(0.66, "#0088ff");
+                g.addColorStop(0.83, "#aa00ff");
+                g.addColorStop(1.00, "#ff0044");
+                ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2*Math.PI);
+                ctx.lineWidth = 2.5; ctx.strokeStyle = g; ctx.stroke();
+            }
+            onWidthChanged: requestPaint()
+        }
+        Canvas {
+            id: ringMid
+            anchors.centerIn: parent
+            width: 0; height: width; opacity: 0
+            onPaint: {
+                var ctx = getContext("2d"); ctx.reset();
+                if (width < 4) return;
+                var cx = width/2, cy = height/2, r = Math.max(1, width/2 - 1.5);
+                var g = ctx.createConicalGradient(cx, cy, 0);
+                g.addColorStop(0.00, "#00ff88");
+                g.addColorStop(0.25, "#00ddcc");
+                g.addColorStop(0.50, "#4488ff");
+                g.addColorStop(0.75, "#aa44ff");
+                g.addColorStop(1.00, "#00ff88");
+                ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2*Math.PI);
+                ctx.lineWidth = 2.5; ctx.strokeStyle = g; ctx.stroke();
+            }
+            onWidthChanged: requestPaint()
+        }
+        Canvas {
+            id: ringCool
+            anchors.centerIn: parent
+            width: 0; height: width; opacity: 0
+            onPaint: {
+                var ctx = getContext("2d"); ctx.reset();
+                if (width < 4) return;
+                var cx = width/2, cy = height/2, r = Math.max(1, width/2 - 1.5);
+                var g = ctx.createConicalGradient(cx, cy, 0);
+                g.addColorStop(0.00, "#44ffcc");
+                g.addColorStop(0.25, "#4466ff");
+                g.addColorStop(0.50, "#cc44ff");
+                g.addColorStop(0.75, "#ff44aa");
+                g.addColorStop(1.00, "#44ffcc");
+                ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2*Math.PI);
+                ctx.lineWidth = 2.5; ctx.strokeStyle = g; ctx.stroke();
+            }
+            onWidthChanged: requestPaint()
+        }
+
+        // Conic aurora gradient overlay - masked to the icon silhouette
+        // via Canvas compositing (destination-in). Shown during the easter
+        // egg animation in place of the flat icon color.
+        Canvas {
+            id: iconAurora
+            anchors.fill: parent
+            visible: false
+            property bool loaded: false
+
+            Component.onCompleted: loadImage(Theme.iconNarwhal)
+            onImageLoaded: loaded = true
+            onVisibleChanged: if (visible) requestPaint()
+
+            onPaint: {
+                var ctx = getContext("2d"); ctx.reset();
+                if (!loaded || width < 1) return;
+                var cx = width/2, cy = height/2;
+                var g = ctx.createConicalGradient(cx, cy, 0);
+                g.addColorStop(0.00, "#00ff88");
+                g.addColorStop(0.15, "#00ddcc");
+                g.addColorStop(0.30, "#4488ff");
+                g.addColorStop(0.50, "#aa44ff");
+                g.addColorStop(0.70, "#ff44aa");
+                g.addColorStop(0.85, "#ff8844");
+                g.addColorStop(1.00, "#00ff88");
+                ctx.fillStyle = g;
+                ctx.fillRect(0, 0, width, height);
+                ctx.globalCompositeOperation = "destination-in";
+                ctx.drawImage(Theme.iconNarwhal, 0, 0, width, height);
+            }
+        }
+
+        SequentialAnimation {
+            id: easterEgg
+
+            ParallelAnimation {
+                // Ring 1 - full rainbow conic gradient
+                NumberAnimation { target: ringWarm; property: "width";   from: Theme.px(16); to: Theme.px(90); duration: 1000; easing.type: Easing.OutCubic }
+                NumberAnimation { target: ringWarm; property: "opacity"; from: 0.55;          to: 0;            duration: 1000; easing.type: Easing.OutCubic }
+
+                // Ring 2 - aurora (green -> teal -> blue -> purple), staggered
+                SequentialAnimation {
+                    PauseAnimation { duration: 180 }
+                    ParallelAnimation {
+                        NumberAnimation { target: ringMid; property: "width";   from: Theme.px(14); to: Theme.px(90); duration: 1000; easing.type: Easing.OutCubic }
+                        NumberAnimation { target: ringMid; property: "opacity"; from: 0.55;          to: 0;            duration: 1000; easing.type: Easing.OutCubic }
                     }
                 }
+
+                // Ring 3 - cool aurora (mint -> indigo -> violet -> magenta), staggered further
+                SequentialAnimation {
+                    PauseAnimation { duration: 360 }
+                    ParallelAnimation {
+                        NumberAnimation { target: ringCool; property: "width";   from: Theme.px(12); to: Theme.px(90); duration: 1000; easing.type: Easing.OutCubic }
+                        NumberAnimation { target: ringCool; property: "opacity"; from: 0.55;          to: 0;            duration: 1000; easing.type: Easing.OutCubic }
+                    }
+                }
+
+                // Conic aurora gradient on icon - rendered once, GPU-animated opacity.
+                SequentialAnimation {
+                    PropertyAction  { target: iconAurora; property: "visible"; value: true }
+                    PropertyAction  { target: iconAurora; property: "opacity"; value: 1 }
+                    PauseAnimation  { duration: 1200 }
+                    NumberAnimation { target: iconAurora; property: "opacity"; to: 0; duration: 200 }
+                    PropertyAction  { target: iconAurora; property: "visible"; value: false }
+                }
+            }
+
+            onFinished: {
+                narwhalIcon.active = false;
             }
         }
 
@@ -82,11 +196,9 @@ Item {
             anchors.fill: parent
             cursorShape: Qt.PointingHandCursor
             onClicked: {
-                if (fingerprintIcon.cycling) return;
-                fingerprintIcon.cycling = true;
-                fingerprintIcon.colorIndex = 0;
-                rainbowAnim.to = fingerprintIcon.rainbow[0];
-                rainbowAnim.restart();
+                if (narwhalIcon.active) return;
+                narwhalIcon.active = true;
+                easterEgg.start();
             }
         }
     }
