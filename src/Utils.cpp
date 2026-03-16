@@ -1,5 +1,7 @@
 #include "Utils.h"
 
+#include <openssl/evp.h>
+
 #include <algorithm>
 
 namespace seal::utils
@@ -162,6 +164,54 @@ std::string secureWideToUtf8(
     WideCharToMultiByte(
         CP_UTF8, 0, wide.s.data(), (int)wide.s.size(), out.data(), need, nullptr, nullptr);
     return out;
+}
+
+std::string toBase64(std::span<const unsigned char> data)
+{
+    if (data.empty())
+        return {};
+    // EVP_EncodeBlock output size: 4 * ceil(n/3) + 1 (null terminator)
+    size_t outLen = 4 * ((data.size() + 2) / 3) + 1;
+    std::string out(outLen, '\0');
+    int written = EVP_EncodeBlock(
+        reinterpret_cast<unsigned char*>(out.data()), data.data(), static_cast<int>(data.size()));
+    out.resize(static_cast<size_t>(written));
+    return out;
+}
+
+std::vector<unsigned char> fromBase64(const std::string& b64)
+{
+    if (b64.empty())
+        return {};
+    // EVP_DecodeBlock output size: 3 * ceil(n/4)
+    size_t maxOut = 3 * ((b64.size() + 3) / 4);
+    std::vector<unsigned char> out(maxOut);
+    int written = EVP_DecodeBlock(out.data(),
+                                  reinterpret_cast<const unsigned char*>(b64.data()),
+                                  static_cast<int>(b64.size()));
+    if (written < 0)
+        return {};
+    // EVP_DecodeBlock doesn't account for padding - trim trailing zeros from '=' padding
+    size_t pad = 0;
+    if (b64.size() >= 2 && b64[b64.size() - 1] == '=')
+        ++pad;
+    if (b64.size() >= 2 && b64[b64.size() - 2] == '=')
+        ++pad;
+    out.resize(static_cast<size_t>(written) - pad);
+    return out;
+}
+
+bool isBase64(const std::string& s)
+{
+    if (s.empty() || s.size() < 4)
+        return false;
+    for (char c : s)
+    {
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+              c == '+' || c == '/' || c == '='))
+            return false;
+    }
+    return true;
 }
 
 }  // namespace seal::utils

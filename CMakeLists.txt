@@ -162,6 +162,7 @@ qt_add_qml_module(seal
         qml/PasswordDialog.qml
         qml/RippleEffect.qml
         qml/SvgIcon.qml
+        qml/CliPanel.qml
     RESOURCES
         "assets/fonts/b0a4eabe-5fe5-41e3-8dc3-2df2b82ec4eb.ttf"
         ${SEAL_SVGS}

@@ -527,7 +527,9 @@ seal::basic_secure_string<wchar_t> readPasswordSecureDesktop(const wchar_t* capt
 
 seal::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt)
 {
-    std::cout << prompt << std::flush;
+    // Write prompt and echo to stderr so they never mix into piped stdout.
+    // This allows clean piping: echo "text" | seal -e | seal -d
+    std::cerr << prompt << std::flush;
 
     // _getch returns one byte at a time (console codepage), so we accumulate
     // into a narrow secure_string whose backing pages are VirtualLock'd.
@@ -541,7 +543,7 @@ seal::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt)
 
         if (ch == '\r' || ch == '\n')
         {
-            std::cout << "\n";
+            std::cerr << "\n";
             break;
         }
 
@@ -556,7 +558,7 @@ seal::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt)
             if (!narrow.empty())
             {
                 narrow.pop_back();
-                std::cout << "\b \b" << std::flush;
+                std::cerr << "\b \b" << std::flush;
             }
             continue;
         }
@@ -569,7 +571,7 @@ seal::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt)
         }
 
         narrow.push_back(static_cast<char>(ch));
-        std::cout << '*' << std::flush;
+        std::cerr << '*' << std::flush;
     }
 
     // Widen console-codepage bytes into a secure wchar_t string.

@@ -1,5 +1,8 @@
 #include "FileOperations.h"
 
+#include <openssl/evp.h>
+#include <openssl/rand.h>
+
 namespace seal
 {
 
@@ -627,6 +630,101 @@ bool FileOperations::streamDecrypt(const SecurePwd& password)
         std::cerr << "(decrypt) " << e.what() << "\n";
         return false;
     }
+}
+
+bool FileOperations::shredFile(const std::string& path)
+{
+    // Get file size
+    std::ifstream probe(path, std::ios::binary | std::ios::ate);
+    if (!probe)
+    {
+        std::cerr << "(shred) cannot open: " << path << "\n";
+        return false;
+    }
+    auto size = probe.tellg();
+    probe.close();
+
+    if (size <= 0)
+    {
+        // Empty file - just delete it
+        return DeleteFileA(path.c_str()) != 0;
+    }
+
+    auto fileSize = static_cast<size_t>(size);
+    constexpr size_t CHUNK = 65536;
+    std::vector<unsigned char> buf(std::min(fileSize, CHUNK));
+
+    // Three overwrite passes: random, zeros, random
+    for (int pass = 0; pass < 3; ++pass)
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        if (!out)
+        {
+            std::cerr << "(shred) cannot write pass " << (pass + 1) << ": " << path << "\n";
+            return false;
+        }
+
+        size_t remaining = fileSize;
+        while (remaining > 0)
+        {
+            size_t chunk = std::min(remaining, buf.size());
+            if (pass == 1)
+                std::fill_n(buf.data(), chunk, static_cast<unsigned char>(0));
+            else
+                RAND_bytes(buf.data(), static_cast<int>(chunk));
+
+            out.write(reinterpret_cast<const char*>(buf.data()),
+                      static_cast<std::streamsize>(chunk));
+            remaining -= chunk;
+        }
+        out.flush();
+        out.close();
+    }
+
+    SecureZeroMemory(buf.data(), buf.size());
+
+    if (!DeleteFileA(path.c_str()))
+    {
+        std::cerr << "(shred) failed to delete: " << path << "\n";
+        return false;
+    }
+    return true;
+}
+
+std::string FileOperations::hashFile(const std::string& path)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+    {
+        std::cerr << "(hash) cannot open: " << path << "\n";
+        return {};
+    }
+
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx)
+        return {};
+
+    if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1)
+    {
+        EVP_MD_CTX_free(ctx);
+        return {};
+    }
+
+    constexpr size_t CHUNK = 65536;
+    char buf[CHUNK];
+    while (in.read(buf, CHUNK) || in.gcount() > 0)
+    {
+        EVP_DigestUpdate(ctx, buf, static_cast<size_t>(in.gcount()));
+        if (in.eof())
+            break;
+    }
+
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hashLen = 0;
+    EVP_DigestFinal_ex(ctx, hash, &hashLen);
+    EVP_MD_CTX_free(ctx);
+
+    return seal::utils::to_hex(std::span<const unsigned char>(hash, hashLen));
 }
 
 using SecNarrow = seal::secure_string<>;

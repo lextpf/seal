@@ -23,8 +23,10 @@
  *
  * @see SEAL_VERSION
  */
-#define SEAL_VERSION_STRINGIFY(major, minor, patch, release) \
+#define SEAL_VERSION_STRINGIFY_IMPL(major, minor, patch, release) \
     #major "." #minor "." #patch "." #release
+#define SEAL_VERSION_STRINGIFY(major, minor, patch, release) \
+    SEAL_VERSION_STRINGIFY_IMPL(major, minor, patch, release)
 
 /// Complete version string (e.g., "1.0.0.0").
 #define SEAL_VERSION        \

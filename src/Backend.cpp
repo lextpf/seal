@@ -2,6 +2,7 @@
 
 #include "Backend.h"
 #include "Clipboard.h"
+#include "FileOperations.h"
 #include "FillController.h"
 #include "Logging.h"
 #include "QrCapture.h"
@@ -25,6 +26,9 @@
 #include <windows.h>
 #include <windowsx.h>
 
+#include <openssl/rand.h>
+
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -1308,6 +1312,296 @@ void Backend::toggleCompact()
 
     qCInfo(logBackend) << "compactMode:" << m_Compact;
     emit compactChanged();
+}
+
+bool Backend::isCliMode() const
+{
+    return m_CliMode;
+}
+
+void Backend::toggleCliMode()
+{
+    m_CliMode = !m_CliMode;
+    qCInfo(logBackend) << "cliMode:" << m_CliMode;
+    emit cliModeChanged();
+
+    if (m_CliMode && !m_CliWelcomeShown)
+    {
+        m_CliWelcomeShown = true;
+        emit cliOutputReady(QStringLiteral("seal - Interactive Mode"));
+        emit cliOutputReady(
+            QStringLiteral("Commands: :help | :open | :copy | :clear | :gen | :cls | :qr"));
+        emit cliOutputReady(
+            QStringLiteral("Type text to encrypt, paste hex to decrypt, or enter a file path."));
+        emit cliOutputReady(QString{});
+    }
+}
+
+void Backend::executeCliCommand(const QString& command)
+{
+    QString trimmed = command.trimmed();
+    if (trimmed.isEmpty())
+        return;
+
+    std::string input = trimmed.toStdString();
+
+    // --- Special commands (no password needed) ---
+
+    if (trimmed == ":help" || trimmed == ":h")
+    {
+        emit cliOutputReady(QStringLiteral("Available commands:"));
+        emit cliOutputReady(
+            QStringLiteral("  <text>        Encrypt text with AES-256-GCM, output hex"));
+        emit cliOutputReady(QStringLiteral("  <hex>         Decrypt hex token, copy to clipboard"));
+        emit cliOutputReady(QStringLiteral("  <path>        Encrypt/decrypt file"));
+        emit cliOutputReady(
+            QStringLiteral("  :gen [len]    Generate random password (default 20)"));
+        emit cliOutputReady(QStringLiteral("  :qr           Scan QR code from webcam"));
+        emit cliOutputReady(QStringLiteral("  :hex <text>   Hex-encode text"));
+        emit cliOutputReady(QStringLiteral("  :unhex <hex>  Hex-decode to text"));
+        emit cliOutputReady(QStringLiteral("  :cls          Clear terminal output"));
+        emit cliOutputReady(QStringLiteral("  :open :edit   Open seal input file in Notepad"));
+        emit cliOutputReady(QStringLiteral("  :copy :clip   Copy seal file to clipboard"));
+        emit cliOutputReady(QStringLiteral("  :clear :none  Clear clipboard"));
+        emit cliOutputReady(QStringLiteral("  :help         Show this help"));
+        return;
+    }
+
+    if (trimmed == ":open" || trimmed == ":o" || trimmed == ":edit")
+    {
+        bool ok = seal::openInputInNotepad();
+        emit cliOutputReady(ok ? QStringLiteral("(opened seal file in Notepad)")
+                               : QStringLiteral("(failed to launch Notepad)"));
+        return;
+    }
+
+    if (trimmed == ":copy" || trimmed == ":clip" || trimmed == ":copyfile" ||
+        trimmed == ":copyinput")
+    {
+        bool ok = seal::Clipboard::copyInputFile();
+        emit cliOutputReady(ok ? QStringLiteral("(fence copied to clipboard)")
+                               : QStringLiteral("(failed to copy fence)"));
+        return;
+    }
+
+    if (trimmed == ":clear" || trimmed == ":none")
+    {
+        (void)seal::Clipboard::copyWithTTL("");
+        emit cliOutputReady(QStringLiteral("(clipboard cleared)"));
+        return;
+    }
+
+    if (trimmed == ":cls" || trimmed == ":clear-screen")
+    {
+        emit cliOutputCleared();
+        return;
+    }
+
+    if (trimmed.startsWith(":gen"))
+    {
+        int length = 20;
+        if (trimmed.length() > 4)
+        {
+            bool ok = false;
+            int parsed = trimmed.mid(4).trimmed().toInt(&ok);
+            if (ok)
+                length = std::clamp(parsed, 8, 128);
+        }
+
+        static constexpr char charset[] =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
+        static constexpr int charsetLen = sizeof(charset) - 1;
+
+        std::vector<unsigned char> buf(static_cast<size_t>(length));
+        RAND_bytes(buf.data(), length);
+
+        QString password;
+        password.reserve(length);
+        for (int i = 0; i < length; ++i)
+            password.append(QChar(charset[buf[static_cast<size_t>(i)] % charsetLen]));
+
+        SecureZeroMemory(buf.data(), buf.size());
+
+        std::string narrow = password.toStdString();
+        (void)seal::Clipboard::copyWithTTL(narrow);
+        seal::Cryptography::cleanseString(narrow);
+
+        emit cliOutputReady(QString("%1  [copied]").arg(password));
+        return;
+    }
+
+    if (trimmed == ":qr")
+    {
+        emit cliOutputReady(QStringLiteral("(scanning QR code from webcam...)"));
+        requestQrCapture();
+        return;
+    }
+
+    if (trimmed.startsWith(":hex "))
+    {
+        std::string text = trimmed.mid(5).toStdString();
+        auto bytes = std::vector<unsigned char>(text.begin(), text.end());
+        std::string hex = seal::utils::to_hex(std::span<const unsigned char>(bytes));
+        (void)seal::Clipboard::copyWithTTL(hex);
+        emit cliOutputReady(QString("%1  [copied]").arg(QString::fromStdString(hex)));
+        return;
+    }
+
+    if (trimmed.startsWith(":unhex "))
+    {
+        std::string hex = trimmed.mid(7).toStdString();
+        std::vector<unsigned char> bytes;
+        if (seal::utils::from_hex(std::string_view{hex}, bytes))
+        {
+            std::string text(bytes.begin(), bytes.end());
+            (void)seal::Clipboard::copyWithTTL(text);
+            emit cliOutputReady(QString("%1  [copied]").arg(QString::fromStdString(text)));
+        }
+        else
+        {
+            emit cliOutputReady(QStringLiteral("(invalid hex)"));
+        }
+        return;
+    }
+
+    // --- Password-requiring commands ---
+
+    if (!m_PasswordSet)
+    {
+        m_PendingAction = [this, command]() { executeCliCommand(command); };
+        ensurePassword();
+        return;
+    }
+
+    try
+    {
+        ScopedDpapiUnprotect dpapiScope(m_DPAPIGuard);
+
+        // Priority 1: file/directory path
+        std::string stripped = seal::utils::stripQuotes(seal::utils::trim(input));
+
+        bool isFilePath = false;
+        if (seal::utils::fileExistsA(stripped))
+            isFilePath = true;
+
+        if (isFilePath)
+        {
+            std::string target = stripped;
+
+            std::string base = seal::utils::basenameA(target);
+            if (seal::utils::endsWithCi(base, ".exe") || _stricmp(base.c_str(), "seal") == 0)
+            {
+                emit cliOutputReady(QString("(skipped) %1").arg(QString::fromStdString(target)));
+                return;
+            }
+
+            bool isSeal = seal::utils::endsWithCi(target, ".seal");
+            if (isSeal)
+            {
+                std::string newName = seal::utils::strip_ext_ci(target, std::string_view{".seal"});
+                bool ok = seal::FileOperations::decryptFileInPlace(target, m_Password);
+                if (ok)
+                {
+                    MoveFileExA(target.c_str(), newName.c_str(), MOVEFILE_REPLACE_EXISTING);
+                    emit cliOutputReady(
+                        QString("(decrypted) %1 -> %2")
+                            .arg(QString::fromStdString(target), QString::fromStdString(newName)));
+                }
+                else
+                {
+                    emit cliOutputReady(
+                        QString("(decrypt failed) %1").arg(QString::fromStdString(target)));
+                }
+            }
+            else
+            {
+                std::string newName = seal::utils::add_ext(target, std::string_view{".seal"});
+                bool ok = seal::FileOperations::encryptFileInPlace(target, m_Password);
+                if (ok)
+                {
+                    MoveFileExA(target.c_str(), newName.c_str(), MOVEFILE_REPLACE_EXISTING);
+                    emit cliOutputReady(
+                        QString("(encrypted) %1 -> %2")
+                            .arg(QString::fromStdString(target), QString::fromStdString(newName)));
+                }
+                else
+                {
+                    emit cliOutputReady(
+                        QString("(encrypt failed) %1").arg(QString::fromStdString(target)));
+                }
+            }
+            return;
+        }
+
+        // Priority 2: hex token -> decrypt
+        auto hexTokens = seal::utils::extractHexTokens(input);
+        if (!hexTokens.empty())
+        {
+            for (const auto& tok : hexTokens)
+            {
+                try
+                {
+                    auto plain = seal::FileOperations::decryptLine(tok, m_Password);
+                    (void)seal::Clipboard::copyWithTTL(plain.view());
+                    emit cliOutputReady(
+                        QString("%1  [copied]")
+                            .arg(QString::fromUtf8(plain.data(), (int)plain.size())));
+                    seal::Cryptography::cleanseString(plain);
+                }
+                catch (const std::exception& ex)
+                {
+                    emit cliOutputReady(
+                        QString("(decrypt failed: %1)").arg(QString::fromUtf8(ex.what())));
+                }
+            }
+            return;
+        }
+
+        // Priority 2b: base64-encoded ciphertext -> decrypt
+        if (seal::utils::isBase64(input))
+        {
+            try
+            {
+                auto bytes = seal::utils::fromBase64(input);
+                if (!bytes.empty())
+                {
+                    auto plain = seal::Cryptography::decryptPacket(
+                        std::span<const unsigned char>(bytes), m_Password);
+                    std::string plainStr(reinterpret_cast<const char*>(plain.data()), plain.size());
+                    (void)seal::Clipboard::copyWithTTL(plainStr);
+                    emit cliOutputReady(QString("%1  [copied]").arg(QString::fromUtf8(plainStr)));
+                    seal::Cryptography::cleanseString(plain);
+                    seal::Cryptography::cleanseString(plainStr);
+                    return;
+                }
+            }
+            catch (...)
+            {
+                // Not valid base64 ciphertext, fall through to encrypt
+            }
+        }
+
+        // Priority 3: plain text -> encrypt (show both hex and base64)
+        std::string hex = seal::FileOperations::encryptLine(input, m_Password);
+        // Convert hex back to raw bytes for base64 encoding
+        std::vector<unsigned char> raw;
+        seal::utils::from_hex(std::string_view{hex}, raw);
+        std::string b64 = seal::utils::toBase64(std::span<const unsigned char>(raw));
+        emit cliOutputReady(QString("(hex) %1").arg(QString::fromStdString(hex)));
+        emit cliOutputReady(QString("(b64) %1").arg(QString::fromStdString(b64)));
+    }
+    catch (const std::exception& ex)
+    {
+        emit cliOutputReady(QString("Error: %1").arg(QString::fromUtf8(ex.what())));
+    }
+}
+
+void Backend::handleQrResultForCli(const QString& text)
+{
+    std::string narrow = text.toStdString();
+    (void)seal::Clipboard::copyWithTTL(narrow);
+    seal::Cryptography::cleanseString(narrow);
+    emit cliOutputReady(QString("(QR captured) %1  [copied]").arg(text));
 }
 
 }  // namespace seal

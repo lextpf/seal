@@ -260,4 +260,28 @@ template <std::ranges::range PathLike, std::ranges::contiguous_range Cont>
 [[nodiscard]] std::string secureWideToUtf8(
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& wide);
 
+/**
+ * @brief Encode binary data as a Base64 string.
+ * @ingroup Utilities
+ * @param data Raw bytes to encode.
+ * @return Base64-encoded string.
+ */
+[[nodiscard]] std::string toBase64(std::span<const unsigned char> data);
+
+/**
+ * @brief Decode a Base64 string to raw bytes.
+ * @ingroup Utilities
+ * @param b64 Base64-encoded input.
+ * @return Decoded bytes, or empty vector on invalid input.
+ */
+[[nodiscard]] std::vector<unsigned char> fromBase64(const std::string& b64);
+
+/**
+ * @brief Check whether a string looks like valid Base64.
+ * @ingroup Utilities
+ * @param s String to test.
+ * @return `true` if the string contains only Base64 characters.
+ */
+[[nodiscard]] bool isBase64(const std::string& s);
+
 }  // namespace seal::utils

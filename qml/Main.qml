@@ -80,17 +80,24 @@ ApplicationWindow {
             passwordDlg.open();
         }
 
-        // Show error in the already-open dialog on QR failure.
+        // Show error on QR failure - route to CLI panel or password dialog.
         function onQrCaptureFinished(success) {
             if (!success) {
-                passwordDlg.errorMessage = "QR capture failed or cancelled.";
+                if (Backend.isCliMode)
+                    Backend.handleQrResultForCli("(QR capture failed or cancelled)");
+                else
+                    passwordDlg.errorMessage = "QR capture failed or cancelled.";
             }
         }
 
-        // QR captured text - fill the password field (dialog is still open).
+        // QR captured text - fill the password field, or route to CLI panel.
         function onQrTextReady(text) {
-            passwordDlg.errorMessage = "";
-            passwordDlg.fillPassword(text);
+            if (Backend.isCliMode) {
+                Backend.handleQrResultForCli(text);
+            } else {
+                passwordDlg.errorMessage = "";
+                passwordDlg.fillPassword(text);
+            }
         }
 
         // Deferred edit path: if no password was set when the user clicked Edit,
@@ -201,6 +208,32 @@ ApplicationWindow {
                 hoverEnabled: true
                 cursorShape: Backend.passwordSet ? Qt.PointingHandCursor : Qt.ArrowCursor
                 onClicked: if (Backend.passwordSet) Backend.lockVault()
+            }
+        }
+
+        // CLI mode
+        Rectangle {
+            width: 46; height: 36
+            color: cliArea.containsMouse
+                   ? (cliArea.pressed ? Theme.bgInputFocus : Theme.bgHover)
+                   : Backend.isCliMode ? Theme.accentSoft : "transparent"
+            Behavior on color { ColorAnimation { duration: 100 } }
+
+            SvgIcon {
+                source: Theme.iconTerminal
+                width: Theme.px(12)
+                height: Theme.px(12)
+                anchors.centerIn: parent
+                color: Backend.isCliMode ? Theme.accent
+                     : cliArea.containsMouse ? Theme.textPrimary : Theme.textMuted
+                Behavior on color { ColorAnimation { duration: 100 } }
+            }
+            MouseArea {
+                id: cliArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: Backend.toggleCliMode()
             }
         }
 
@@ -369,10 +402,10 @@ ApplicationWindow {
                 onUnloadClicked: Backend.unloadVault()
             }
 
-            // Header separator (hidden in compact mode)
+            // Header separator (hidden in compact/CLI mode)
             Rectangle {
                 Layout.fillWidth: true
-                visible: !Backend.isCompact
+                visible: !Backend.isCompact && !Backend.isCliMode
                 implicitHeight: 1
                 color: Theme.divider
             }
@@ -382,6 +415,7 @@ ApplicationWindow {
             // The model emits dataChanged and the ListView updates instantly.
             SearchBar {
                 Layout.fillWidth: true
+                visible: !Backend.isCliMode
                 onTextChanged: Backend.searchFilter = text
             }
 
@@ -389,6 +423,7 @@ ApplicationWindow {
             AccountsTable {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                visible: !Backend.isCliMode
                 Layout.maximumHeight: Backend.isCompact ? 102 : 16777215
                 model: Backend.vaultModel
                 selectedRow: Backend.selectedIndex
@@ -407,6 +442,7 @@ ApplicationWindow {
             // visual index to the real record position before calling Backend.
             ActionBar {
                 Layout.fillWidth: true
+                visible: !Backend.isCliMode
                 hasSelection: Backend.hasSelection
                 isFillArmed: Backend.isFillArmed
                 fillCountdownSeconds: Backend.fillCountdownSeconds
@@ -460,12 +496,19 @@ ApplicationWindow {
                 }
             }
 
-            // Directory buttons (hidden in compact mode)
+            // Directory buttons (hidden in compact/CLI mode)
             DirectoryBar {
                 Layout.fillWidth: true
-                visible: !Backend.isCompact
+                visible: !Backend.isCompact && !Backend.isCliMode
                 onEncryptDirClicked: Backend.encryptDirectory()
                 onDecryptDirClicked: Backend.decryptDirectory()
+            }
+
+            // CLI panel (shown only in CLI mode)
+            CliPanel {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: Backend.isCliMode
             }
         }
 

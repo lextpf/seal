@@ -91,6 +91,7 @@ class Backend : public QObject
         int fillCountdownSeconds READ fillCountdownSeconds NOTIFY fillCountdownSecondsChanged)
     Q_PROPERTY(bool isAlwaysOnTop READ isAlwaysOnTop NOTIFY alwaysOnTopChanged)
     Q_PROPERTY(bool isCompact READ isCompact NOTIFY compactChanged)
+    Q_PROPERTY(bool isCliMode READ isCliMode NOTIFY cliModeChanged)
 
 public:
     /// @brief Construct the backend, creating the vault model and fill controller.
@@ -332,11 +333,25 @@ public:
     /// @brief Toggle compact mode (shrinks window to a minimal strip).
     Q_INVOKABLE void toggleCompact();
 
+    /// @brief Toggle CLI mode (replaces vault UI with embedded terminal).
+    Q_INVOKABLE void toggleCliMode();
+
+    /// @brief Execute a command in the embedded CLI panel.
+    /// @param command The command string entered by the user.
+    Q_INVOKABLE void executeCliCommand(const QString& command);
+
+    /// @brief Handle QR capture result when in CLI mode.
+    /// @param text The captured QR text.
+    Q_INVOKABLE void handleQrResultForCli(const QString& text);
+
     /// @brief Check whether the window is pinned above other windows.
     bool isAlwaysOnTop() const;
 
     /// @brief Check whether the window is in compact (minimal strip) mode.
     bool isCompact() const;
+
+    /// @brief Check whether the CLI panel is active.
+    bool isCliMode() const;
 
 signals:
     void vaultLoadedChanged();    ///< Vault open/close state changed.
@@ -391,6 +406,14 @@ signals:
     void fillCountdownSecondsChanged();  ///< Auto-fill countdown tick.
     void alwaysOnTopChanged();           ///< Always-on-top toggled.
     void compactChanged();               ///< Compact mode toggled.
+    void cliModeChanged();               ///< CLI mode toggled.
+
+    /// @brief Output text from CLI command execution.
+    /// @param text The output line to display in the CLI panel.
+    void cliOutputReady(const QString& text);
+
+    /// @brief CLI panel output should be cleared.
+    void cliOutputCleared();
 
 private:
     /**
@@ -495,6 +518,8 @@ private:
     bool m_Busy = false;                             ///< Background operation in progress.
     bool m_AlwaysOnTop = false;                      ///< Window pinned above others.
     bool m_Compact = false;                          ///< Compact mode active.
+    bool m_CliMode = false;                          ///< CLI panel active.
+    bool m_CliWelcomeShown = false;                  ///< Welcome banner shown once.
     int m_NormalWidth = 0;                           ///< Saved width before compact.
     int m_NormalHeight = 0;                          ///< Saved height before compact.
 };

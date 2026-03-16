@@ -291,4 +291,5 @@ QtObject {
     readonly property string iconTriangleExclamation: "qrc:/qt/qml/seal/assets/svgs/triangle-exclamation.svg"
     readonly property string iconCircleInfo:  "qrc:/qt/qml/seal/assets/svgs/circle-info.svg"
     readonly property string iconCircleCheck: "qrc:/qt/qml/seal/assets/svgs/circle-check.svg"
+    readonly property string iconTerminal:   "qrc:/qt/qml/seal/assets/svgs/terminal.svg"
 }

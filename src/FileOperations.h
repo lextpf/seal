@@ -240,6 +240,27 @@ public:
      */
     template <class SecurePwd>
     static bool streamDecrypt(const SecurePwd& password);
+
+    /**
+     * @brief Securely delete a file by overwriting with random data then removing.
+     *
+     * Performs three overwrite passes (random, zeros, random) to prevent
+     * data recovery, then deletes the file.
+     *
+     * @param path Filesystem path to the file to shred.
+     * @return `true` on success, `false` on error.
+     */
+    static bool shredFile(const std::string& path);
+
+    /**
+     * @brief Compute the SHA-256 hash of a file.
+     *
+     * Reads the file in 64KB chunks and produces a hex-encoded hash string.
+     *
+     * @param path Filesystem path to the file.
+     * @return Hex-encoded SHA-256 hash, or empty string on error.
+     */
+    [[nodiscard]] static std::string hashFile(const std::string& path);
 };
 
 }  // namespace seal
