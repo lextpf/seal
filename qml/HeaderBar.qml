@@ -124,7 +124,10 @@ Item {
         // egg animation in place of the flat icon color.
         Canvas {
             id: iconAurora
-            anchors.fill: parent
+            readonly property int ss: 3
+            anchors.centerIn: parent
+            width: parent.width * ss; height: parent.height * ss
+            scale: 1.0 / ss
             visible: false
             property bool loaded: false
 
@@ -135,8 +138,7 @@ Item {
             onPaint: {
                 var ctx = getContext("2d"); ctx.reset();
                 if (!loaded || width < 1) return;
-                var cx = width/2, cy = height/2;
-                var g = ctx.createConicalGradient(cx, cy, 0);
+                var g = ctx.createConicalGradient(width/2, height/2, 0);
                 g.addColorStop(0.00, "#00ff88");
                 g.addColorStop(0.15, "#00ddcc");
                 g.addColorStop(0.30, "#4488ff");
@@ -155,33 +157,33 @@ Item {
             id: easterEgg
 
             ParallelAnimation {
-                // Ring 1 - full rainbow conic gradient
-                NumberAnimation { target: ringWarm; property: "width";   from: Theme.px(16); to: Theme.px(90); duration: 1000; easing.type: Easing.OutCubic }
-                NumberAnimation { target: ringWarm; property: "opacity"; from: 0.55;          to: 0;            duration: 1000; easing.type: Easing.OutCubic }
+                // Ring 1 - full rainbow, expands furthest
+                NumberAnimation { target: ringWarm; property: "width";   from: Theme.px(18); to: Theme.px(130); duration: 1400; easing.type: Easing.OutQuad }
+                NumberAnimation { target: ringWarm; property: "opacity"; from: 0.45;          to: 0;             duration: 1400; easing.type: Easing.InQuad }
 
-                // Ring 2 - aurora (green -> teal -> blue -> purple), staggered
+                // Ring 2 - aurora, staggered 300ms, mid reach
                 SequentialAnimation {
-                    PauseAnimation { duration: 180 }
+                    PauseAnimation { duration: 300 }
                     ParallelAnimation {
-                        NumberAnimation { target: ringMid; property: "width";   from: Theme.px(14); to: Theme.px(90); duration: 1000; easing.type: Easing.OutCubic }
-                        NumberAnimation { target: ringMid; property: "opacity"; from: 0.55;          to: 0;            duration: 1000; easing.type: Easing.OutCubic }
+                        NumberAnimation { target: ringMid; property: "width";   from: Theme.px(14); to: Theme.px(88); duration: 1300; easing.type: Easing.OutQuad }
+                        NumberAnimation { target: ringMid; property: "opacity"; from: 0.35;          to: 0;            duration: 1300; easing.type: Easing.InQuad }
                     }
                 }
 
-                // Ring 3 - cool aurora (mint -> indigo -> violet -> magenta), staggered further
+                // Ring 3 - cool aurora, staggered 600ms, least reach
                 SequentialAnimation {
-                    PauseAnimation { duration: 360 }
+                    PauseAnimation { duration: 600 }
                     ParallelAnimation {
-                        NumberAnimation { target: ringCool; property: "width";   from: Theme.px(12); to: Theme.px(90); duration: 1000; easing.type: Easing.OutCubic }
-                        NumberAnimation { target: ringCool; property: "opacity"; from: 0.55;          to: 0;            duration: 1000; easing.type: Easing.OutCubic }
+                        NumberAnimation { target: ringCool; property: "width";   from: Theme.px(10); to: Theme.px(55); duration: 1200; easing.type: Easing.OutQuad }
+                        NumberAnimation { target: ringCool; property: "opacity"; from: 0.25;          to: 0;            duration: 1200; easing.type: Easing.InQuad }
                     }
                 }
 
                 // Conic aurora gradient on icon - rendered once, GPU-animated opacity.
                 SequentialAnimation {
                     PropertyAction  { target: iconAurora; property: "visible"; value: true }
-                    PropertyAction  { target: iconAurora; property: "opacity"; value: 1 }
-                    PauseAnimation  { duration: 1200 }
+                    PropertyAction  { target: iconAurora; property: "opacity"; value: 0.75 }
+                    PauseAnimation  { duration: 1600 }
                     NumberAnimation { target: iconAurora; property: "opacity"; to: 0; duration: 200 }
                     PropertyAction  { target: iconAurora; property: "visible"; value: false }
                 }
