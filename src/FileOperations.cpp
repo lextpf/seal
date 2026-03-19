@@ -2,6 +2,7 @@
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+#include <bit>
 
 namespace seal
 {
@@ -660,14 +661,14 @@ bool FileOperations::shredFile(const std::string& path)
     }
 
     LARGE_INTEGER liSize{};
-    if (!GetFileSizeEx(hFile, &liSize) || liSize.QuadPart <= 0)
+    if (!GetFileSizeEx(hFile, &liSize) || std::bit_cast<long long>(liSize) <= 0)
     {
         CloseHandle(hFile);
         // Empty or unreadable file - just delete it.
         return DeleteFileA(path.c_str()) != 0;
     }
 
-    auto fileSize = static_cast<size_t>(liSize.QuadPart);
+    auto fileSize = static_cast<size_t>(std::bit_cast<long long>(liSize));
     constexpr size_t CHUNK = 65536;
     std::vector<unsigned char> buf(std::min(fileSize, CHUNK));
 
