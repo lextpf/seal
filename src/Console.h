@@ -7,6 +7,7 @@
 #include <conio.h>
 #include <wincred.h>
 
+#include <functional>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -43,8 +44,12 @@ namespace seal
 class MaskedCredentialView
 {
 public:
+    /// Callback that decrypts a single entry on demand by aggregate index.
+    /// Returns a freshly decrypted triple (service, username, password).
+    using DecryptOnDemand = std::function<seal::secure_triplet16_t(size_t index)>;
+
     /**
-     * @brief Construct the view and render masked entries to the console.
+     * @brief Construct the view with pre-decrypted entries (legacy path).
      *
      * Sets up layout based on the current console window size and draws
      * all masked credential rows. If more entries exist than fit in the
@@ -56,6 +61,19 @@ public:
      * @pre The process must own a console with valid input and output handles.
      */
     explicit MaskedCredentialView(const std::vector<seal::secure_triplet16_t>& entries);
+
+    /**
+     * @brief Construct the view with on-demand decryption (secure path).
+     *
+     * Only service names (non-secret) are held in memory. Credentials
+     * are decrypted via the callback at click time and wiped immediately
+     * after keystroke injection, limiting plaintext exposure to one
+     * credential at a time.
+     *
+     * @param serviceNames Service/platform names to display (cleartext).
+     * @param decryptEntry Callback invoked at click time to decrypt one credential.
+     */
+    MaskedCredentialView(std::vector<std::wstring> serviceNames, DecryptOnDemand decryptEntry);
 
     MaskedCredentialView(const MaskedCredentialView&) = delete;
     MaskedCredentialView& operator=(const MaskedCredentialView&) = delete;
@@ -91,7 +109,11 @@ private:
 
     HANDLE m_Input;
     HANDLE m_Output;
-    const std::vector<seal::secure_triplet16_t>& m_Entries;
+    const std::vector<seal::secure_triplet16_t>* m_pEntries =
+        nullptr;                               ///< Legacy pre-decrypted data
+    std::vector<std::wstring> m_ServiceNames;  ///< Non-secret names for on-demand mode
+    DecryptOnDemand m_DecryptEntry;            ///< Click-time decryptor (on-demand mode only)
+    bool m_OnDemandMode = false;               ///< True when using the on-demand decrypt path
     std::vector<HitRegion> m_Regions;
     SHORT m_StatusRow = 0;
     SHORT m_Width = 0;
@@ -113,6 +135,18 @@ private:
  * @see MaskedCredentialView
  */
 void interactiveMaskedWin(const std::vector<seal::secure_triplet16_t>& entries);
+
+/**
+ * @brief Display credentials with on-demand decryption.
+ *
+ * Only service names are held in memory. Credentials are decrypted
+ * via the callback at click time and wiped immediately after typing.
+ *
+ * @param serviceNames Service/platform names to display.
+ * @param decryptEntry Callback invoked to decrypt one credential by index.
+ */
+void interactiveMaskedWin(std::vector<std::wstring> serviceNames,
+                          MaskedCredentialView::DecryptOnDemand decryptEntry);
 
 /**
  * @brief Read multiple non-empty lines from a stream until a terminator.

@@ -66,24 +66,39 @@ constexpr int kExtendedKey2 = 224;
 namespace seal
 {
 
-MaskedCredentialView::MaskedCredentialView(const std::vector<seal::secure_triplet16_t>& entries)
-    : m_Input(GetStdHandle(STD_INPUT_HANDLE)),
-      m_Output(GetStdHandle(STD_OUTPUT_HANDLE)),
-      m_Entries(entries)
+// Shared console-setup logic used by both constructors.
+static void initConsoleLayout(HANDLE output, SHORT& width, int& showCount, size_t entryCount)
 {
     CONSOLE_SCREEN_BUFFER_INFO info{};
-    GetConsoleScreenBufferInfo(m_Output, &info);
-    m_Width = info.dwSize.X;
+    GetConsoleScreenBufferInfo(output, &info);
+    width = info.dwSize.X;
 
     SHORT winTop = info.srWindow.Top;
     SHORT winBot = info.srWindow.Bottom;
     SHORT winH = static_cast<SHORT>(winBot - winTop + 1);
 
-    // Reserve rows for header + entries + status line
     int maxItems = std::max<SHORT>(0, static_cast<SHORT>(winH - 2));
-    m_ShowCount =
-        static_cast<int>(std::min<size_t>(static_cast<size_t>(maxItems), m_Entries.size()));
+    showCount = static_cast<int>(std::min<size_t>(static_cast<size_t>(maxItems), entryCount));
+}
 
+MaskedCredentialView::MaskedCredentialView(const std::vector<seal::secure_triplet16_t>& entries)
+    : m_Input(GetStdHandle(STD_INPUT_HANDLE)),
+      m_Output(GetStdHandle(STD_OUTPUT_HANDLE)),
+      m_pEntries(&entries)
+{
+    initConsoleLayout(m_Output, m_Width, m_ShowCount, m_pEntries->size());
+    render();
+}
+
+MaskedCredentialView::MaskedCredentialView(std::vector<std::wstring> serviceNames,
+                                           DecryptOnDemand decryptEntry)
+    : m_Input(GetStdHandle(STD_INPUT_HANDLE)),
+      m_Output(GetStdHandle(STD_OUTPUT_HANDLE)),
+      m_ServiceNames(std::move(serviceNames)),
+      m_DecryptEntry(std::move(decryptEntry)),
+      m_OnDemandMode(true)
+{
+    initConsoleLayout(m_Output, m_Width, m_ShowCount, m_ServiceNames.size());
     render();
 }
 
@@ -140,8 +155,16 @@ void MaskedCredentialView::render()
         int maxService = std::max<SHORT>(
             0, static_cast<SHORT>(m_Width - static_cast<int>(idx.size()) - MASKED_TAIL));
 
-        std::wstring svc(m_Entries[static_cast<size_t>(i)].primary.data(),
-                         m_Entries[static_cast<size_t>(i)].primary.size());
+        std::wstring svc;
+        if (m_OnDemandMode)
+        {
+            svc = m_ServiceNames[static_cast<size_t>(i)];
+        }
+        else
+        {
+            const auto& entry = (*m_pEntries)[static_cast<size_t>(i)];
+            svc.assign(entry.primary.data(), entry.primary.size());
+        }
 
         // Truncate long service names with ellipsis
         if (static_cast<int>(svc.size()) > maxService)
@@ -178,10 +201,11 @@ void MaskedCredentialView::render()
     m_StatusRow = info.dwCursorPosition.Y;
 
     // Show overflow indicator if not all entries fit
-    if (static_cast<size_t>(m_ShowCount) < m_Entries.size())
+    size_t totalEntries = m_OnDemandMode ? m_ServiceNames.size() : m_pEntries->size();
+    if (static_cast<size_t>(m_ShowCount) < totalEntries)
     {
         setStatus("[showing " + std::to_string(m_ShowCount) + " of " +
-                  std::to_string(m_Entries.size()) + "]");
+                  std::to_string(totalEntries) + "]");
     }
 }
 
@@ -220,34 +244,70 @@ void MaskedCredentialView::handleClick(SHORT x, SHORT y)
             continue;
         }
 
-        const auto& entry = m_Entries[i];
-        std::wstring svc(entry.primary.data(), entry.primary.size());
+        // Resolve the service name for status display.
+        std::wstring svc;
+        if (m_OnDemandMode)
+        {
+            svc = m_ServiceNames[i];
+        }
+        else
+        {
+            const auto& entry = (*m_pEntries)[i];
+            svc.assign(entry.primary.data(), entry.primary.size());
+        }
 
-        if (x >= m_Regions[i].usernameStart && x <= m_Regions[i].usernameEnd)
+        // Determine which field the user clicked.
+        bool isUsername = (x >= m_Regions[i].usernameStart && x <= m_Regions[i].usernameEnd);
+        bool isPassword = (x >= m_Regions[i].passwordStart && x <= m_Regions[i].passwordEnd);
+        if (!isUsername && !isPassword)
+            break;
+
+        const char* fieldLabel = isUsername ? "USERNAME" : "PASSWORD";
+
+        // Countdown gives the user time to alt-tab and focus the target
+        // input field; then typeSecret sends synthetic keystrokes there.
+        for (int s = COUNTDOWN_SEC; s >= 1; --s)
         {
-            // Countdown gives the user time to alt-tab and focus the target
-            // input field; then typeSecret sends synthetic keystrokes there.
-            for (int s = COUNTDOWN_SEC; s >= 1; --s)
-            {
-                setStatus("Focus target field; typing USERNAME in " + std::to_string(s) + "s");
-                Sleep(1000);
-            }
-            (void)seal::typeSecret(
-                entry.secondary.data(), static_cast<int>(entry.secondary.size()), 0);
-            setStatusW(L"[typed] " + svc + L" username");
+            setStatus(std::string("Focus target field; typing ") + fieldLabel + " in " +
+                      std::to_string(s) + "s");
+            Sleep(1000);
         }
-        else if (x >= m_Regions[i].passwordStart && x <= m_Regions[i].passwordEnd)
+
+        if (m_OnDemandMode)
         {
-            // Countdown before typing password into the focused window
-            for (int s = COUNTDOWN_SEC; s >= 1; --s)
+            // On-demand path: decrypt only this entry, type, wipe immediately.
+            // The secure_triplet16_t destructor auto-wipes the locked-page buffers.
+            seal::secure_triplet16_t triple = m_DecryptEntry(i);
+            if (isUsername)
             {
-                setStatus("Focus target field; typing PASSWORD in " + std::to_string(s) + "s");
-                Sleep(1000);
+                (void)seal::typeSecret(
+                    triple.secondary.data(), static_cast<int>(triple.secondary.size()), 0);
             }
-            (void)seal::typeSecret(
-                entry.tertiary.data(), static_cast<int>(entry.tertiary.size()), 0);
-            setStatusW(L"[typed] " + svc + L" password");
+            else
+            {
+                (void)seal::typeSecret(
+                    triple.tertiary.data(), static_cast<int>(triple.tertiary.size()), 0);
+            }
+            // ~secure_triplet16_t wipes credentials here
         }
+        else
+        {
+            // Legacy path: credentials are already in memory.
+            const auto& entry = (*m_pEntries)[i];
+            if (isUsername)
+            {
+                (void)seal::typeSecret(
+                    entry.secondary.data(), static_cast<int>(entry.secondary.size()), 0);
+            }
+            else
+            {
+                (void)seal::typeSecret(
+                    entry.tertiary.data(), static_cast<int>(entry.tertiary.size()), 0);
+            }
+        }
+
+        setStatusW(L"[typed] " + svc + L" " +
+                   (isUsername ? std::wstring(L"username") : std::wstring(L"password")));
         break;
     }
 }
@@ -292,6 +352,13 @@ void MaskedCredentialView::run()
 void interactiveMaskedWin(const std::vector<seal::secure_triplet16_t>& entries)
 {
     MaskedCredentialView view(entries);
+    view.run();
+}
+
+void interactiveMaskedWin(std::vector<std::wstring> serviceNames,
+                          MaskedCredentialView::DecryptOnDemand decryptEntry)
+{
+    MaskedCredentialView view(std::move(serviceNames), std::move(decryptEntry));
     view.run();
 }
 
