@@ -4,6 +4,7 @@
 #include <shellapi.h>
 #include <tlhelp32.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <mutex>
@@ -32,10 +33,11 @@ struct ClipboardLock
     ClipboardLock& operator=(const ClipboardLock&) = delete;
 };
 
-// Joinable TTL thread. Stored at file scope so its destructor runs during
-// static destruction, guaranteeing the thread is joined before the process
-// exits. Assigning a new jthread auto-joins the previous one.
-std::jthread s_TtlThread;
+// Joinable TTL thread wrapped in unique_ptr. Clipboard::shutdown() explicitly
+// resets the pointer (which joins the thread) before main() returns.  This
+// avoids relying on static-destruction ordering where DLL unloading may have
+// already invalidated clipboard API entry points, causing a deadlock on join.
+std::unique_ptr<std::jthread> s_TtlThread;
 
 // Serializes access to s_TtlThread. Without this, concurrent copyWithTTL
 // calls race on the jthread assignment (one thread may be mid-join while
@@ -128,16 +130,16 @@ bool Clipboard::copyWithTTL(const char* data, size_t n, DWORD ttl_ms)
     }
 
     // Joinable TTL thread: Sleeps for the TTL in short increments (so it
-    // can respond to stop_requested during static destruction), then checks
-    // whether the clipboard still holds our value before clearing.
-    // The lock serializes concurrent copyWithTTL calls so the jthread
-    // assignment (which joins the previous thread) is not a data race.
+    // can respond to stop_requested during shutdown), then checks whether
+    // the clipboard still holds our value before clearing.
+    // The lock serializes concurrent copyWithTTL calls so the unique_ptr
+    // reset (which joins the previous thread) is not a data race.
     std::lock_guard<std::mutex> ttlLock(s_TtlMutex);
-    s_TtlThread = std::jthread(
+    s_TtlThread = std::make_unique<std::jthread>(
         [val = std::move(val), ttl_ms](std::stop_token stop) mutable
         {
             // Sleep in 100ms increments so the thread can exit promptly
-            // when the jthread destructor requests stop at process exit.
+            // when Clipboard::shutdown() or the jthread destructor requests stop.
             auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ttl_ms);
             while (std::chrono::steady_clock::now() < deadline)
             {
@@ -147,6 +149,16 @@ bool Clipboard::copyWithTTL(const char* data, size_t n, DWORD ttl_ms)
                     return;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+
+            // Check stop one more time before entering the clipboard API
+            // sequence. shutdown() may have been called while we were in the
+            // final sleep increment; this prevents entering blocking Win32
+            // clipboard calls after the process has started tearing down.
+            if (stop.stop_requested())
+            {
+                seal::Cryptography::cleanseString(val);
+                return;
             }
 
             // Open clipboard without emptying - we only want to read-compare.
@@ -205,6 +217,12 @@ bool Clipboard::copyWithTTL(const char* s, DWORD ttl_ms)
     return copyWithTTL(s, std::strlen(s), ttl_ms);
 }
 
+void Clipboard::shutdown()
+{
+    std::lock_guard<std::mutex> lock(s_TtlMutex);
+    s_TtlThread.reset();  // requests stop + joins + destroys
+}
+
 bool Clipboard::copyInputFile()
 {
     std::string buf;
@@ -212,13 +230,16 @@ bool Clipboard::copyInputFile()
     {
         return false;
     }
-    return copyWithTTL(buf);
+    bool ok = copyWithTTL(buf);
+    seal::Cryptography::cleanseString(buf);
+    return ok;
 }
 
-// Shared state for the measurement hook callback. Only accessed from the
-// thread that installed the hook (single-threaded, no synchronisation needed).
-LARGE_INTEGER s_CallNextDuration{};
-bool s_HookFired = false;
+// Shared state for the measurement hook callback. Accessed only from the
+// thread that installed the hook, but stored as atomics for correctness
+// documentation and to prevent subtle reordering issues.
+std::atomic<LONGLONG> s_CallNextDuration{0};
+std::atomic<bool> s_HookFired{false};
 
 // Temporary WH_KEYBOARD_LL callback that times only CallNextHookEx.
 // If we are the only hook in the chain, CallNextHookEx returns in <0.1ms.
@@ -229,8 +250,8 @@ static LRESULT CALLBACK MeasureHookProc(int nCode, WPARAM wParam, LPARAM lParam)
     QueryPerformanceCounter(&before);
     LRESULT r = CallNextHookEx(nullptr, nCode, wParam, lParam);
     QueryPerformanceCounter(&after);
-    s_CallNextDuration.QuadPart = after.QuadPart - before.QuadPart;
-    s_HookFired = true;
+    s_CallNextDuration.store(after.QuadPart - before.QuadPart, std::memory_order_relaxed);
+    s_HookFired.store(true, std::memory_order_release);
     return r;
 }
 
@@ -284,7 +305,7 @@ static bool isKeyboardHookPresent()
 
     for (int i = 0; i < NUM_SAMPLES; ++i)
     {
-        s_HookFired = false;
+        s_HookFired.store(false, std::memory_order_relaxed);
         SendInput(2, dummyInput, sizeof(INPUT));
 
         // Pump messages until the hook fires or a 50ms safety timeout.
@@ -292,16 +313,18 @@ static bool isKeyboardHookPresent()
         // that made the previous 15ms threshold unreliable.
         auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
         MSG msg;
-        while (!s_HookFired && std::chrono::steady_clock::now() < deadline)
+        while (!s_HookFired.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < deadline)
         {
             if (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
                 DispatchMessageW(&msg);
         }
 
-        if (s_HookFired)
+        if (s_HookFired.load(std::memory_order_acquire))
         {
-            samples[validSamples++] = static_cast<double>(s_CallNextDuration.QuadPart) * 1000.0 /
-                                      static_cast<double>(freq.QuadPart);
+            samples[validSamples++] =
+                static_cast<double>(s_CallNextDuration.load(std::memory_order_relaxed)) * 1000.0 /
+                static_cast<double>(freq.QuadPart);
         }
     }
 
@@ -337,28 +360,15 @@ bool typeSecret(const wchar_t* bytes, int len, DWORD delay_ms)
         OutputDebugStringA("[seal] WARN: suspicious keyboard hooks detected before auto-type\n");
     }
 
-    std::wstring w;
+    // Resolve length and validate. Work directly from the caller's buffer
+    // to avoid copying secrets into pageable std::wstring memory.
     if (len < 0)
-    {
-        w = std::wstring(bytes);
-        if (w.empty())
-        {
-            return false;
-        }
-    }
-    else
-    {
-        if (len <= 0)
-        {
-            return false;
-        }
-        w.assign(bytes, bytes + static_cast<size_t>(len));
-        // Strip trailing null if the caller included one in the length
-        if (!w.empty() && w.back() == L'\0')
-        {
-            w.pop_back();
-        }
-    }
+        len = static_cast<int>(wcslen(bytes));
+    // Strip trailing null if the caller included one in the length
+    if (len > 0 && bytes[len - 1] == L'\0')
+        --len;
+    if (len <= 0)
+        return false;
 
     // Give the user time to switch focus to the target window
     Sleep(delay_ms);
@@ -367,12 +377,12 @@ bool typeSecret(const wchar_t* bytes, int len, DWORD delay_ms)
     // KEYEVENTF_UNICODE tells SendInput to use the scan-code field as a raw
     // Unicode code point, bypassing virtual-key translation entirely.
     std::vector<INPUT> seq;
-    seq.reserve(static_cast<size_t>(w.size()) * 2);
-    for (wchar_t ch : w)
+    seq.reserve(static_cast<size_t>(len) * 2);
+    for (int i = 0; i < len; ++i)
     {
         INPUT down{};
         down.type = INPUT_KEYBOARD;
-        down.ki.wScan = ch;
+        down.ki.wScan = bytes[i];
         down.ki.dwFlags = KEYEVENTF_UNICODE;
         INPUT up = down;
         up.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
@@ -394,10 +404,9 @@ bool typeSecret(const wchar_t* bytes, int len, DWORD delay_ms)
     }
 
     // Scrub sensitive keystroke data before returning. SecureZeroMemory is
-    // not elided by the compiler (unlike memset), so the INPUT array and
-    // wstring buffer are guaranteed to be zeroed in physical memory.
+    // not elided by the compiler (unlike memset), so the INPUT array is
+    // guaranteed to be zeroed in physical memory.
     SecureZeroMemory(seq.data(), seq.size() * sizeof(INPUT));
-    SecureZeroMemory(w.data(), w.size() * sizeof(wchar_t));
     return true;
 }
 

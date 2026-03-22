@@ -166,6 +166,17 @@ public:
      * @see seal::utils::read_bin
      */
     [[nodiscard]] static bool copyInputFile();
+
+    /**
+     * @brief Explicitly join the TTL scrub thread before static destruction.
+     *
+     * Call from `main()` (or an RAII guard on the stack of `main`) to ensure
+     * the background thread is joined while the process is still fully
+     * initialized. Without this, the `jthread` destructor runs during
+     * static destruction where DLL unloading may have already invalidated
+     * clipboard API entry points, causing a potential deadlock.
+     */
+    static void shutdown();
 };
 
 /**
