@@ -266,10 +266,14 @@ public:
     Q_INVOKABLE void decryptDirectory();
 
     /**
-     * @brief Attempt to auto-load a vault from a well-known location.
+     * @brief Attempt to auto-load a vault from well-known locations.
      *
-     * Checks for a `.seal` vault file next to the executable. If found,
-     * loads it automatically (still requires master password).
+     * Searches for a `.seal` vault file in priority order:
+     * 1. Next to the executable
+     * 2. Current working directory
+     * 3. User's home directory
+     *
+     * Loads the first match automatically (still requires master password).
      */
     Q_INVOKABLE void autoLoadVault();
 
@@ -457,16 +461,25 @@ private:
      */
     void setStatus(const QString& text);
 
+    /// @brief Typing mode for scheduleTypingAction.
+    enum class TypingMode
+    {
+        Login,
+        Password
+    };
+
     /**
      * @brief Start a 3-second countdown, then execute a typing action.
      *
      * Shared implementation for typeLogin() and typePassword().
+     * Snapshots the target record and master password into the worker
+     * thread's captures so the worker never touches shared state.
      *
-     * @param index   Record index to type.
-     * @param action  Callable invoked at countdown zero (DPAPI unprotected).
-     * @param label   Status label (e.g. "Login" or "Password").
+     * @param index  Record index to type.
+     * @param mode   Whether to type login (user+tab+pass) or password only.
+     * @param label  Status label (e.g. "Login" or "Password").
      */
-    void scheduleTypingAction(int index, std::function<void()> action, const QString& label);
+    void scheduleTypingAction(int index, TypingMode mode, const QString& label);
 
     /**
      * @brief Rebuild the VaultListModel from the current record list.

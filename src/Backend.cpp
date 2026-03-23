@@ -704,20 +704,16 @@ constexpr DWORD kFieldSettleDelayMs = 200;   // Wait for target field to process
 constexpr DWORD kTabKeySettleDelayMs = 100;  // Wait for Tab to advance focus
 
 // Types username + tab + password into the currently focused window.
+// Takes a snapshot of the record and password so the worker thread
+// never touches Backend's shared state.
 static void doTypeLogin(
-    const std::vector<seal::VaultRecord>& records,
-    int index,
+    const seal::VaultRecord& record,
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPw)
 {
-    if (index < 0 || index >= static_cast<int>(records.size()))
-    {
-        return;
-    }
-
     seal::DecryptedCredential cred;
     try
     {
-        cred = seal::decryptCredentialOnDemand(records[index], masterPw);
+        cred = seal::decryptCredentialOnDemand(record, masterPw);
     }
     catch (const std::exception& e)
     {
@@ -759,20 +755,16 @@ static void doTypeLogin(
 }
 
 // Types only the password into the currently focused window.
+// Takes a snapshot of the record and password so the worker thread
+// never touches Backend's shared state.
 static void doTypePassword(
-    const std::vector<seal::VaultRecord>& records,
-    int index,
+    const seal::VaultRecord& record,
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPw)
 {
-    if (index < 0 || index >= static_cast<int>(records.size()))
-    {
-        return;
-    }
-
     seal::DecryptedCredential cred;
     try
     {
-        cred = seal::decryptCredentialOnDemand(records[index], masterPw);
+        cred = seal::decryptCredentialOnDemand(record, masterPw);
     }
     catch (const std::exception& e)
     {
@@ -802,8 +794,7 @@ void Backend::typeLogin(int index)
     if (m_Busy || m_FillController->isArmed())
         return;
 
-    scheduleTypingAction(
-        index, [this, index]() { doTypeLogin(m_Records, index, m_Password); }, "Login");
+    scheduleTypingAction(index, TypingMode::Login, "Login");
 }
 
 void Backend::typePassword(int index)
@@ -819,11 +810,10 @@ void Backend::typePassword(int index)
     if (m_Busy || m_FillController->isArmed())
         return;
 
-    scheduleTypingAction(
-        index, [this, index]() { doTypePassword(m_Records, index, m_Password); }, "Password");
+    scheduleTypingAction(index, TypingMode::Password, "Password");
 }
 
-void Backend::scheduleTypingAction(int index, std::function<void()> action, const QString& label)
+void Backend::scheduleTypingAction(int index, TypingMode mode, const QString& label)
 {
     // Callers (typeLogin, typePassword) guard with `if (m_Busy) return;`
     // before reaching this point, so overlapping timers cannot occur.
@@ -843,7 +833,7 @@ void Backend::scheduleTypingAction(int index, std::function<void()> action, cons
     connect(timer,
             &QTimer::timeout,
             this,
-            [this, timer, index, action = std::move(action), label, remaining]() mutable
+            [this, timer, index, mode, label, remaining]() mutable
             {
                 remaining--;
                 if (remaining > 0)
@@ -873,8 +863,25 @@ void Backend::scheduleTypingAction(int index, std::function<void()> action, cons
                     // Run the blocking typing sequence on a worker thread so
                     // the GUI event loop stays responsive during Sleep() calls
                     // between username, Tab, and password keystrokes.
+                    //
+                    // Snapshot the record and password into the worker's captures
+                    // so the thread never touches m_Records or m_Password directly.
+                    // The GUI thread could process events that mutate those members
+                    // while the worker is running.
                     m_DPAPIGuard.unprotect();
-                    auto* worker = QThread::create([action = std::move(action)]() { action(); });
+                    auto record = m_Records[index];
+                    seal::basic_secure_string<wchar_t> pw;
+                    pw.s.assign(m_Password.s.begin(), m_Password.s.end());
+
+                    auto* worker = QThread::create(
+                        [record = std::move(record), pw = std::move(pw), mode]() mutable
+                        {
+                            if (mode == Backend::TypingMode::Login)
+                                doTypeLogin(record, pw);
+                            else
+                                doTypePassword(record, pw);
+                            seal::Cryptography::cleanseString(pw);
+                        });
                     connect(worker,
                             &QThread::finished,
                             this,
