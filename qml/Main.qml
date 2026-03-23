@@ -361,6 +361,7 @@ ApplicationWindow {
                 isFillArmed: Backend.isFillArmed
                 fillCountdownSeconds: Backend.fillCountdownSeconds
                 isCompact: Backend.isCompact
+                isBusy: Backend.isBusy
 
                 onAddClicked: {
                     accountDlg.dialogTitle = "Add Account";

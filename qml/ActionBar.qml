@@ -26,6 +26,7 @@ RowLayout {
     property bool isFillArmed: false
     property int fillCountdownSeconds: 0
     property bool isCompact: false
+    property bool isBusy: false
 
     signal addClicked()
     signal editClicked()
