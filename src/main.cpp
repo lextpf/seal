@@ -642,7 +642,7 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
 // Process the "seal" input file (a text file named literally "seal" in the cwd).
 // It contains paths/hex tokens, one per line, terminated by '?' or '!'.
 // This runs once at startup as a batch before the interactive loop begins.
-static void processSageFileBatch(seal::DPAPIGuard<seal::basic_secure_string<wchar_t>>& dpapi,
+static void processSealFileBatch(seal::DPAPIGuard<seal::basic_secure_string<wchar_t>>& dpapi,
                                  seal::basic_secure_string<wchar_t>& password)
 {
     std::ifstream fin("seal");
@@ -662,7 +662,7 @@ static void processSageFileBatch(seal::DPAPIGuard<seal::basic_secure_string<wcha
 // Re-read the "seal" input file on Esc press. Only processes the file if it
 // contains actual file/directory paths (not raw hex), acting as a quick
 // re-encrypt/re-decrypt shortcut before exiting the interactive loop.
-static bool handleEscSageFile(seal::DPAPIGuard<seal::basic_secure_string<wchar_t>>& dpapi,
+static bool handleEscSealFile(seal::DPAPIGuard<seal::basic_secure_string<wchar_t>>& dpapi,
                               seal::basic_secure_string<wchar_t>& password)
 {
     std::ifstream fin("seal");
@@ -704,7 +704,7 @@ static int handleCliMode()
         // 2. Enter the interactive loop where the user types/pastes lines
         //    terminated by '?' (masked output) or '!' (uncensored output).
         // 3. On Esc, re-read the "seal" file one more time, then exit cleanly.
-        processSageFileBatch(dpapi, password);
+        processSealFileBatch(dpapi, password);
 
         std::cout << "+----------------------------------------- seal - Interactive Mode "
                      "-----------------------------------------+\n";
@@ -720,7 +720,7 @@ static int handleCliMode()
             std::pair<std::vector<std::string>, bool> batch;
             if (!seal::readBulkLinesDualOrEsc(batch))
             {
-                (void)handleEscSageFile(dpapi, password);
+                (void)handleEscSealFile(dpapi, password);
                 return 0;
             }
             if (batch.first.empty())
