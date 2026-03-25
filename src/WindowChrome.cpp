@@ -155,6 +155,12 @@ void InstallWindowChrome(HWND hwnd)
     MARGINS margins{-1, -1, -1, -1};
     DwmExtendFrameIntoClientArea(hwnd, &margins);
 
+    // Disable the system backdrop so no accent/glass color bleeds through
+    // the rounded corner pixels where DWM clips the client area.
+    static constexpr DWORD DWMWA_SYSTEMBACKDROP_TYPE = 38;
+    DWORD backdropNone = 1;  // DWMSBT_NONE
+    DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdropNone, sizeof(backdropNone));
+
     // Request rounded window corners from the DWM compositor.
     static constexpr DWORD DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     DWORD cornerPref = 2;  // DWMWCP_ROUND

@@ -9,10 +9,11 @@ import QtQuick.Controls.impl as Impl
 // at render time, allowing a single monochrome SVG asset to be reused across
 // themes and states (normal, hover, disabled, accent, etc.).
 //
-// sourceSize is locked to width x height so the SVG rasterizes at the exact
-// display size - no blurry upscaling or wasted overdraw from oversized textures.
+// sourceSize is scaled by the device pixel ratio so the SVG rasterizes at
+// native pixel density - sharp on HiDPI displays, no overdraw on 1x screens.
 
 Impl.IconImage {
-    sourceSize: Qt.size(width, height)
+    sourceSize: Qt.size(width * Screen.devicePixelRatio,
+                        height * Screen.devicePixelRatio)
     fillMode: Image.PreserveAspectFit
 }

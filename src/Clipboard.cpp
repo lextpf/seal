@@ -5,6 +5,7 @@
 #include <tlhelp32.h>
 
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cstring>
 #include <mutex>
@@ -241,16 +242,31 @@ bool Clipboard::copyInputFile()
 std::atomic<LONGLONG> s_CallNextDuration{0};
 std::atomic<bool> s_HookFired{false};
 
+// Thin wrapper that returns the performance counter as a plain long long,
+// avoiding direct LARGE_INTEGER::QuadPart union access (type-punning).
+inline long long perfCounter()
+{
+    LARGE_INTEGER v;
+    QueryPerformanceCounter(&v);
+    return std::bit_cast<long long>(v);
+}
+
+inline long long perfFrequency()
+{
+    LARGE_INTEGER v;
+    QueryPerformanceFrequency(&v);
+    return std::bit_cast<long long>(v);
+}
+
 // Temporary WH_KEYBOARD_LL callback that times only CallNextHookEx.
 // If we are the only hook in the chain, CallNextHookEx returns in <0.1ms.
 // Any third-party hook adds its processing time to the measured delta.
 static LRESULT CALLBACK MeasureHookProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
-    LARGE_INTEGER before, after;
-    QueryPerformanceCounter(&before);
+    long long before = perfCounter();
     LRESULT r = CallNextHookEx(nullptr, nCode, wParam, lParam);
-    QueryPerformanceCounter(&after);
-    s_CallNextDuration.store(after.QuadPart - before.QuadPart, std::memory_order_relaxed);
+    long long after = perfCounter();
+    s_CallNextDuration.store(after - before, std::memory_order_relaxed);
     s_HookFired.store(true, std::memory_order_release);
     return r;
 }
@@ -284,8 +300,7 @@ static bool isKeyboardHookPresent()
     // use the median to filter scheduling jitter. An empty chain returns
     // in <0.1ms; a threshold of 2ms provides 20x headroom while catching
     // any hook that does meaningful work (disk I/O, IPC, network).
-    LARGE_INTEGER freq{};
-    QueryPerformanceFrequency(&freq);
+    long long freq = perfFrequency();
 
     HHOOK hHook = SetWindowsHookExW(WH_KEYBOARD_LL, MeasureHookProc, nullptr, 0);
     if (!hHook)
@@ -324,7 +339,7 @@ static bool isKeyboardHookPresent()
         {
             samples[validSamples++] =
                 static_cast<double>(s_CallNextDuration.load(std::memory_order_relaxed)) * 1000.0 /
-                static_cast<double>(freq.QuadPart);
+                static_cast<double>(freq);
         }
     }
 

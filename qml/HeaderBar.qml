@@ -50,22 +50,21 @@ Item {
     // App identity icon. Clicking triggers a sonar-pulse rainbow easter egg:
     // a ring expands outward from the icon while its color sweeps through
     // the spectrum, then returns to the theme accent.
-    SvgIcon {
-        id: narwhalIcon
-        source: Theme.iconNarwhal
-        width: Theme.px(32)
-        height: Theme.px(32)
-        color: Theme.accent
-
-        property bool active: false
+    //
+    // Wrapped in an Item so the rings (siblings before the icon) render
+    // behind the narwhal silhouette instead of on top of it.
+    Item {
+        Layout.preferredWidth: narwhalIcon.width
+        Layout.preferredHeight: narwhalIcon.height
 
         // Sonar rings - GPU-rendered vector arcs via QtQuick.Shapes.
         // Each ring is a donut (two concentric circular paths with OddEvenFill)
         // filled with a conic gradient. No Canvas rasterization, no onPaint -
         // the scene graph handles anti-aliasing natively.
+        // Declared before the icon so they render behind it.
         Shape {
             id: ringWarm
-            anchors.centerIn: parent
+            anchors.centerIn: narwhalIcon
             width: 0; height: width; opacity: 0
             readonly property real strokeW: 4.5
             readonly property real outerR: Math.max(1, width / 2)
@@ -98,7 +97,7 @@ Item {
         }
         Shape {
             id: ringMid
-            anchors.centerIn: parent
+            anchors.centerIn: narwhalIcon
             width: 0; height: width; opacity: 0
             readonly property real strokeW: 3.0
             readonly property real outerR: Math.max(1, width / 2)
@@ -131,7 +130,7 @@ Item {
         }
         Shape {
             id: ringCool
-            anchors.centerIn: parent
+            anchors.centerIn: narwhalIcon
             width: 0; height: width; opacity: 0
             readonly property real strokeW: 2.0
             readonly property real outerR: Math.max(1, width / 2)
@@ -163,66 +162,133 @@ Item {
             }
         }
 
-        // Conic aurora gradient overlay masked to the narwhal silhouette.
-        // A Shape renders the gradient (GPU, no rasterization), and
-        // MultiEffect masks it to the SVG icon's alpha channel.
-        Item {
-            id: auroraGradient
+        SvgIcon {
+            id: narwhalIcon
+            source: Theme.iconNarwhal
+            width: Theme.px(32)
+            height: Theme.px(32)
+            color: Theme.accent
             anchors.centerIn: parent
-            width: parent.width; height: parent.height
-            visible: false
-            layer.enabled: true; layer.smooth: true
-            layer.textureSize: Qt.size(Math.max(1, width * 5), Math.max(1, height * 5))
 
-            Shape {
-                anchors.fill: parent
-                ShapePath {
-                    strokeWidth: -1
-                    fillGradient: ConicalGradient {
-                        centerX: auroraGradient.width / 2
-                        centerY: auroraGradient.height / 2
-                        angle: 30
-                        GradientStop { position: 0.00; color: "#00ff88" }
-                        GradientStop { position: 0.15; color: "#00ddcc" }
-                        GradientStop { position: 0.30; color: "#4488ff" }
-                        GradientStop { position: 0.50; color: "#aa44ff" }
-                        GradientStop { position: 0.70; color: "#ff44aa" }
-                        GradientStop { position: 0.85; color: "#ff8844" }
-                        GradientStop { position: 1.00; color: "#00ff88" }
+            property bool active: false
+            readonly property real auroraTextureScale: Math.max(4, Screen.devicePixelRatio * 4)
+            property real auroraShift: -0.22
+            property real sheenShift: -0.18
+
+            // Keep the effect low-frequency and directional so it still reads
+            // cleanly at 32 px; the base icon provides the silhouette detail.
+            Item {
+                id: auroraGradient
+                anchors.centerIn: parent
+                width: parent.width; height: parent.height
+                visible: false
+                layer.enabled: true; layer.samples: 4; layer.smooth: true; layer.mipmap: true
+                layer.textureSize: Qt.size(Math.max(1, Math.ceil(width * narwhalIcon.auroraTextureScale)),
+                                           Math.max(1, Math.ceil(height * narwhalIcon.auroraTextureScale)))
+
+                Shape {
+                    anchors.fill: parent
+                    ShapePath {
+                        strokeWidth: -1
+                        fillGradient: LinearGradient {
+                            x1: auroraGradient.width * (-0.20 + narwhalIcon.auroraShift)
+                            y1: auroraGradient.height * 0.08
+                            x2: auroraGradient.width * (0.95 + narwhalIcon.auroraShift)
+                            y2: auroraGradient.height * 0.95
+                            GradientStop { position: 0.00; color: Qt.rgba(0.05, 0.98, 0.78, 0.00) }
+                            GradientStop { position: 0.20; color: Qt.rgba(0.05, 0.98, 0.78, 0.16) }
+                            GradientStop { position: 0.50; color: Qt.rgba(0.10, 0.78, 1.00, 0.34) }
+                            GradientStop { position: 0.78; color: Qt.rgba(0.68, 0.30, 1.00, 0.28) }
+                            GradientStop { position: 1.00; color: Qt.rgba(0.95, 0.34, 0.82, 0.00) }
+                        }
+                        startX: 0; startY: 0
+                        PathLine { x: auroraGradient.width; y: 0 }
+                        PathLine { x: auroraGradient.width; y: auroraGradient.height }
+                        PathLine { x: 0; y: auroraGradient.height }
+                        PathLine { x: 0; y: 0 }
                     }
-                    startX: 0; startY: 0
-                    PathLine { x: auroraGradient.width; y: 0 }
-                    PathLine { x: auroraGradient.width; y: auroraGradient.height }
-                    PathLine { x: 0; y: auroraGradient.height }
-                    PathLine { x: 0; y: 0 }
+
+                    ShapePath {
+                        strokeWidth: -1
+                        fillGradient: LinearGradient {
+                            x1: auroraGradient.width * (0.10 + narwhalIcon.auroraShift * 0.55)
+                            y1: auroraGradient.height * -0.05
+                            x2: auroraGradient.width * (0.82 + narwhalIcon.auroraShift * 0.55)
+                            y2: auroraGradient.height * 1.05
+                            GradientStop { position: 0.00; color: Qt.rgba(0.10, 1.00, 0.84, 0.00) }
+                            GradientStop { position: 0.38; color: Qt.rgba(0.10, 1.00, 0.84, 0.00) }
+                            GradientStop { position: 0.58; color: Qt.rgba(0.16, 0.96, 0.92, 0.18) }
+                            GradientStop { position: 0.80; color: Qt.rgba(0.94, 0.52, 0.74, 0.20) }
+                            GradientStop { position: 1.00; color: Qt.rgba(0.94, 0.52, 0.74, 0.00) }
+                        }
+                        startX: 0; startY: 0
+                        PathLine { x: auroraGradient.width; y: 0 }
+                        PathLine { x: auroraGradient.width; y: auroraGradient.height }
+                        PathLine { x: 0; y: auroraGradient.height }
+                        PathLine { x: 0; y: 0 }
+                    }
+
+                    ShapePath {
+                        strokeWidth: -1
+                        fillGradient: LinearGradient {
+                            x1: auroraGradient.width * (0.06 + narwhalIcon.sheenShift)
+                            y1: 0
+                            x2: auroraGradient.width * (0.42 + narwhalIcon.sheenShift)
+                            y2: auroraGradient.height
+                            GradientStop { position: 0.00; color: Qt.rgba(1.00, 1.00, 1.00, 0.00) }
+                            GradientStop { position: 0.42; color: Qt.rgba(1.00, 1.00, 1.00, 0.00) }
+                            GradientStop { position: 0.56; color: Qt.rgba(1.00, 1.00, 1.00, 0.28) }
+                            GradientStop { position: 0.68; color: Qt.rgba(1.00, 1.00, 1.00, 0.04) }
+                            GradientStop { position: 1.00; color: Qt.rgba(1.00, 1.00, 1.00, 0.00) }
+                        }
+                        startX: 0; startY: 0
+                        PathLine { x: auroraGradient.width; y: 0 }
+                        PathLine { x: auroraGradient.width; y: auroraGradient.height }
+                        PathLine { x: 0; y: auroraGradient.height }
+                        PathLine { x: 0; y: 0 }
+                    }
                 }
             }
-        }
 
-        Item {
-            id: auroraMask
-            anchors.centerIn: parent
-            width: parent.width; height: parent.height
-            visible: false
-            layer.enabled: true; layer.smooth: true
-            layer.textureSize: Qt.size(Math.max(1, width * 5), Math.max(1, height * 5))
+            Item {
+                id: auroraMask
+                anchors.centerIn: parent
+                width: parent.width; height: parent.height
+                visible: false
+                layer.enabled: true; layer.samples: 4; layer.smooth: true; layer.mipmap: true
+                layer.textureSize: Qt.size(Math.max(1, Math.ceil(width * narwhalIcon.auroraTextureScale)),
+                                           Math.max(1, Math.ceil(height * narwhalIcon.auroraTextureScale)))
 
-            Image {
+                Image {
+                    anchors.fill: parent
+                    source: Theme.iconNarwhal
+                    smooth: true
+                    mipmap: true
+                    fillMode: Image.PreserveAspectFit
+                    sourceSize: Qt.size(Math.max(1, Math.ceil(parent.width * narwhalIcon.auroraTextureScale)),
+                                        Math.max(1, Math.ceil(parent.height * narwhalIcon.auroraTextureScale)))
+                }
+            }
+
+            MultiEffect {
+                id: iconAurora
+                anchors.centerIn: parent
+                width: narwhalIcon.width; height: narwhalIcon.height
+                source: auroraGradient
+                maskEnabled: true
+                maskSource: auroraMask
+                visible: false
+            }
+
+            SvgIcon {
+                id: auroraSheen
                 anchors.fill: parent
                 source: Theme.iconNarwhal
-                sourceSize: Qt.size(parent.width, parent.height)
+                color: "#ffffff"
+                opacity: 0
+                visible: opacity > 0
             }
-        }
-
-        MultiEffect {
-            id: iconAurora
-            anchors.centerIn: parent
-            width: narwhalIcon.width; height: narwhalIcon.height
-            source: auroraGradient
-            maskEnabled: true
-            maskSource: auroraMask
-            visible: false
-        }
+        } // SvgIcon
 
         SequentialAnimation {
             id: easterEgg
@@ -265,13 +331,25 @@ Item {
                     }
                 }
 
-                // Conic aurora gradient on icon - smooth fade in, hold, fade out.
+                // Aurora shimmer on icon - directional sweep, then clean fade-out.
                 SequentialAnimation {
                     PropertyAction  { target: iconAurora; property: "visible"; value: true }
                     PropertyAction  { target: iconAurora; property: "opacity"; value: 0 }
-                    NumberAnimation { target: iconAurora; property: "opacity"; to: 0.5; duration: 300; easing.type: Easing.OutQuad }
-                    PauseAnimation  { duration: 2000 }
-                    NumberAnimation { target: iconAurora; property: "opacity"; to: 0; duration: 500; easing.type: Easing.InQuad }
+                    PropertyAction  { target: narwhalIcon; property: "auroraShift"; value: -0.22 }
+                    PropertyAction  { target: narwhalIcon; property: "sheenShift"; value: -0.18 }
+                    ParallelAnimation {
+                        SequentialAnimation {
+                            NumberAnimation { target: iconAurora; property: "opacity"; to: 0.85; duration: 240; easing.type: Easing.OutQuad }
+                            PauseAnimation  { duration: 1550 }
+                            NumberAnimation { target: iconAurora; property: "opacity"; to: 0; duration: 520; easing.type: Easing.InQuad }
+                        }
+                        NumberAnimation { target: narwhalIcon; property: "auroraShift"; to: 0.18; duration: 2100; easing.type: Easing.OutCubic }
+                        NumberAnimation { target: narwhalIcon; property: "sheenShift"; to: 0.24; duration: 1350; easing.type: Easing.OutQuad }
+                        SequentialAnimation {
+                            NumberAnimation { target: auroraSheen; property: "opacity"; to: 0.14; duration: 160; easing.type: Easing.OutQuad }
+                            NumberAnimation { target: auroraSheen; property: "opacity"; to: 0; duration: 900; easing.type: Easing.InQuad }
+                        }
+                    }
                     PropertyAction  { target: iconAurora; property: "visible"; value: false }
                 }
             }
@@ -285,6 +363,9 @@ Item {
                     ringMid.anchors.verticalCenterOffset     = 0;
                     ringCool.anchors.horizontalCenterOffset   = 0;
                     ringCool.anchors.verticalCenterOffset     = 0;
+                    narwhalIcon.auroraShift = -0.22;
+                    narwhalIcon.sheenShift = -0.18;
+                    auroraSheen.opacity = 0;
                 }
             }
 
@@ -294,7 +375,7 @@ Item {
         }
 
         MouseArea {
-            anchors.fill: parent
+            anchors.fill: narwhalIcon
             cursorShape: Qt.PointingHandCursor
             onClicked: {
                 if (narwhalIcon.active) return;
