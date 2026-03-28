@@ -198,13 +198,19 @@ public:
     static bool parseTriples(std::string_view plain, std::vector<seal::secure_triplet16<A>>& out);
 
     /**
-     * @brief Encrypt/decrypt all files in a directory tree.
+     * @brief Encrypt/decrypt all files in a directory tree (CLI path).
      *
      * Walks the directory with `FindFirstFileA`, skipping `.exe` and the
      * `seal` binary itself. Each file is encrypted or decrypted based on
      * its `.seal` extension and renamed in place after successful I/O.
-     * Subdirectories are processed in parallel via a fixed-size worker pool
-     * (`min(hardware_concurrency, 8)` threads, bounded task queue).
+     * Subdirectory recursion is parallelised via a fixed-size worker pool
+     * (`min(hardware_concurrency, 8)` threads, bounded task queue); files
+     * within a single directory are processed sequentially.
+     *
+     * @note This is the CLI-mode directory processor. The GUI-mode
+     *       seal::encryptDirectory() / seal::decryptDirectory() in Vault.h
+     *       use `std::filesystem::recursive_directory_iterator` in a single
+     *       thread and have different skip-lists.
      *
      * @tparam SecurePwd Secure password container.
      * @param dir      Root directory path.

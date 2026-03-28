@@ -547,10 +547,10 @@ void Cryptography::verifyPacket(std::span<const unsigned char> packet, const Sec
 
     // Process ciphertext in fixed-size chunks, discarding decrypted output.
     // GCM must see all ciphertext to compute the authentication tag, but the
-    // plaintext itself is not needed for verification. A stack-allocated scratch
-    // buffer keeps peak memory at O(1) instead of O(ciphertext_length).
+    // plaintext itself is not needed for verification. thread_local avoids
+    // consuming 64 KB of stack per call while keeping allocation cost at O(1).
     constexpr size_t VERIFY_CHUNK = 65536;
-    unsigned char scratch[VERIFY_CHUNK];
+    thread_local unsigned char scratch[VERIFY_CHUNK];
     int outlen = 0;
     size_t pos = 0;
     while (pos < ct_len)
@@ -561,7 +561,7 @@ void Cryptography::verifyPacket(std::span<const unsigned char> packet, const Sec
                      "DecryptUpdate(CT) failed");
         pos += static_cast<size_t>(chunk);
     }
-    SecureZeroMemory(scratch, sizeof(scratch));
+    SecureZeroMemory(scratch, VERIFY_CHUNK);
 
     std::vector<unsigned char> tagCopy(tag, tag + seal::cfg::TAG_LEN);
     opensslCheck(

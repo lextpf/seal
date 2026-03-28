@@ -1098,6 +1098,15 @@ bool FileOperations::decryptFileStreaming(const std::string& srcPath,
                                           const std::string& dstPath,
                                           const SecurePwd& pwd)
 {
+    // Snapshot the file's last-write time before reading so we can detect
+    // modifications between the verification pass and the write pass (TOCTOU).
+    WIN32_FILE_ATTRIBUTE_DATA fileAttrBefore{};
+    if (!GetFileAttributesExA(srcPath.c_str(), GetFileExInfoStandard, &fileAttrBefore))
+    {
+        std::cerr << "(decrypt-stream) cannot stat: " << srcPath << "\n";
+        return false;
+    }
+
     std::ifstream in(srcPath, std::ios::binary);
     if (!in)
     {
@@ -1219,6 +1228,25 @@ bool FileOperations::decryptFileStreaming(const std::string& srcPath,
                 std::cerr << "(decrypt-stream) authentication failed: " << srcPath << "\n";
                 return false;
             }
+        }
+
+        // --- TOCTOU guard: verify the file wasn't modified during pass 1 ---
+        // If another process wrote to the file between our verification and
+        // the write pass, the authentication guarantee from pass 1 is void.
+        WIN32_FILE_ATTRIBUTE_DATA fileAttrAfter{};
+        if (!GetFileAttributesExA(srcPath.c_str(), GetFileExInfoStandard, &fileAttrAfter) ||
+            fileAttrBefore.ftLastWriteTime.dwLowDateTime !=
+                fileAttrAfter.ftLastWriteTime.dwLowDateTime ||
+            fileAttrBefore.ftLastWriteTime.dwHighDateTime !=
+                fileAttrAfter.ftLastWriteTime.dwHighDateTime ||
+            fileAttrBefore.nFileSizeLow != fileAttrAfter.nFileSizeLow ||
+            fileAttrBefore.nFileSizeHigh != fileAttrAfter.nFileSizeHigh)
+        {
+            seal::Cryptography::cleanseString(key);
+            SecureZeroMemory(ctBuf.data(), ctBuf.size());
+            SecureZeroMemory(plainBuf.data(), plainBuf.size());
+            std::cerr << "(decrypt-stream) file modified during verification: " << srcPath << "\n";
+            return false;
         }
 
         // --- Pass 2: re-read and decrypt to disk (data is now authenticated) ---
