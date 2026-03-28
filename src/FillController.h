@@ -5,6 +5,7 @@
 #include <QString>
 #include <QTimer>
 
+#include <UIAutomation.h>
 #include <windows.h>
 #include <atomic>
 #include <vector>
@@ -39,23 +40,21 @@ namespace seal
  *     classDef typing fill:#4a3520,stroke:#f59e0b,color:#e2e8f0
  *
  *     Idle([Idle]):::idle
- *     AU([ArmedUsername]):::armed
- *     AP([ArmedPassword]):::armed
+ *     A([Armed]):::armed
  *     T([Typing]):::typing
  *
- *     Idle -->|arm| AU
- *     AU -->|Ctrl+Click| T
- *     AU -->|Esc / timeout| Idle
- *     T -->|username typed| AP
- *     T -->|password typed| Idle
+ *     Idle -->|arm| A
+ *     A -->|Ctrl+Click| T
+ *     A -->|Esc / timeout| Idle
+ *     T -->|one field typed| A
+ *     T -->|both fields typed| Idle
  *     T -->|error| Idle
- *     AP -->|Ctrl+Click| T
- *     AP -->|Esc / timeout| Idle
  * ```
  *
  * - **Idle** - no hooks installed, waiting for arm().
- * - **ArmedUsername** - hooks active, waiting for Ctrl+Click to type username.
- * - **ArmedPassword** - hooks active, waiting for Ctrl+Click to type password.
+ * - **Armed** - hooks active, waiting for Ctrl+Click. UIA probing auto-detects
+ *   whether the clicked field is a password input; either credential field can
+ *   be typed in any order. Bit flags track which fields have been filled.
  * - **Typing** - keystrokes being sent, hooks still installed.
  *
  * ## :material-keyboard: Modifier Keys
@@ -68,7 +67,7 @@ namespace seal
  *
  * ## :material-format-list-bulleted: Properties
  *
- * - **isArmed** (bool) - true when in ArmedUsername or ArmedPassword state
+ * - **isArmed** (bool) - true when in Armed state
  * - **fillStatusText** (QString) - human-readable status for the UI
  * - **countdownSeconds** (int) - seconds remaining before auto-cancel
  *
@@ -98,10 +97,9 @@ public:
     /// @brief Fill controller state machine states.
     enum class State
     {
-        Idle,           ///< No hooks, waiting for arm().
-        ArmedUsername,  ///< Hooks active, next Ctrl+Click types username.
-        ArmedPassword,  ///< Hooks active, next Ctrl+Click types password.
-        Typing,         ///< Keystrokes being sent to target window.
+        Idle,    ///< No hooks, waiting for arm().
+        Armed,   ///< Hooks active, waiting for Ctrl+Click to type either field.
+        Typing,  ///< Keystrokes being sent to target window.
     };
     Q_ENUM(State)
 
@@ -127,23 +125,32 @@ public:
      * @brief Arm the controller for a specific vault record.
      *
      * Installs global WH_MOUSE_LL and WH_KEYBOARD_LL hooks and transitions
-     * to ArmedUsername. The controller borrows pointers to the records vector
+     * to Armed. The controller borrows pointers to the records vector
      * and master password (caller must keep them alive until fill completes
      * or is cancelled).
+     *
+     * A generation counter snapshot is taken at arm-time and validated before
+     * every pointer dereference in performType(). If the owner mutates the
+     * records between arm() and the actual fill, the stale generation causes
+     * the fill to cancel safely instead of dereferencing potentially-invalid
+     * pointers.
      *
      * If the controller is already armed (e.g. the user selected a different
      * record), the previous session is cancelled and hooks are reinstalled
      * for the new record.
      *
-     * @param recordIndex Index into the records vector
-     * @param records     Reference to the vault records (must outlive the fill)
-     * @param masterPw    Master password for on-demand decryption (must outlive the fill)
+     * @param recordIndex     Index into the records vector
+     * @param records         Reference to the vault records (must outlive the fill)
+     * @param masterPw        Master password for on-demand decryption (must outlive the fill)
+     * @param ownerGeneration Monotonic counter owned by the caller; incremented on every
+     *                        records/password mutation.
      * @return `true` if hooks were installed and arming succeeded.
      */
     [[nodiscard]] bool arm(
         int recordIndex,
         const std::vector<seal::VaultRecord>& records,
-        const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPw);
+        const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPw,
+        const uint64_t& ownerGeneration);
 
     /**
      * @brief Cancel the current fill operation and remove all hooks.
@@ -179,7 +186,7 @@ private slots:
      * Waits for the Ctrl key to be released (up to 2 s), performs on-demand
      * AES-256-GCM decryption of the selected record, sends keystrokes via
      * `SendInput`, and immediately wipes the plaintext. After typing the
-     * username, transitions to ArmedPassword; after the password, tears down
+     * username, remains Armed for the password; after both fields are typed, tears down
      * hooks and emits fillCompleted.
      */
     void performType();
@@ -213,8 +220,22 @@ private:
     enum class TypeTarget
     {
         Username,
-        Password
+        Password,
+        Auto,  ///< Let UIA probing decide at fill time.
     };
+
+    /// @brief Bit flags tracking which credential fields have been typed.
+    enum TypedFieldFlags : uint8_t
+    {
+        TypedNone = 0,
+        TypedUsername = 1 << 0,
+        TypedPassword = 1 << 1,
+        TypedBoth = TypedUsername | TypedPassword,
+    };
+
+    /// @brief Probe the UIA element at screen (x, y) for the IsPassword property.
+    /// @return +1 if IsPassword=TRUE, 0 if IsPassword=FALSE, -1 on probe failure.
+    int probeIsPassword(LONG x, LONG y);
 
     std::atomic<State> m_State{State::Idle};  ///< Current state machine state.
     int m_RecordIndex = -1;                   ///< Index of the armed vault record.
@@ -224,14 +245,22 @@ private:
                                     seal::locked_allocator<wchar_t>>* m_MasterPw =
         nullptr;  ///< Borrowed pointer to master password.
 
+    const uint64_t* m_OwnerGeneration = nullptr;  ///< Points to owner's generation counter.
+    uint64_t m_SnapshotGeneration = 0;  ///< Generation at arm() time; mismatch means stale.
+
     HHOOK m_MouseHook = nullptr;     ///< WH_MOUSE_LL hook handle.
     HHOOK m_KeyboardHook = nullptr;  ///< WH_KEYBOARD_LL hook handle.
 
-    QTimer m_TimeoutTimer;       ///< 1-second tick for countdown.
-    int m_RemainingSeconds = 0;  ///< Seconds until auto-cancel.
-    QString m_StatusText;        ///< Human-readable status for QML.
-    std::atomic<TypeTarget> m_PendingTarget{
-        TypeTarget::Username};  ///< Field to type on next click.
+    QTimer m_TimeoutTimer;                                      ///< 1-second tick for countdown.
+    int m_RemainingSeconds = 0;                                 ///< Seconds until auto-cancel.
+    QString m_StatusText;                                       ///< Human-readable status for QML.
+    std::atomic<TypeTarget> m_PendingTarget{TypeTarget::Auto};  ///< Field to type on next click.
+
+    std::atomic<LONG> m_ClickX{0};  ///< Screen X captured in mouseHookProc.
+    std::atomic<LONG> m_ClickY{0};  ///< Screen Y captured in mouseHookProc.
+
+    uint8_t m_TypedFields = TypedNone;  ///< Which fields have been typed so far.
+    IUIAutomation* m_UIA = nullptr;     ///< Cached UI Automation client; lazy-init in arm().
 
     static constexpr int FILL_TIMEOUT_SECONDS = 30;  ///< Max seconds to wait for user click.
 };
