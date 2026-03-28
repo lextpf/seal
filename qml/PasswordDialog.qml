@@ -12,7 +12,7 @@ import QtQuick.Layouts
 //   1. Backend emits passwordRequired() -> Main.qml opens this dialog
 //   2. User types password or clicks QR to scan from webcam
 //   3. QR scan: Backend captures text, emits qrTextReady() -> fillPassword()
-//      auto-submits the password (dialog closes, accepted(password) fires)
+//      populates the field (user can hover eye to verify before confirming)
 //   4. Manual entry: User presses OK or Enter -> dialog closes, accepted(password) fires,
 //      Main.qml calls Backend.submitPassword() which resumes the pending action
 //   5. If wrong password: Backend emits passwordRetryRequired() with error text,
@@ -29,11 +29,12 @@ Popup {
     signal accepted(string password)
     signal qrRequested()
 
-    /// Fill the password field from a QR scan and auto-submit.
+    /// Fill the password field from a QR scan (no auto-submit so the user
+    /// can hover the eye icon to verify before pressing OK or Enter).
     function fillPassword(text) {
         if (text.length > 0) {
-            root.close();
-            root.accepted(text);
+            passwordField.text = text;
+            passwordField.forceActiveFocus();
         }
     }
 
@@ -206,7 +207,7 @@ Popup {
 
             // QR button. Clicking triggers a webcam capture (Backend::requestQrCapture).
             // The dialog stays open during capture; on success the Backend emits
-            // qrTextReady() which calls fillPassword() to auto-submit.
+            // qrTextReady() which calls fillPassword() to populate the field.
             Button {
                 id: qrButton
                 onClicked: {
