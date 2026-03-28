@@ -156,8 +156,10 @@ template <std::ranges::contiguous_range Cont>
  * @ingroup Utilities
  * @param raw Input text potentially containing hex-encoded data.
  * @return Vector of hex token strings. Tokens shorter than the minimum
- *         AES-256-GCM packet size (salt + IV + tag = 88 hex chars)
- *         are discarded.
+ *         AES-256-GCM framing overhead (salt + IV + tag = 88 hex chars)
+ *         are discarded. Actual packets also contain a 4-byte AAD header,
+ *         so the true minimum packet length is 96 hex chars; this threshold
+ *         is intentionally lenient to avoid rejecting candidate tokens.
  */
 [[nodiscard]] std::vector<std::string> extractHexTokens(const std::string& raw);
 

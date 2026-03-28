@@ -26,6 +26,30 @@ namespace seal
  * CryptProtectMemory requires the buffer size to be a multiple of
  * CRYPTPROTECTMEMORY_BLOCK_SIZE. The guard pads the backing vector
  * to meet this requirement transparently.
+ *
+ * ## :material-shield-lock: Lifecycle
+ *
+ * ```mermaid
+ * ---
+ * config:
+ *   theme: dark
+ *   look: handDrawn
+ * ---
+ * stateDiagram-v2
+ *     [*] --> Detached : default ctor
+ *     [*] --> Protected : ctor(ptr)
+ *     Protected --> Unprotected : unprotect()
+ *     Unprotected --> Protected : protect() / reprotect()
+ *     Protected --> Detached : ~DPAPIGuard [unprotects first]
+ *     Unprotected --> Detached : ~DPAPIGuard
+ *     Detached --> [*]
+ * ```
+ *
+ * @note Destruction unprotects but does **not** wipe the buffer. The
+ *       caller must call `Cryptography::cleanseString()` or let the
+ *       secure string's own destructor handle wiping.
+ *
+ * @see ScopedDpapiUnprotect
  */
 template <class SecStr>
 struct DPAPIGuard

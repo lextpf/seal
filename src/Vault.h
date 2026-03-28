@@ -143,6 +143,7 @@ DecryptedCredential decryptCredentialOnDemand(
  * @param password       Password in secure wide string.
  * @param masterPassword Master password for key derivation.
  * @return Newly constructed VaultRecord with encrypted blobs.
+ * @throw std::runtime_error on OpenSSL encryption failure.
  */
 VaultRecord encryptCredential(
     const std::string& platform,
@@ -159,6 +160,9 @@ VaultRecord encryptCredential(
  * @param dirPath  Root directory path.
  * @param password Master password for key derivation.
  * @return Number of files successfully encrypted.
+ *
+ * @post Each successfully encrypted source file is **deleted** from disk.
+ *       Only the `.seal` output remains.
  */
 int encryptDirectory(
     const QString& dirPath,
@@ -173,6 +177,9 @@ int encryptDirectory(
  * @param dirPath  Root directory path.
  * @param password Master password for key derivation.
  * @return Number of files successfully decrypted.
+ *
+ * @post Each successfully decrypted `.seal` file is **deleted** from disk.
+ *       Only the plaintext output remains.
  */
 int decryptDirectory(
     const QString& dirPath,

@@ -84,8 +84,10 @@ static constexpr size_t align_up(size_t v, size_t a)
     return (v + (a - 1)) & ~(a - 1);
 }
 
-static constexpr uint32_t kMagic = 0x6C616573u;  //!< Header integrity magic ("seal")
-static constexpr uint32_t kVersion = 1u;         //!< Header version number
-static constexpr size_t kCanaryBytes = 32;       //!< Canary bytes after payload (0xD0)
+static constexpr uint32_t kMagic =
+    0x6C616573u;  //!< locked_allocator header integrity magic ("seal"); not the vault file magic.
+static constexpr uint32_t kVersion =
+    1u;  //!< locked_allocator header version; not the vault format version.
+static constexpr size_t kCanaryBytes = 32;  //!< Canary bytes after payload (0xD0)
 
 }  // namespace seal
