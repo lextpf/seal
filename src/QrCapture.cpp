@@ -123,7 +123,7 @@ seal::secure_string<> seal::captureQrFromWebcam()
     // Camera warmup: display live video for a short period so the sensor's
     // auto-exposure and auto-white-balance converge. Without this, the first
     // frames are often too dark or washed out for reliable QR detection.
-    const int cameraWarmupMs = seal::EnvIntOrDefault("TESS_CAMERA_WARMUP_MS", 250, 0, 5000);
+    const int cameraWarmupMs = seal::EnvIntOrDefault("SEAL_CAMERA_WARMUP_MS", 250, 0, 5000);
     if (cameraWarmupMs > 0)
     {
         auto start = std::chrono::steady_clock::now();
@@ -158,7 +158,7 @@ seal::secure_string<> seal::captureQrFromWebcam()
     cv::QRCodeDetector qrDetector;
     const auto captureStart = std::chrono::steady_clock::now();
     const int captureTimeoutSec =
-        seal::EnvIntOrDefault("TESS_CAPTURE_TIMEOUT_SEC", kDefaultCaptureTimeoutSec, 5, 300);
+        seal::EnvIntOrDefault("SEAL_CAPTURE_TIMEOUT_SEC", kDefaultCaptureTimeoutSec, 5, 300);
 
     while (true)
     {

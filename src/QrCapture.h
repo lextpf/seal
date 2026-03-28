@@ -43,10 +43,10 @@ namespace seal
  *   OpenCV is active, preventing heap-spray / decompression bombs.
  * - **Frame validation** - frames exceeding 3840 px are rejected to
  *   block oversized-frame buffer overflow attacks.
- * - **Payload cap** - decoded QR data larger than 4 KiB (beyond QR
- *   v40 spec maximum) is rejected.
+ * - **Payload cap** - decoded QR data larger than 4 KiB is rejected.
+ *   This is just below the QR v40 binary-mode maximum (~4296 bytes).
  * - **Timeout** - the detection loop auto-cancels after 60s
- *   (configurable via `TESS_CAPTURE_TIMEOUT_SEC`, range 5-300s).
+ *   (configurable via `SEAL_CAPTURE_TIMEOUT_SEC`, range 5-300s).
  * - **Minimal OpenCV build** - only core, imgproc, objdetect, videoio,
  *   and highgui modules are linked; codec libraries are stripped due to CVEs.
  *
@@ -58,9 +58,9 @@ namespace seal
  * after copying into the `secure_string`.
  *
  * Configurable via environment variables:
- * - `TESS_CAMERA_WARMUP_MS` - auto-exposure warm-up period (default: 250 ms)
- * - `TESS_CAPTURE_TIMEOUT_SEC` - detection loop timeout (default: 60 s, range 5-300)
- * - `TESS_CAMERA_INDEX` - force a specific camera index instead of auto-selection
+ * - `SEAL_CAMERA_WARMUP_MS` - auto-exposure warm-up period (default: 250 ms, range 0-5000)
+ * - `SEAL_CAPTURE_TIMEOUT_SEC` - detection loop timeout (default: 60 s, range 5-300)
+ * - `SEAL_CAMERA_INDEX` - force a specific camera index instead of auto-selection
  */
 
 /**

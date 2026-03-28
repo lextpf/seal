@@ -139,21 +139,21 @@ std::vector<std::wstring> EnumerateVideoDeviceNamesDShow()
 }
 
 // Pick the best camera index using a priority cascade:
-//   1. TESS_CAMERA_INDEX env var (user override, highest priority)
+//   1. SEAL_CAMERA_INDEX env var (user override, highest priority)
 //   2. Preferred keyword match (e.g. "razer kiyo") - known-good physical webcams
 //   3. First non-virtual camera (skips OBS, Camo, DroidCam, etc.)
 //   4. Fallback to index 0
 int ChooseCameraIndexFromNames(const std::vector<std::wstring>& names, bool log)
 {
     // Priority 1: forced env override
-    if (const char* forced = std::getenv("TESS_CAMERA_INDEX"))
+    if (const char* forced = std::getenv("SEAL_CAMERA_INDEX"))
     {
         char* end = nullptr;
         long idx = std::strtol(forced, &end, 10);
         if (end != forced && *end == '\0' && idx >= 0 && idx <= 99)
         {
             if (log)
-                std::cerr << "Using TESS_CAMERA_INDEX=" << idx << "\n";
+                std::cerr << "Using SEAL_CAMERA_INDEX=" << idx << "\n";
             return (int)idx;
         }
     }
@@ -173,10 +173,10 @@ int ChooseCameraIndexFromNames(const std::vector<std::wstring>& names, bool log)
     }
 
     // Priority 2: preferred physical cameras by keyword match.
-    // Configurable via TESS_PREFERRED_CAMERA env var (comma-separated keywords).
+    // Configurable via SEAL_PREFERRED_CAMERA env var (comma-separated keywords).
     // If not set, this tier is skipped entirely.
     std::vector<std::wstring> preferredKeywords;
-    if (const char* pref = std::getenv("TESS_PREFERRED_CAMERA"))
+    if (const char* pref = std::getenv("SEAL_PREFERRED_CAMERA"))
     {
         // Parse comma-separated keywords from the env var.
         std::string raw = pref;
@@ -295,7 +295,7 @@ std::vector<int> BuildCameraPriorityList(const std::vector<std::wstring>& names,
     };
 
     int forcedIndex = -1;
-    if (TryGetEnvIndex("TESS_CAMERA_INDEX", forcedIndex))
+    if (TryGetEnvIndex("SEAL_CAMERA_INDEX", forcedIndex))
     {
         addUnique(forcedIndex);
     }
@@ -455,10 +455,10 @@ bool PickBestCamera(cv::VideoCapture& cap, cv::Mat& frame)
                                        ? preferredByName
                                        : (cameraPriority.empty() ? -1 : cameraPriority.front());
     int forcedIndex = -1;
-    const bool hasForcedIndex = TryGetEnvIndex("TESS_CAMERA_INDEX", forcedIndex);
-    const bool allowVirtualFallback = EnvFlagEnabled("TESS_ALLOW_VIRTUAL_CAMERA");
-    const bool allowObsCamera = EnvFlagEnabled("TESS_ALLOW_OBS_CAMERA");
-    const bool quickCameraSelect = !EnvFlagEnabled("TESS_DISABLE_CAMERA_QUICK_SELECT");
+    const bool hasForcedIndex = TryGetEnvIndex("SEAL_CAMERA_INDEX", forcedIndex);
+    const bool allowVirtualFallback = EnvFlagEnabled("SEAL_ALLOW_VIRTUAL_CAMERA");
+    const bool allowObsCamera = EnvFlagEnabled("SEAL_ALLOW_OBS_CAMERA");
+    const bool quickCameraSelect = !EnvFlagEnabled("SEAL_DISABLE_CAMERA_QUICK_SELECT");
 
     struct BackendTry
     {
@@ -571,7 +571,7 @@ bool PickBestCamera(cv::VideoCapture& cap, cv::Mat& frame)
             chooseOk = chooseBest([&](const CameraCandidate& c) { return c.index == forcedIndex; });
             if (!chooseOk)
             {
-                std::cerr << "Forced camera index TESS_CAMERA_INDEX=" << forcedIndex
+                std::cerr << "Forced camera index SEAL_CAMERA_INDEX=" << forcedIndex
                           << " was not available.\n";
             }
         }
@@ -608,8 +608,8 @@ bool PickBestCamera(cv::VideoCapture& cap, cv::Mat& frame)
     {
         std::cerr << "No usable camera found.\n"
                   << "Close/disable Camo and OBS Virtual Camera, then retry.\n"
-                  << "Set TESS_ALLOW_VIRTUAL_CAMERA=1 for virtual fallback.\n"
-                  << "Set TESS_ALLOW_OBS_CAMERA=1 to allow OBS.\n";
+                  << "Set SEAL_ALLOW_VIRTUAL_CAMERA=1 for virtual fallback.\n"
+                  << "Set SEAL_ALLOW_OBS_CAMERA=1 to allow OBS.\n";
         return false;
     }
 

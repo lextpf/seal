@@ -16,8 +16,8 @@ namespace seal
  * highest-scoring usable camera.
  *
  * Priority cascade:
- *   1. `TESS_CAMERA_INDEX` env var (user override)
- *   2. `TESS_PREFERRED_CAMERA` keyword match
+ *   1. `SEAL_CAMERA_INDEX` env var (user override)
+ *   2. `SEAL_PREFERRED_CAMERA` keyword match
  *   3. First non-virtual camera (skips OBS, Camo, DroidCam, etc.)
  *   4. Fallback to index 0
  *
