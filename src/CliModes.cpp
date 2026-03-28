@@ -23,11 +23,11 @@ namespace seal
 
 int HandleGenMode(int length)
 {
-    std::string password = seal::GeneratePassword(length);
+    auto password = seal::GeneratePassword(length);
 
-    std::cout << password << "\n";
+    std::cout << password.view() << "\n";
 
-    (void)seal::Clipboard::copyWithTTL(password);
+    (void)seal::Clipboard::copyWithTTL(password.data(), password.size());
     std::cerr << "(copied to clipboard)\n";
 
     seal::Cryptography::cleanseString(password);

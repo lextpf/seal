@@ -6,12 +6,11 @@
 
 #include <algorithm>
 #include <stdexcept>
-#include <string>
 
 namespace seal
 {
 
-std::string GeneratePassword(int length)
+secure_string<> GeneratePassword(int length)
 {
     length = std::clamp(length, 8, 128);
 
@@ -24,8 +23,8 @@ std::string GeneratePassword(int length)
     static constexpr unsigned char limit =
         static_cast<unsigned char>((256 / charsetLen) * charsetLen);
 
-    std::string password;
-    password.reserve(static_cast<size_t>(length));
+    secure_string<> password;
+    password.s.reserve(static_cast<size_t>(length));
 
     unsigned char rndBuf[128];
     int filled = 0;

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <string>
+#include "SecureString.h"
 
 namespace seal
 {
@@ -14,9 +14,13 @@ namespace seal
  * and common symbols (76 characters total). Length is clamped to
  * [8, 128].
  *
+ * The returned string lives in VirtualLock'd memory backed by a
+ * locked_allocator, so it will not be paged to disk.
+ *
  * @param length Desired password length (clamped to 8..128).
- * @return The generated password. Caller must cleanse after use.
+ * @return The generated password in locked memory.
+ * @throw std::runtime_error if `RAND_bytes` fails.
  */
-[[nodiscard]] std::string GeneratePassword(int length);
+[[nodiscard]] secure_string<> GeneratePassword(int length);
 
 }  // namespace seal

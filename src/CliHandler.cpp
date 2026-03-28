@@ -79,11 +79,12 @@ bool HandleCliBuiltin(const QString& command, const CliCallbacks& cb)
             }
         }
 
-        std::string password = seal::GeneratePassword(length);
+        auto password = seal::GeneratePassword(length);
 
-        (void)seal::Clipboard::copyWithTTL(password);
+        (void)seal::Clipboard::copyWithTTL(password.data(), password.size());
 
-        cb.output(QString("%1  [copied]").arg(QString::fromStdString(password)));
+        cb.output(QString("%1  [copied]")
+                      .arg(QString::fromUtf8(password.data(), static_cast<int>(password.size()))));
 
         seal::Cryptography::cleanseString(password);
         return true;
