@@ -23,7 +23,6 @@
 #pragma comment(lib, "User32.lib")
 #pragma comment(lib, "Credui.lib")
 #pragma comment(lib, "Ole32.lib")
-#pragma comment(lib, "Secur32.lib")
 #pragma comment(lib, "Advapi32.lib")
 #pragma comment(lib, "Comdlg32.lib")
 #pragma comment(lib, "Crypt32.lib")
@@ -46,6 +45,27 @@ namespace seal
  * encryptPacket() / decryptPacket() implement framed AES-256-GCM with
  * scrypt key derivation. Each packet carries its own random salt and IV
  * so no external state is needed.
+ *
+ * ```mermaid
+ * ---
+ * config:
+ *   theme: dark
+ *   look: handDrawn
+ * ---
+ * flowchart LR
+ *     subgraph Encrypt
+ *         direction LR
+ *         S1["RAND salt(16)\nRAND iv(12)"] --> KDF["scrypt\n(N=2^16, r=8, p=1)"]
+ *         KDF --> ENC["AES-256-GCM\nencrypt + tag"]
+ *         ENC --> PKT["AAD | Salt | IV | CT | Tag"]
+ *     end
+ *     subgraph Decrypt
+ *         direction LR
+ *         P["parse\nfixed fields"] --> KDF2["scrypt\n(same params)"]
+ *         KDF2 --> DEC["AES-256-GCM\ndecrypt + verify"]
+ *         DEC --> PT["plaintext"]
+ *     end
+ * ```
  *
  * ## :material-shield: Process Hardening
  *
@@ -119,7 +139,7 @@ public:
     ///       the process calls `TerminateProcess` followed by `__fastfail`.
     static void detectDebugger();
 
-    /// @brief Trim the working set via `SetProcessWorkingSetSize(-1, -1)`.
+    /// @brief Trim the working set via `EmptyWorkingSet()`.
     /// @post Dirty pages containing decrypted secrets are flushed from
     ///       physical RAM, reducing the window for cold-boot or swap-file recovery.
     static void trimWorkingSet();

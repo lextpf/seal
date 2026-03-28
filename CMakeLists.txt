@@ -118,16 +118,17 @@ set(WINDOWS_LIBS
     User32
     Credui
     Ole32
-    Secur32
+    oleaut32
+    Oleacc
     Advapi32
     Comdlg32
     Crypt32
     dwmapi
 )
 
-# Static OpenCV videoio (MSMF backend) and COM interop require these.
+# Static OpenCV videoio (MSMF backend) requires these.
 if(VCPKG_TARGET_TRIPLET MATCHES "static")
-    list(APPEND WINDOWS_LIBS oleaut32 mf mfplat mfreadwrite mfuuid shlwapi)
+    list(APPEND WINDOWS_LIBS mf mfplat mfreadwrite mfuuid shlwapi)
 endif()
 
 set(SEAL_SOURCES
@@ -222,6 +223,7 @@ qt_add_qml_module(seal
         qml/PasswordDialog.qml
         qml/RippleEffect.qml
         qml/SvgIcon.qml
+        qml/TintedButton.qml
         qml/CliPanel.qml
     RESOURCES
         "assets/fonts/b0a4eabe-5fe5-41e3-8dc3-2df2b82ec4eb.ttf"
