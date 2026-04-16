@@ -168,7 +168,13 @@ RowLayout {
 
             Behavior on border.color { ColorAnimation { duration: Theme.hoverDuration } }
 
-            RippleEffect { id: fillRipple; baseColor: root.isFillArmed ? Qt.rgba(Theme.fillArmedDot.r, Theme.fillArmedDot.g, Theme.fillArmedDot.b, 0.30) : Qt.rgba(Theme.btnFillText.r, Theme.btnFillText.g, Theme.btnFillText.b, 0.30) }
+            RippleEffect {
+                id: fillRipple
+                baseColor: root.isFillArmed
+                    ? Qt.rgba(Theme.fillArmedDot.r, Theme.fillArmedDot.g, Theme.fillArmedDot.b, 0.30)
+                    : Qt.rgba(Theme.btnFillText.r, Theme.btnFillText.g, Theme.btnFillText.b, 0.30)
+                cornerRadius: parent.radius
+            }
         }
         onPressed: fillRipple.trigger(fillHover.point.position.x, fillHover.point.position.y)
     }

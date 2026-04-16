@@ -74,7 +74,11 @@ Button {
 
         Behavior on border.color { ColorAnimation { duration: Theme.hoverDuration } }
 
-        RippleEffect { id: btnRipple; baseColor: Qt.rgba(root.tintText.r, root.tintText.g, root.tintText.b, 0.30) }
+        RippleEffect {
+            id: btnRipple
+            baseColor: Qt.rgba(root.tintText.r, root.tintText.g, root.tintText.b, 0.30)
+            cornerRadius: parent.radius
+        }
     }
     onPressed: btnRipple.trigger(btnHover.point.position.x, btnHover.point.position.y)
 }
