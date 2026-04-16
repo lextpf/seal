@@ -35,6 +35,35 @@ Rectangle {
     border.color: Theme.borderSubtle
     clip: true
 
+    Rectangle {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: 1
+        color: Theme.surfaceHighlight
+        opacity: 0.7
+    }
+
+    Rectangle {
+        width: parent.width * 0.40
+        height: parent.height * 0.30
+        radius: width / 2
+        x: parent.width * 0.56
+        y: -height * 0.35
+        color: Theme.surfaceGlow
+        opacity: 0.20
+    }
+
+    Rectangle {
+        width: parent.width * 0.36
+        height: parent.height * 0.26
+        radius: width / 2
+        x: parent.width * -0.06
+        y: parent.height * 0.62
+        color: Theme.surfaceGlow
+        opacity: 0.10
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0

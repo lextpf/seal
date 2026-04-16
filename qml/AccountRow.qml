@@ -22,6 +22,7 @@ Item {
     required property int recordIndex     // Stable index into Backend::m_Records
     required property bool selected       // Driven by parent's selectedRow binding
     property bool isHovered: mouseArea.containsMouse
+    readonly property real contentShift: root.selected ? 2 : root.isHovered ? 1 : 0.0
 
     signal clicked()
 
@@ -39,6 +40,29 @@ Item {
         border.width: 0
 
         Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
+
+        Rectangle {
+            anchors.fill: parent
+            opacity: root.selected ? 0.58 : root.isHovered ? 0.72 : 0.0
+            gradient: Gradient {
+                orientation: Gradient.Horizontal
+                GradientStop { position: 0.00; color: Theme.rowSpotlightEdge }
+                GradientStop { position: 0.22; color: Theme.rowSpotlight }
+                GradientStop { position: 0.54; color: Theme.rowSpotlightEdge }
+                GradientStop { position: 1.00; color: Theme.rowSpotlightEdge }
+            }
+            Behavior on opacity { NumberAnimation { duration: Theme.hoverDuration } }
+        }
+
+        Rectangle {
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            height: 1
+            color: Theme.surfaceHighlight
+            opacity: root.selected ? 0.50 : root.isHovered ? 0.22 : 0.05
+            Behavior on opacity { NumberAnimation { duration: Theme.hoverDuration } }
+        }
 
         // Selection glow pair (top + bottom). A 3px gradient fading from the
         // selection accent color to transparent creates a soft "lit edge" effect
@@ -73,15 +97,17 @@ Item {
             }
         }
 
-        // Left accent stripe for selected row
+        // Hover/selection rail on the left edge. Hover gets a slim rail;
+        // selection widens and switches to the brighter stripe token.
         Rectangle {
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             anchors.left: parent.left
-            width: 3
-            color: Theme.selectionStripe
-            opacity: root.selected ? 1.0 : 0.0
-            Behavior on opacity { NumberAnimation { duration: 200 } }
+            width: root.selected ? 4 : root.isHovered ? 2 : 0
+            color: root.selected ? Theme.selectionStripe : Theme.rowHoverRail
+            opacity: root.selected || root.isHovered ? 1.0 : 0.0
+            Behavior on width { NumberAnimation { duration: Theme.hoverDuration } }
+            Behavior on opacity { NumberAnimation { duration: Theme.hoverDuration } }
         }
 
         // Row separator
@@ -93,44 +119,52 @@ Item {
             color: Theme.borderDim
         }
 
-        RowLayout {
+        Item {
+            id: contentWrap
             anchors.fill: parent
             anchors.leftMargin: 14
             anchors.rightMargin: 14
-            spacing: 0
+            property real shift: root.contentShift
+            transform: Translate { x: contentWrap.shift }
+            Behavior on shift { NumberAnimation { duration: Theme.hoverDuration; easing.type: Easing.OutCubic } }
 
-            // Platform name in accent color so the user can quickly scan the
-            // list for a specific service. Brightens on hover for feedback.
-            Text {
-                Layout.preferredWidth: 200
-                text: root.platform
-                font.family: Theme.fontFamily
-                font.pixelSize: Theme.fontSizeMedium
-                color: root.isHovered ? Theme.accentBright : Theme.accent
-                elide: Text.ElideRight
-                Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
-            }
+            RowLayout {
+                anchors.fill: parent
+                spacing: 0
 
-            // Monospace font ensures masked characters ("********") align
-            // consistently across rows regardless of the underlying value length.
-            // Each column uses its own accent family (teal for username, rose/violet
-            // for password) so the three data domains are visually distinct.
-            Text {
-                Layout.preferredWidth: 200
-                text: root.maskedUsername
-                font.family: Theme.fontMono
-                font.pixelSize: Theme.fontSizeMedium
-                color: root.isHovered ? Theme.accent2 : Theme.accent2Dim
-                Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
-            }
+                // Platform name in accent color so the user can quickly scan the
+                // list for a specific service. Brightens on hover for feedback.
+                Text {
+                    Layout.preferredWidth: 200
+                    text: root.platform
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeMedium
+                    color: root.selected || root.isHovered ? Theme.accentBright : Theme.accent
+                    elide: Text.ElideRight
+                    Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
+                }
 
-            Text {
-                Layout.fillWidth: true
-                text: root.maskedPassword
-                font.family: Theme.fontMono
-                font.pixelSize: Theme.fontSizeMedium
-                color: root.isHovered ? Theme.accent3 : Theme.accent3Dim
-                Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
+                // Monospace font ensures masked characters ("********") align
+                // consistently across rows regardless of the underlying value length.
+                // Each column uses its own accent family (teal for username, rose/violet
+                // for password) so the three data domains are visually distinct.
+                Text {
+                    Layout.preferredWidth: 200
+                    text: root.maskedUsername
+                    font.family: Theme.fontMono
+                    font.pixelSize: Theme.fontSizeMedium
+                    color: root.selected || root.isHovered ? Theme.accent2 : Theme.accent2Dim
+                    Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: root.maskedPassword
+                    font.family: Theme.fontMono
+                    font.pixelSize: Theme.fontSizeMedium
+                    color: root.selected || root.isHovered ? Theme.accent3 : Theme.accent3Dim
+                    Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
+                }
             }
         }
 
