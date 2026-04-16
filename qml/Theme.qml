@@ -11,8 +11,8 @@ import QtCore
 // via Qt Settings so it survives application restarts.
 //
 // Color philosophy:
-//   Dark mode  = deep blue-black base with blue/purple accents
-//   Light mode = bright cream-white base with amber/brown accents
+//   Dark mode  = deep navy-black base with blue/purple accents
+//   Light mode = bright cool-white base with cobalt/teal accents
 // Semi-transparent fills (alpha < 1) let the background blobs bleed through
 // for a layered glass-like depth effect.
 
@@ -69,44 +69,64 @@ QtObject {
 
     // -- Background layers --
     // Semi-transparent bgCard lets background blobs bleed through for depth.
-    property color bgDeep:            pick("#070810", "#f8f6f2")
-    property color bgSurface:         pick("#0c0e18", "#f2f0ec")
-    property color bgCard:            pick(Qt.rgba(0.04, 0.05, 0.10, 0.78), Qt.rgba(0.99, 0.98, 0.96, 0.88))
-    property color bgCardEnd:         pick(Qt.rgba(0.03, 0.04, 0.09, 0.86), Qt.rgba(0.96, 0.95, 0.92, 0.92))
-    property color bgDialog:          pick("#141828", "#fbfaf6")
-    property color bgInput:           pick(Qt.rgba(0.03, 0.04, 0.09, 0.92), Qt.rgba(1.0, 0.99, 0.98, 0.92))
-    property color bgInputFocus:      pick(Qt.rgba(0.05, 0.07, 0.14, 0.96), Qt.rgba(1.0, 0.99, 0.98, 0.96))
-    property color bgOverlay:         pick(Qt.rgba(0.01, 0.02, 0.04, 0.58), Qt.rgba(0.18, 0.16, 0.12, 0.38))
-    property color bgHover:           pick(Qt.rgba(0.08, 0.10, 0.22, 0.50), Qt.rgba(0.50, 0.42, 0.28, 0.08))
-    property color bgTableHeader:     pick(Qt.rgba(0.02, 0.03, 0.06, 0.65), Qt.rgba(0.99, 0.98, 0.96, 0.72))
-    property color bgTableHeaderEdge: pick(Qt.rgba(0.06, 0.08, 0.18, 0.97), Qt.rgba(0.96, 0.94, 0.90, 0.97))
-    property color bgTableHeaderTop:  pick(Qt.rgba(0.03, 0.05, 0.10, 0.97), Qt.rgba(0.98, 0.96, 0.94, 0.97))
-    property color bgTableHeaderEnd:  pick(Qt.rgba(0.02, 0.04, 0.08, 0.98), Qt.rgba(0.96, 0.95, 0.92, 0.98))
-    property color bgTooltip:         pick("#1a2040", "#342e24")
-    property color bgBadge:           pick(Qt.rgba(0.10, 0.12, 0.24, 0.84), Qt.rgba(0.92, 0.90, 0.86, 0.85))
+    property color bgDeep:            pick("#060a14", "#f8fafc")
+    property color bgSurface:         pick("#0a101c", "#f0f5fa")
+    property color bgCard:            pick(Qt.rgba(0.03, 0.06, 0.12, 0.78), Qt.rgba(0.96, 0.98, 0.99, 0.88))
+    property color bgCardEnd:         pick(Qt.rgba(0.02, 0.05, 0.11, 0.86), Qt.rgba(0.93, 0.95, 0.97, 0.92))
+    property color bgDialog:          pick("#101828", "#fafbfd")
+    property color bgInput:           pick(Qt.rgba(0.02, 0.05, 0.11, 0.92), Qt.rgba(0.98, 0.99, 1.0, 0.92))
+    property color bgInputFocus:      pick(Qt.rgba(0.04, 0.07, 0.15, 0.96), Qt.rgba(0.98, 0.99, 1.0, 0.96))
+    property color bgOverlay:         pick(Qt.rgba(0.01, 0.02, 0.05, 0.58), Qt.rgba(0.10, 0.14, 0.22, 0.38))
+    property color bgHover:           pick(Qt.rgba(0.06, 0.10, 0.24, 0.50), Qt.rgba(0.26, 0.36, 0.52, 0.08))
+    property color bgTableHeader:     pick(Qt.rgba(0.02, 0.04, 0.08, 0.65), Qt.rgba(0.96, 0.98, 0.99, 0.72))
+    property color bgTableHeaderEdge: pick(Qt.rgba(0.04, 0.08, 0.20, 0.97), Qt.rgba(0.92, 0.95, 0.98, 0.97))
+    property color bgTableHeaderTop:  pick(Qt.rgba(0.02, 0.05, 0.12, 0.97), Qt.rgba(0.95, 0.97, 0.99, 0.97))
+    property color bgTableHeaderEnd:  pick(Qt.rgba(0.02, 0.04, 0.10, 0.98), Qt.rgba(0.93, 0.95, 0.98, 0.98))
+    property color bgTooltip:         pick("#162040", "#28354a")
+    property color bgBadge:           pick(Qt.rgba(0.08, 0.12, 0.26, 0.84), Qt.rgba(0.88, 0.91, 0.95, 0.85))
 
-    property color bgHeaderTop:       pick(Qt.rgba(0.06, 0.08, 0.16, 0.96), Qt.rgba(0.96, 0.94, 0.90, 0.96))
-    property color bgHeaderEnd:       pick(Qt.rgba(0.04, 0.06, 0.14, 0.98), Qt.rgba(0.94, 0.92, 0.88, 0.98))
-    property color bgFooterTop:       pick(Qt.rgba(0.03, 0.05, 0.10, 0.96), Qt.rgba(0.94, 0.92, 0.88, 0.96))
-    property color bgFooterEnd:       pick(Qt.rgba(0.02, 0.04, 0.08, 1.0),  Qt.rgba(0.92, 0.90, 0.86, 1.0))
+    property color bgHeaderTop:       pick(Qt.rgba(0.04, 0.08, 0.18, 0.96), Qt.rgba(0.92, 0.95, 0.98, 0.96))
+    property color bgHeaderEnd:       pick(Qt.rgba(0.03, 0.06, 0.16, 0.98), Qt.rgba(0.90, 0.93, 0.96, 0.98))
+    property color bgFooterTop:       pick(Qt.rgba(0.02, 0.05, 0.12, 0.96), Qt.rgba(0.90, 0.93, 0.96, 0.96))
+    property color bgFooterEnd:       pick(Qt.rgba(0.02, 0.04, 0.10, 1.0),  Qt.rgba(0.88, 0.91, 0.94, 1.0))
+    property color surfaceHighlight:  pick(Qt.rgba(0.74, 0.84, 1.0, 0.16), Qt.rgba(1.0, 1.0, 1.0, 0.58))
+    property color surfaceHighlightSoft:
+                                      pick(Qt.rgba(0.54, 0.68, 1.0, 0.10), Qt.rgba(0.42, 0.62, 0.98, 0.16))
+    property color surfaceGlow:       pick(Qt.rgba(0.22, 0.40, 0.98, 0.18), Qt.rgba(0.22, 0.46, 0.90, 0.10))
+    property color surfaceGlowEdge:   pick(Qt.rgba(0.22, 0.40, 0.98, 0.0),  Qt.rgba(0.22, 0.46, 0.90, 0.0))
+    property color focusSheen:        pick(Qt.rgba(0.88, 0.94, 1.0, 0.20), Qt.rgba(1.0, 1.0, 1.0, 0.40))
+    property color dialogBand:        pick(Qt.rgba(0.22, 0.38, 0.90, 0.28), Qt.rgba(0.26, 0.48, 0.90, 0.16))
+    property color dialogEdgeLight:   pick(Qt.rgba(0.80, 0.88, 1.0, 0.18), Qt.rgba(1.0, 1.0, 1.0, 0.50))
+    property color statusChipTop:     pick(Qt.rgba(0.06, 0.10, 0.22, 0.84), Qt.rgba(0.93, 0.96, 0.99, 0.90))
+    property color statusChipEnd:     pick(Qt.rgba(0.04, 0.08, 0.18, 0.90), Qt.rgba(0.88, 0.92, 0.97, 0.94))
+    property color statusChipBorder:  pick(Qt.rgba(0.36, 0.50, 0.88, 0.24), Qt.rgba(0.34, 0.48, 0.72, 0.18))
+    property color statusChipText:    pick("#b6c6e6", "#40506a")
+    property color statusChipStrongTop:
+                                      pick(Qt.rgba(0.20, 0.28, 0.08, 0.88), Qt.rgba(0.76, 0.86, 0.54, 0.92))
+    property color statusChipStrongEnd:
+                                      pick(Qt.rgba(0.16, 0.24, 0.06, 0.92), Qt.rgba(0.70, 0.80, 0.42, 0.95))
+    property color statusChipStrongBorder:
+                                      pick(Qt.rgba(0.58, 0.74, 0.18, 0.34), Qt.rgba(0.42, 0.56, 0.16, 0.28))
+    property color statusChipStrongText:
+                                      pick("#eef6c2", "#40540e")
 
     // -- Button palettes --
     // Each button type carries four gradient states: rest, hover, pressed, disabled.
     // Alpha < 1 on all fills lets the background tint show through, maintaining the
     // layered glass aesthetic. Icon buttons (Load/Save/Unload) share a single neutral
     // palette; CRUD buttons each have a unique semantic hue.
-    property color iconBtnTop:        pick(Qt.rgba(0.06, 0.08, 0.18, 0.82), Qt.rgba(0.94, 0.92, 0.88, 0.82))
-    property color iconBtnEnd:        pick(Qt.rgba(0.04, 0.06, 0.14, 0.86), Qt.rgba(0.92, 0.88, 0.84, 0.86))
-    property color iconBtnHoverTop:   pick(Qt.rgba(0.10, 0.14, 0.30, 0.90), Qt.rgba(0.88, 0.86, 0.78, 0.90))
-    property color iconBtnHoverEnd:   pick(Qt.rgba(0.08, 0.11, 0.24, 0.92), Qt.rgba(0.86, 0.82, 0.76, 0.92))
-    property color iconBtnPressed:    pick(Qt.rgba(0.04, 0.05, 0.12, 0.96), Qt.rgba(0.82, 0.78, 0.72, 0.96))
+    property color iconBtnTop:        pick(Qt.rgba(0.04, 0.08, 0.20, 0.82), Qt.rgba(0.90, 0.93, 0.96, 0.82))
+    property color iconBtnEnd:        pick(Qt.rgba(0.03, 0.06, 0.16, 0.86), Qt.rgba(0.86, 0.90, 0.94, 0.86))
+    property color iconBtnHoverTop:   pick(Qt.rgba(0.08, 0.14, 0.32, 0.90), Qt.rgba(0.82, 0.86, 0.92, 0.90))
+    property color iconBtnHoverEnd:   pick(Qt.rgba(0.06, 0.11, 0.26, 0.92), Qt.rgba(0.78, 0.84, 0.90, 0.92))
+    property color iconBtnPressed:    pick(Qt.rgba(0.03, 0.05, 0.14, 0.96), Qt.rgba(0.74, 0.80, 0.86, 0.96))
 
     // Ghost buttons (Cancel, No): low-alpha fills so they recede behind primary actions.
-    property color ghostBtnTop:       pick(Qt.rgba(0.06, 0.08, 0.18, 0.62), Qt.rgba(0.94, 0.92, 0.88, 0.62))
-    property color ghostBtnEnd:       pick(Qt.rgba(0.04, 0.06, 0.14, 0.72), Qt.rgba(0.92, 0.88, 0.84, 0.72))
-    property color ghostBtnHoverTop:  pick(Qt.rgba(0.14, 0.18, 0.38, 0.48), Qt.rgba(0.84, 0.82, 0.74, 0.48))
-    property color ghostBtnHoverEnd:  pick(Qt.rgba(0.10, 0.14, 0.32, 0.52), Qt.rgba(0.80, 0.78, 0.70, 0.52))
-    property color ghostBtnPressed:   pick(Qt.rgba(0.16, 0.18, 0.50, 0.24), Qt.rgba(0.56, 0.52, 0.44, 0.28))
+    property color ghostBtnTop:       pick(Qt.rgba(0.04, 0.08, 0.20, 0.62), Qt.rgba(0.90, 0.93, 0.96, 0.62))
+    property color ghostBtnEnd:       pick(Qt.rgba(0.03, 0.06, 0.16, 0.72), Qt.rgba(0.86, 0.90, 0.94, 0.72))
+    property color ghostBtnHoverTop:  pick(Qt.rgba(0.12, 0.18, 0.40, 0.48), Qt.rgba(0.76, 0.82, 0.88, 0.48))
+    property color ghostBtnHoverEnd:  pick(Qt.rgba(0.08, 0.14, 0.34, 0.52), Qt.rgba(0.72, 0.78, 0.86, 0.52))
+    property color ghostBtnPressed:   pick(Qt.rgba(0.14, 0.18, 0.52, 0.24), Qt.rgba(0.44, 0.52, 0.62, 0.28))
 
     // CRUD buttons: green=add, purple=edit, red=delete, yellow-green=fill.
     property color btnAddTop:         pick(Qt.rgba(0.08, 0.18, 0.20, 0.65), Qt.rgba(0.78, 0.92, 0.86, 0.78))
@@ -141,23 +161,23 @@ QtObject {
     property color btnFillText:       pick("#a0b850", "#4a6818")
     property color btnFillTextHover:  pick("#b0c860", "#385808")
 
-    property color btnDisabledTop:    pick("#141828", "#dedad2")
-    property color btnDisabledBot:    pick("#101420", "#d6d2ca")
+    property color btnDisabledTop:    pick("#101828", "#dbe2ec")
+    property color btnDisabledBot:    pick("#0e1424", "#d5dce8")
 
-    property color accent:            pick("#80b0ff", "#be6628")
-    property color accentBright:      pick("#6090ff", "#d47630")
-    property color accentDim:         pick("#5a6ea8", "#c49870")
-    property color accentSoft:        pick(Qt.rgba(0.35, 0.50, 1.0, 0.14), Qt.rgba(0.72, 0.42, 0.18, 0.12))
-    property color accentMuted:       pick("#384c78", "#d4a880")
-    property color btnGradTop:        pick("#4a7ef0", "#c46c2a")
-    property color btnGradBot:        pick("#3664d8", "#ac5e24")
-    property color btnHoverTop:       pick("#6090ff", "#dc7c34")
-    property color btnHoverBot:       pick("#4a7ef0", "#c46c2a")
-    property color btnPressTop:       pick("#2e52b8", "#925626")
-    property color btnPressBot:       pick("#2646a0", "#7a461e")
+    property color accent:            pick("#80b0ff", "#2f6fd6")
+    property color accentBright:      pick("#6090ff", "#4386f2")
+    property color accentDim:         pick("#5a6ea8", "#6d8fc2")
+    property color accentSoft:        pick(Qt.rgba(0.35, 0.50, 1.0, 0.14), Qt.rgba(0.18, 0.44, 0.86, 0.12))
+    property color accentMuted:       pick("#384c78", "#8eadd8")
+    property color btnGradTop:        pick("#4a7ef0", "#3579e6")
+    property color btnGradBot:        pick("#3664d8", "#295fca")
+    property color btnHoverTop:       pick("#6090ff", "#4a8ff5")
+    property color btnHoverBot:       pick("#4a7ef0", "#3579e6")
+    property color btnPressTop:       pick("#2e52b8", "#214fb0")
+    property color btnPressBot:       pick("#2646a0", "#1b4396")
 
-    property color accent2:           pick("#50d0cc", "#428a50")
-    property color accent2Dim:        pick("#4a8a88", "#5a7a58")
+    property color accent2:           pick("#50d0cc", "#2e8b86")
+    property color accent2Dim:        pick("#4a8a88", "#5c7f84")
 
     // Tertiary accent (rose in dark, violet in light) completing the
     // three-color system used across table columns and dialog labels.
@@ -176,68 +196,71 @@ QtObject {
 
     // -- Text colors --
     // Graduated hierarchy: primary > secondary > muted > disabled > subtle.
-    // Dark mode uses saturated blue-black; light mode uses warm cream-white.
+    // Dark mode uses saturated navy-black; light mode uses cool blue-white.
     // Grey tones are avoided in favor of hue-carrying values throughout.
-    property color textPrimary:       pick("#e0e6f4", "#1e1a12")
-    property color textSecondary:     pick("#b0b8d0", "#3e382c")
-    property color textMuted:         pick("#5868a0", "#7c7468")
-    property color textDisabled:      pick("#3a4878", "#b0a89c")
-    property color textSubtle:        pick("#6878b0", "#706858")
-    property color textIcon:          pick("#7888b8", "#605a4c")
-    property color textGhost:         pick("#a8b4d0", "#504840")
+    property color textPrimary:       pick("#e6ecf6", "#141c28")
+    property color textSecondary:     pick("#b4c0d6", "#364252")
+    property color textMuted:         pick("#5c70a8", "#687888")
+    property color textDisabled:      pick("#3e4e80", "#a0aab8")
+    property color textSubtle:        pick("#6c80b8", "#586878")
+    property color textIcon:          pick("#7c90c0", "#50607a")
+    property color textGhost:         pick("#acbad6", "#3a4860")
     property color textOnAccent:      "#ffffff"
-    property color textPlaceholder:   pick("#3a4878", "#b0a89c")
+    property color textPlaceholder:   pick("#3e4e80", "#a0aab8")
     property color textError:         pick("#ff6868", "#c83030")
     property color textSuccess:       pick("#48d878", "#187838")
     property color textWarning:       pick("#ffc040", "#c88008")
-    property color textLink:          pick("#50d0cc", "#2e7858")
-    property color textTooltip:       pick("#c0c8e0", "#ece6dc")
-    property color textBadge:         pick("#90a0c8", "#504840")
+    property color textLink:          pick("#50d0cc", "#246f7a")
+    property color textTooltip:       pick("#c6cee6", "#e0e8f2")
+    property color textBadge:         pick("#94a8d0", "#485870")
 
     // -- Borders --
     // Graduated alpha scale from borderDim (nearly invisible) to borderBright
     // (clearly visible). All share the same base hue per theme so borders look
     // cohesive regardless of intensity. Components pick the level that matches
     // their visual weight (e.g. cards use borderSubtle, focused inputs use borderFocus).
-    property color borderDim:         pick(Qt.rgba(0.35, 0.45, 0.85, 0.08), Qt.rgba(0.52, 0.44, 0.32, 0.08))
-    property color borderSoft:        pick(Qt.rgba(0.35, 0.45, 0.85, 0.12), Qt.rgba(0.52, 0.44, 0.32, 0.13))
-    property color borderSubtle:      pick(Qt.rgba(0.35, 0.45, 0.85, 0.15), Qt.rgba(0.52, 0.44, 0.32, 0.16))
-    property color borderInput:       pick(Qt.rgba(0.30, 0.42, 0.80, 0.20), Qt.rgba(0.48, 0.42, 0.32, 0.22))
-    property color borderMedium:      pick(Qt.rgba(0.35, 0.45, 0.85, 0.22), Qt.rgba(0.52, 0.44, 0.32, 0.24))
-    property color borderBtn:         pick(Qt.rgba(0.35, 0.45, 0.85, 0.24), Qt.rgba(0.52, 0.44, 0.32, 0.28))
-    property color borderHover:       pick(Qt.rgba(0.35, 0.45, 0.85, 0.28), Qt.rgba(0.52, 0.44, 0.32, 0.34))
-    property color borderHighlight:   pick(Qt.rgba(0.35, 0.45, 0.85, 0.32), Qt.rgba(0.52, 0.44, 0.32, 0.40))
-    property color borderBright:      pick(Qt.rgba(0.35, 0.45, 0.85, 0.42), Qt.rgba(0.52, 0.44, 0.32, 0.48))
-    property color borderPressed:     pick(Qt.rgba(0.30, 0.35, 0.80, 0.35), Qt.rgba(0.50, 0.38, 0.24, 0.32))
-    property color borderFocusHover:  pick(Qt.rgba(0.30, 0.35, 0.80, 0.45), Qt.rgba(0.50, 0.38, 0.24, 0.42))
-    property color borderFocus:       pick(Qt.rgba(0.30, 0.35, 0.80, 0.72), Qt.rgba(0.50, 0.38, 0.24, 0.62))
-    property color divider:           pick(Qt.rgba(0.35, 0.45, 0.85, 0.10), Qt.rgba(0.52, 0.44, 0.32, 0.10))
+    property color borderDim:         pick(Qt.rgba(0.35, 0.45, 0.85, 0.08), Qt.rgba(0.30, 0.42, 0.58, 0.08))
+    property color borderSoft:        pick(Qt.rgba(0.35, 0.45, 0.85, 0.12), Qt.rgba(0.30, 0.42, 0.58, 0.13))
+    property color borderSubtle:      pick(Qt.rgba(0.35, 0.45, 0.85, 0.15), Qt.rgba(0.30, 0.42, 0.58, 0.16))
+    property color borderInput:       pick(Qt.rgba(0.30, 0.42, 0.80, 0.20), Qt.rgba(0.26, 0.40, 0.56, 0.22))
+    property color borderMedium:      pick(Qt.rgba(0.35, 0.45, 0.85, 0.22), Qt.rgba(0.30, 0.42, 0.58, 0.24))
+    property color borderBtn:         pick(Qt.rgba(0.35, 0.45, 0.85, 0.24), Qt.rgba(0.30, 0.42, 0.58, 0.28))
+    property color borderHover:       pick(Qt.rgba(0.35, 0.45, 0.85, 0.28), Qt.rgba(0.30, 0.42, 0.58, 0.34))
+    property color borderHighlight:   pick(Qt.rgba(0.35, 0.45, 0.85, 0.32), Qt.rgba(0.30, 0.42, 0.58, 0.40))
+    property color borderBright:      pick(Qt.rgba(0.35, 0.45, 0.85, 0.42), Qt.rgba(0.30, 0.42, 0.58, 0.48))
+    property color borderPressed:     pick(Qt.rgba(0.30, 0.35, 0.80, 0.35), Qt.rgba(0.22, 0.36, 0.56, 0.32))
+    property color borderFocusHover:  pick(Qt.rgba(0.30, 0.35, 0.80, 0.45), Qt.rgba(0.22, 0.36, 0.56, 0.42))
+    property color borderFocus:       pick(Qt.rgba(0.30, 0.35, 0.80, 0.72), Qt.rgba(0.22, 0.36, 0.56, 0.62))
+    property color divider:           pick(Qt.rgba(0.35, 0.45, 0.85, 0.10), Qt.rgba(0.30, 0.42, 0.58, 0.10))
 
-    property color rowAlt:            pick(Qt.rgba(0.06, 0.08, 0.18, 0.32), Qt.rgba(0.48, 0.42, 0.32, 0.05))
+    property color rowAlt:            pick(Qt.rgba(0.04, 0.08, 0.20, 0.32), Qt.rgba(0.30, 0.40, 0.55, 0.05))
+    property color rowSpotlight:      pick(Qt.rgba(0.62, 0.78, 1.0, 0.12), Qt.rgba(1.0, 1.0, 1.0, 0.26))
+    property color rowSpotlightEdge:  pick(Qt.rgba(0.62, 0.78, 1.0, 0.0),  Qt.rgba(1.0, 1.0, 1.0, 0.0))
+    property color rowHoverRail:      pick(Qt.rgba(0.44, 0.62, 1.0, 0.24), Qt.rgba(0.28, 0.52, 0.94, 0.18))
 
-    property color selectionBg:       pick(Qt.rgba(0.32, 0.24, 0.88, 0.28), Qt.rgba(0.72, 0.50, 0.10, 0.18))
-    property color selectionHover:    pick(Qt.rgba(0.35, 0.28, 0.92, 0.12), Qt.rgba(0.72, 0.50, 0.10, 0.10))
-    property color selectionActive:   pick(Qt.rgba(0.32, 0.24, 0.88, 0.36), Qt.rgba(0.72, 0.50, 0.10, 0.26))
+    property color selectionBg:       pick(Qt.rgba(0.32, 0.24, 0.88, 0.28), Qt.rgba(0.23, 0.44, 0.88, 0.16))
+    property color selectionHover:    pick(Qt.rgba(0.35, 0.28, 0.92, 0.12), Qt.rgba(0.23, 0.44, 0.88, 0.09))
+    property color selectionActive:   pick(Qt.rgba(0.32, 0.24, 0.88, 0.36), Qt.rgba(0.23, 0.44, 0.88, 0.24))
 
-    property color scrollThumb:       pick(Qt.rgba(0.20, 0.28, 0.55, 0.48), Qt.rgba(0.48, 0.44, 0.34, 0.26))
-    property color scrollThumbHover:  pick(Qt.rgba(0.25, 0.34, 0.62, 0.62), Qt.rgba(0.48, 0.44, 0.34, 0.40))
+    property color scrollThumb:       pick(Qt.rgba(0.18, 0.28, 0.58, 0.48), Qt.rgba(0.32, 0.42, 0.56, 0.26))
+    property color scrollThumbHover:  pick(Qt.rgba(0.22, 0.34, 0.65, 0.62), Qt.rgba(0.32, 0.42, 0.56, 0.40))
 
     property color rippleColor:       pick(Qt.rgba(1.0, 1.0, 1.0, 0.25), Qt.rgba(0.0, 0.0, 0.0, 0.18))
 
     // Background blobs: three distinct hues at 5-6% alpha for visible layered
     // depth. Dark gets slightly more opacity. Each hue is chosen to contrast
-    // with the others (purple / teal / magenta in dark; gold / teal / rose in
+    // with the others (purple / teal / magenta in dark; cobalt / teal / lilac in
     // light) for color variety that bleeds through semi-transparent surfaces.
-    property color blobColor1:        pick(Qt.rgba(0.32, 0.22, 0.88, 0.060), Qt.rgba(0.78, 0.46, 0.10, 0.052))
-    property color blobColor2:        pick(Qt.rgba(0.08, 0.58, 0.68, 0.055), Qt.rgba(0.15, 0.52, 0.50, 0.048))
-    property color blobColor3:        pick(Qt.rgba(0.65, 0.12, 0.55, 0.050), Qt.rgba(0.62, 0.25, 0.25, 0.044))
+    property color blobColor1:        pick(Qt.rgba(0.32, 0.22, 0.88, 0.060), Qt.rgba(0.20, 0.47, 0.90, 0.050))
+    property color blobColor2:        pick(Qt.rgba(0.08, 0.58, 0.68, 0.055), Qt.rgba(0.12, 0.56, 0.54, 0.046))
+    property color blobColor3:        pick(Qt.rgba(0.65, 0.12, 0.55, 0.050), Qt.rgba(0.54, 0.34, 0.82, 0.040))
 
     // Selection glow: fades from selectionGlow to transparent at row edges.
-    property color selectionGlow:     pick(Qt.rgba(0.38, 0.28, 0.92, 0.40), Qt.rgba(0.74, 0.50, 0.12, 0.35))
-    property color selectionGlowEdge: pick(Qt.rgba(0.38, 0.28, 0.92, 0.0),  Qt.rgba(0.74, 0.50, 0.12, 0.0))
-    property color selectionStripe:   pick(Qt.rgba(0.52, 0.42, 1.0, 0.62),  Qt.rgba(0.74, 0.50, 0.12, 0.56))
+    property color selectionGlow:     pick(Qt.rgba(0.38, 0.28, 0.92, 0.40), Qt.rgba(0.24, 0.46, 0.88, 0.30))
+    property color selectionGlowEdge: pick(Qt.rgba(0.38, 0.28, 0.92, 0.0),  Qt.rgba(0.24, 0.46, 0.88, 0.0))
+    property color selectionStripe:   pick(Qt.rgba(0.52, 0.42, 1.0, 0.62),  Qt.rgba(0.28, 0.52, 0.94, 0.48))
 
-    property color shadow:            pick(Qt.rgba(0, 0, 0, 0.48), Qt.rgba(0.24, 0.20, 0.14, 0.20))
+    property color shadow:            pick(Qt.rgba(0, 0, 0, 0.48), Qt.rgba(0.12, 0.18, 0.28, 0.20))
 
     // -- Animation timing --
     readonly property int hoverDuration:  150
