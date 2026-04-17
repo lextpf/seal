@@ -4,10 +4,10 @@ import QtQuick.Layouts
 // Bottom status bar. Spans the full window width (sits outside the inner
 // content margins) to create a clear visual boundary.
 //
-// Layout: [status text] ... [vault pill] [count pill] [fill-armed pill]
+// Layout: [status text] ... [vault filename] | [N accounts] [armed dot]
 //
-// Capsules keep the footer readable at a glance while preserving a low visual
-// weight when the app is idle.
+// The pulsing orange dot appears only when auto-fill hooks are armed,
+// giving the user a persistent visual reminder that global hooks are active.
 
 Rectangle {
     id: root
@@ -32,115 +32,68 @@ Rectangle {
         color: Theme.borderDim
     }
 
-    component StatusPill: Rectangle {
-        id: pill
-        property alias iconSource: pillIcon.source
-        property string label: ""
-        property color iconColor: Theme.textIcon
-        property bool strong: false
-        property int maxLabelWidth: 220
-        readonly property int labelWidth: Math.min(maxLabelWidth, pillLabel.implicitWidth)
-
-        implicitHeight: 24
-        implicitWidth: pillRow.implicitWidth + 20
-        radius: implicitHeight / 2
-        clip: true
-        gradient: Gradient {
-            GradientStop { position: 0; color: pill.strong ? Theme.statusChipStrongTop : Theme.statusChipTop }
-            GradientStop { position: 1; color: pill.strong ? Theme.statusChipStrongEnd : Theme.statusChipEnd }
-        }
-        border.width: 1
-        border.color: pill.strong ? Theme.statusChipStrongBorder : Theme.statusChipBorder
-
-        Rectangle {
-            anchors.top: parent.top
-            anchors.left: parent.left
-            anchors.right: parent.right
-            height: 1
-            color: Theme.surfaceHighlight
-            opacity: pill.strong ? 0.55 : 0.40
-        }
-
-        Row {
-            id: pillRow
-            anchors.centerIn: parent
-            spacing: 6
-
-            SvgIcon {
-                id: pillIcon
-                width: Theme.iconSizeSmall
-                height: Theme.iconSizeSmall
-                color: pill.iconColor
-                anchors.verticalCenter: parent.verticalCenter
-            }
-
-            Text {
-                id: pillLabel
-                width: pill.labelWidth
-                text: pill.label
-                elide: Text.ElideMiddle
-                font.family: Theme.fontFamily
-                font.pixelSize: Theme.fontSizeSmall
-                font.weight: Font.DemiBold
-                color: pill.strong ? Theme.statusChipStrongText : Theme.statusChipText
-                anchors.verticalCenter: parent.verticalCenter
-            }
-        }
-    }
-
     RowLayout {
         anchors.fill: parent
         anchors.leftMargin: 20
         anchors.rightMargin: 20
         spacing: 16
 
-        Row {
-            spacing: 8
-
-            Rectangle {
-                width: 6
-                height: 6
-                radius: 3
-                color: root.fillArmed ? Theme.fillArmedDot : Theme.textDisabled
-                anchors.verticalCenter: parent.verticalCenter
-                opacity: root.fillArmed ? 1.0 : 0.65
-            }
-
-            Text {
-                text: root.statusText
-                font.family: Theme.fontFamily
-                font.pixelSize: Theme.fontSizeSmall
-                font.weight: Font.Medium
-                color: Theme.textSubtle
-                anchors.verticalCenter: parent.verticalCenter
-            }
+        // Status text
+        Text {
+            text: root.statusText
+            font.family: Theme.fontFamily
+            font.pixelSize: Theme.fontSizeSmall
+            font.weight: Font.Medium
+            color: Theme.textSubtle
         }
 
         Item { Layout.fillWidth: true }
 
-        StatusPill {
+        // Vault filename
+        Text {
             visible: root.vaultFileName !== ""
-            iconSource: Theme.iconLock
-            iconColor: Theme.accent2Dim
-            label: root.vaultFileName
-            maxLabelWidth: 220
+            text: root.vaultFileName
+            font.family: Theme.fontMono
+            font.pixelSize: Theme.fontSizeSmall
+            color: Theme.accent2Dim
         }
 
-        StatusPill {
+        // Pipe separator, hidden when either side is absent.
+        Text {
+            visible: root.vaultFileName !== "" && root.accountCount > 0
+            text: "|"
+            font.family: Theme.fontFamily
+            font.pixelSize: Theme.fontSizeSmall
+            color: Theme.textDisabled
+        }
+
+        // Account count
+        Text {
             visible: root.accountCount > 0
-            iconSource: Theme.iconUsername
-            iconColor: Theme.accent
-            label: root.accountCount + (root.accountCount === 1 ? " account" : " accounts")
-            maxLabelWidth: 132
+            text: root.accountCount + (root.accountCount === 1 ? " account" : " accounts")
+            font.family: Theme.fontFamily
+            font.pixelSize: Theme.fontSizeSmall
+            color: Theme.textMuted
         }
 
-        StatusPill {
+        // Pulsing orange dot when fill hooks are armed. The infinite sine-wave
+        // opacity animation (1.0 -> 0.3 -> 1.0) ensures the indicator is always
+        // noticeable even in peripheral vision, alerting the user that global
+        // mouse/keyboard hooks are active and waiting for a Ctrl+Click.
+        Rectangle {
+            id: armedIndicator
+            width: 8
+            height: 8
+            radius: 4
+            color: Theme.fillArmedDot
             visible: root.fillArmed
-            strong: true
-            iconSource: Theme.iconCrosshairs
-            iconColor: Theme.fillArmedDot
-            label: "Fill armed"
-            maxLabelWidth: 100
+
+            SequentialAnimation on opacity {
+                running: armedIndicator.visible
+                loops: Animation.Infinite
+                NumberAnimation { to: 0.3; duration: 800; easing.type: Easing.InOutSine }
+                NumberAnimation { to: 1.0; duration: 800; easing.type: Easing.InOutSine }
+            }
         }
     }
 }
