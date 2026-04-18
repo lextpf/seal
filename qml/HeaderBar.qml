@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
 import QtQuick.Shapes
@@ -400,20 +399,28 @@ Item {
             color: Theme.accent
         }
         Text {
-            text: "Password Manager"
+            text: root.vaultLoaded ? "Password Manager" : "Open a vault or create your first account"
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeSubtitle
-            color: Theme.accent2Dim
+            font.weight: root.vaultLoaded ? Font.Normal : Font.Medium
+            color: root.vaultLoaded ? Theme.accent2Dim : Theme.textSubtle
+            Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
         }
     }
 
     // Theme toggle: sun in dark mode, moon in light mode.
-    SvgIcon {
-        source: Theme.dark ? Theme.iconSun : Theme.iconMoon
-        width: Theme.iconSizeMedium
-        height: Theme.iconSizeMedium
-        color: themeArea.containsMouse ? Theme.accent : Theme.accentDim
-        Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
+    Item {
+        implicitWidth: 30
+        implicitHeight: 30
+
+        SvgIcon {
+            anchors.centerIn: parent
+            source: Theme.dark ? Theme.iconSun : Theme.iconMoon
+            width: Theme.iconSizeMedium
+            height: Theme.iconSizeMedium
+            color: themeArea.containsMouse ? Theme.accent : Theme.accentDim
+            Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
+        }
 
         MouseArea {
             id: themeArea
@@ -436,9 +443,9 @@ Item {
         tintHoverTop:  Theme.iconBtnHoverTop
         tintHoverEnd:  Theme.iconBtnHoverEnd
         tintPressed:   Theme.iconBtnPressed
-        tintText:      Theme.textIcon
-        tintTextHover: Theme.textSecondary
-        background.implicitWidth: 100
+        tintText:      root.vaultLoaded ? Theme.textIcon : Theme.accent
+        tintTextHover: root.vaultLoaded ? Theme.textSecondary : Theme.accentBright
+        background.implicitWidth: root.vaultLoaded ? 100 : 108
         onClicked: root.loadClicked()
     }
 
