@@ -137,6 +137,8 @@ set(SEAL_SOURCES
     src/Utils.cpp
     src/Clipboard.cpp
     src/Console.cpp
+    src/ConsoleStyle.cpp
+    src/Diagnostics.cpp
     src/FileOperations.cpp
     src/Backend.cpp
     src/QrCapture.cpp
@@ -220,6 +222,7 @@ qt_add_qml_module(seal
         qml/StatusFooter.qml
         qml/AccountDialog.qml
         qml/ConfirmDialog.qml
+        qml/DialogBlobs.qml
         qml/PasswordDialog.qml
         qml/RippleEffect.qml
         qml/SvgIcon.qml

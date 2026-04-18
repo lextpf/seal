@@ -24,6 +24,8 @@ Q_DECLARE_LOGGING_CATEGORY(logCrypto)   // Encryption, decryption, and key deriv
 Q_DECLARE_LOGGING_CATEGORY(logFill)     // Auto-fill hook and keystroke injection.
 Q_DECLARE_LOGGING_CATEGORY(logFile)     // File and directory I/O operations.
 Q_DECLARE_LOGGING_CATEGORY(logApp)      // Application lifecycle and general events.
+Q_DECLARE_LOGGING_CATEGORY(logCamera)   // Camera enumeration, probing, and selection.
+Q_DECLARE_LOGGING_CATEGORY(logQr)       // QR capture loop and frame decoding.
 
 /**
  * @brief Install the seal-specific Qt message handler.
