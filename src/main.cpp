@@ -26,7 +26,9 @@
 #include "CliModes.h"
 #include "Clipboard.h"
 #include "Console.h"
+#include "ConsoleStyle.h"
 #include "Cryptography.h"
+#include "Diagnostics.h"
 #include "FileOperations.h"
 #include "PasswordGen.h"
 #include "ScopedDpapiUnprotect.h"
@@ -35,6 +37,7 @@
 
 #ifdef USE_QT_UI
 #include <QtCore/QString>
+#include "Logging.h"
 #include "Vault.h"
 #endif
 
@@ -81,12 +84,20 @@ struct ProgramOptions
     int genLength = 20;
 };
 
+void writeCliDiag(std::ostream& os,
+                  seal::console::Tone tone,
+                  std::string_view tag,
+                  std::initializer_list<std::string> fields);
+
 // Set the program mode, rejecting conflicts with any previously set mode.
 static bool trySetMode(ProgramOptions& opts, Mode newMode)
 {
     if (opts.modeExplicit)
     {
-        std::cerr << "Error: Cannot combine multiple modes\n";
+        writeCliDiag(std::cerr,
+                     seal::console::Tone::Error,
+                     "ARGS",
+                     {"event=cli.args.parse", "result=fail", "reason=multiple_modes"});
         return false;
     }
     opts.mode = newMode;
@@ -97,6 +108,14 @@ static bool trySetMode(ProgramOptions& opts, Mode newMode)
 // Alias for backwards compatibility with existing call sites in this file.
 template <class GuardT>
 using ScopedUnprotect = seal::ScopedDpapiUnprotect<GuardT>;
+
+void writeCliDiag(std::ostream& os,
+                  seal::console::Tone tone,
+                  std::string_view tag,
+                  std::initializer_list<std::string> fields)
+{
+    seal::console::writeTagged(os, tone, tag, seal::diag::joinFields(fields));
+}
 
 }  // namespace
 
@@ -172,8 +191,14 @@ static bool parseRequiredPath(
             opts.outputPath = argv[++i];
         return true;
     }
-    std::cerr << "Error: " << cmdName << " requires a file argument\n";
-    std::cerr << "Usage: " << usage << "\n";
+    writeCliDiag(std::cerr,
+                 seal::console::Tone::Error,
+                 "ARGS",
+                 {"event=cli.args.parse",
+                  "result=fail",
+                  seal::diag::kv("command", cmdName),
+                  "reason=missing_file_argument"});
+    writeCliDiag(std::cerr, seal::console::Tone::Info, "USAGE", {seal::diag::kv("syntax", usage)});
     return false;
 }
 
@@ -221,8 +246,17 @@ static int parseArguments(int argc, char* argv[], ProgramOptions& opts)
             }
             else
             {
-                std::cerr << "Error: import requires at least one argument\n";
-                std::cerr << "Usage: seal import \"plat:user:pass,...\" [output.seal]\n";
+                writeCliDiag(std::cerr,
+                             seal::console::Tone::Error,
+                             "ARGS",
+                             {"event=cli.args.parse",
+                              "result=fail",
+                              "command=import",
+                              "reason=missing_argument"});
+                writeCliDiag(std::cerr,
+                             seal::console::Tone::Info,
+                             "USAGE",
+                             {"syntax=seal_import_data_output.seal"});
                 return 1;
             }
         }
@@ -238,8 +272,17 @@ static int parseArguments(int argc, char* argv[], ProgramOptions& opts)
             }
             else
             {
-                std::cerr << "Error: export requires a vault file argument\n";
-                std::cerr << "Usage: seal export vault.seal [output.txt]\n";
+                writeCliDiag(std::cerr,
+                             seal::console::Tone::Error,
+                             "ARGS",
+                             {"event=cli.args.parse",
+                              "result=fail",
+                              "command=export",
+                              "reason=missing_argument"});
+                writeCliDiag(std::cerr,
+                             seal::console::Tone::Info,
+                             "USAGE",
+                             {"syntax=seal_export_vault.seal_output.txt"});
                 return 1;
             }
         }
@@ -269,7 +312,14 @@ static int parseArguments(int argc, char* argv[], ProgramOptions& opts)
                 }
                 catch (...)
                 {
-                    std::cerr << "Warning: Invalid length, using default (20)\n";
+                    writeCliDiag(std::cerr,
+                                 seal::console::Tone::Warning,
+                                 "ARGS",
+                                 {"event=cli.args.parse",
+                                  "result=warn",
+                                  "command=gen",
+                                  "reason=invalid_length",
+                                  "fallback=20"});
                     opts.genLength = 20;
                 }
             }
@@ -312,8 +362,14 @@ static int parseArguments(int argc, char* argv[], ProgramOptions& opts)
         }
         else
         {
-            std::cerr << "Unknown option: " << arg << "\n";
-            std::cerr << "Use -h or --help for usage information.\n";
+            writeCliDiag(std::cerr,
+                         seal::console::Tone::Error,
+                         "ARGS",
+                         {"event=cli.args.parse",
+                          "result=fail",
+                          "reason=unknown_option",
+                          seal::diag::kv("option", seal::diag::sanitizeAscii(arg))});
+            writeCliDiag(std::cerr, seal::console::Tone::Info, "USAGE", {"hint=use_--help"});
             return 1;
         }
     }
@@ -336,11 +392,21 @@ static int initializeSecurity(bool allowDynamicCode)
     // Process mitigations are best-effort
     if (!seal::Cryptography::setSecureProcessMitigations(allowDynamicCode))
     {
-        std::cerr << "Warning: some process mitigations could not be applied "
-                  << "(this is expected in debug builds)\n";
+        writeCliDiag(std::cerr,
+                     seal::console::Tone::Warning,
+                     "SEC",
+                     {"event=app.security.mitigations",
+                      "result=partial",
+                      "reason=best_effort_failed",
+                      seal::diag::kv("allow_dynamic_code", allowDynamicCode)});
     }
     if (seal::Cryptography::isRemoteSession())
     {
+        writeCliDiag(
+            std::cerr,
+            seal::console::Tone::Error,
+            "SEC",
+            {"event=app.security.environment", "result=fail", "reason=remote_session_detected"});
         return 1;
     }
 
@@ -349,17 +415,17 @@ static int initializeSecurity(bool allowDynamicCode)
     seal::Cryptography::disableCrashDumps();
     if (!seal::Cryptography::tryEnableLockPrivilege())
     {
-        const char* username = std::getenv("USERNAME");
-
-        std::cerr << "\n!!! SECURITY WARNING !!!\n\n"
-                  << "Failed to enable memory lock privilege (SE_LOCK_MEMORY_NAME).\n"
-                  << "This application cannot securely protect sensitive data in memory.\n\n"
-                  << "To fix this issue:\n"
-                  << "  1. Open Group Policy Editor (gpedit.msc)\n"
-                  << "  2. Go to \"Local Policies\" then \"User Rights Assignment\"\n"
-                  << "  3. Add your account to \"Lock pages in memory\"\n"
-                  << "  4. Reboot your system\n\n"
-                  << "Current user: " << (username ? username : "Unknown") << "\n";
+        writeCliDiag(
+            std::cerr,
+            seal::console::Tone::Error,
+            "SEC",
+            {"event=app.security.lock_pages", "result=warn", "reason=privilege_unavailable"});
+        seal::console::writeLine(std::cerr,
+                                 seal::console::Tone::Banner,
+                                 "Lock pages in memory privilege is unavailable.");
+        seal::console::writeLine(std::cerr,
+                                 seal::console::Tone::Banner,
+                                 "Open gpedit.msc, grant Lock pages in memory, then reboot.");
     }
     return 0;
 }
@@ -368,13 +434,17 @@ static int initializeSecurity(bool allowDynamicCode)
 static void loadImportDataFromFile(std::string& importData)
 {
     std::string fileContent;
+    const std::string sourcePath = importData;
 
     if (importData == "-")
     {
         // Read from stdin - supports piping and paste (Ctrl+Z to end on Windows).
         fileContent.assign(std::istreambuf_iterator<char>(std::cin),
                            std::istreambuf_iterator<char>());
-        std::cout << "Reading entries from stdin...\n";
+        writeCliDiag(std::cerr,
+                     seal::console::Tone::Step,
+                     "IMPORT",
+                     {"event=import.read.begin", "source=stdin"});
     }
     else
     {
@@ -385,7 +455,11 @@ static void loadImportDataFromFile(std::string& importData)
         fileContent.assign(std::istreambuf_iterator<char>(testFile),
                            std::istreambuf_iterator<char>());
         testFile.close();
-        std::cout << "Reading entries from file...\n";
+        writeCliDiag(
+            std::cerr,
+            seal::console::Tone::Step,
+            "IMPORT",
+            {"event=import.read.begin", "source=file", seal::diag::pathSummary(sourcePath)});
     }
 
     // Replace newlines with commas so entries can be one-per-line or comma-separated.
@@ -399,6 +473,7 @@ static int parseImportEntries(
     std::vector<std::tuple<std::string, std::string, std::string>>& entries)
 {
     std::string remaining = importData;
+    size_t entryIndex = 0;
     while (!remaining.empty())
     {
         size_t commaPos = remaining.find(',');
@@ -409,19 +484,32 @@ static int parseImportEntries(
         token = seal::utils::trim(token);
         if (token.empty())
             continue;
+        ++entryIndex;
 
         size_t firstColon = token.find(':');
         if (firstColon == std::string::npos)
         {
-            std::cerr << "Error: Invalid entry (missing colon): " << token << "\n";
-            std::cerr << "Expected format: platform:username:password\n";
+            writeCliDiag(std::cerr,
+                         seal::console::Tone::Error,
+                         "IMPORT",
+                         {"event=import.parse.finish",
+                          "result=fail",
+                          "reason=missing_first_colon",
+                          seal::diag::kv("entry_index", entryIndex),
+                          seal::diag::kv("token_len", token.size())});
             return 1;
         }
         size_t secondColon = token.find(':', firstColon + 1);
         if (secondColon == std::string::npos)
         {
-            std::cerr << "Error: Invalid entry (missing second colon): " << token << "\n";
-            std::cerr << "Expected format: platform:username:password\n";
+            writeCliDiag(std::cerr,
+                         seal::console::Tone::Error,
+                         "IMPORT",
+                         {"event=import.parse.finish",
+                          "result=fail",
+                          "reason=missing_second_colon",
+                          seal::diag::kv("entry_index", entryIndex),
+                          seal::diag::kv("token_len", token.size())});
             return 1;
         }
 
@@ -430,9 +518,14 @@ static int parseImportEntries(
         // boundaries that cannot be round-tripped through export/import.
         if (token.find(':', secondColon + 1) != std::string::npos)
         {
-            std::cerr << "Error: Too many colons in entry (fields must not contain ':'): " << token
-                      << "\n";
-            std::cerr << "Expected format: platform:username:password\n";
+            writeCliDiag(std::cerr,
+                         seal::console::Tone::Error,
+                         "IMPORT",
+                         {"event=import.parse.finish",
+                          "result=fail",
+                          "reason=too_many_colons",
+                          seal::diag::kv("entry_index", entryIndex),
+                          seal::diag::kv("token_len", token.size())});
             return 1;
         }
 
@@ -443,7 +536,14 @@ static int parseImportEntries(
 
         if (platform.empty() || user.empty() || pass.empty())
         {
-            std::cerr << "Error: Empty field in entry: " << token << "\n";
+            writeCliDiag(std::cerr,
+                         seal::console::Tone::Error,
+                         "IMPORT",
+                         {"event=import.parse.finish",
+                          "result=fail",
+                          "reason=empty_field",
+                          seal::diag::kv("entry_index", entryIndex),
+                          seal::diag::kv("token_len", token.size())});
             return 1;
         }
         entries.emplace_back(platform, user, pass);
@@ -462,11 +562,22 @@ static int handleImportMode(std::string& importData, const std::string& importOu
 
     if (entries.empty())
     {
-        std::cerr << "Error: No valid entries found in import data\n";
+        writeCliDiag(std::cerr,
+                     seal::console::Tone::Error,
+                     "IMPORT",
+                     {"event=import.finish", "result=fail", "reason=no_valid_entries"});
         return 1;
     }
 
-    std::cout << "Importing " << entries.size() << " credential(s)...\n";
+    const std::string opId = seal::diag::nextOpId("cli_import");
+    writeCliDiag(std::cerr,
+                 seal::console::Tone::Step,
+                 "IMPORT",
+                 {"event=import.begin",
+                  "result=start",
+                  seal::diag::kv("op", opId),
+                  seal::diag::kv("entry_count", entries.size()),
+                  seal::diag::pathSummary(importOutputPath)});
 
     seal::basic_secure_string<wchar_t> masterPassword;
     try
@@ -475,7 +586,13 @@ static int handleImportMode(std::string& importData, const std::string& importOu
     }
     catch (...)
     {
-        std::cerr << "Error: Failed to read master password\n";
+        writeCliDiag(std::cerr,
+                     seal::console::Tone::Error,
+                     "IMPORT",
+                     {"event=import.finish",
+                      "result=fail",
+                      seal::diag::kv("op", opId),
+                      "reason=password_read_failed"});
         return 1;
     }
     // DPAPIGuard wraps the master password with CryptProtectMemory while idle.
@@ -508,18 +625,38 @@ static int handleImportMode(std::string& importData, const std::string& importOu
 
         if (seal::saveVaultV2(outputPath, records, masterPassword))
         {
-            std::cout << "Successfully saved " << records.size() << " credential(s) to "
-                      << outputPath.toStdString() << "\n";
+            writeCliDiag(std::cerr,
+                         seal::console::Tone::Success,
+                         "IMPORT",
+                         {"event=import.finish",
+                          "result=ok",
+                          seal::diag::kv("op", opId),
+                          seal::diag::kv("record_count", records.size()),
+                          seal::diag::pathSummary(outputPath.toUtf8().toStdString())});
             seal::Cryptography::cleanseString(masterPassword);
             return 0;
         }
-        std::cerr << "Error: Failed to save vault file\n";
+        writeCliDiag(std::cerr,
+                     seal::console::Tone::Error,
+                     "IMPORT",
+                     {"event=import.finish",
+                      "result=fail",
+                      seal::diag::kv("op", opId),
+                      "reason=save_failed",
+                      seal::diag::pathSummary(outputPath.toUtf8().toStdString())});
         seal::Cryptography::cleanseString(masterPassword);
         return 1;
     }
     catch (const std::exception& e)
     {
-        std::cerr << "Error: " << e.what() << "\n";
+        writeCliDiag(std::cerr,
+                     seal::console::Tone::Error,
+                     "IMPORT",
+                     {"event=import.finish",
+                      "result=fail",
+                      seal::diag::kv("op", opId),
+                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
+                      seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what()))});
         seal::Cryptography::cleanseString(masterPassword);
     }
     return 1;
@@ -531,6 +668,17 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
     if (!vaultPath.endsWith(".seal", Qt::CaseInsensitive))
         vaultPath += ".seal";
 
+    const std::string opId = seal::diag::nextOpId("cli_export");
+    writeCliDiag(
+        std::cerr,
+        seal::console::Tone::Step,
+        "EXPORT",
+        {"event=export.begin",
+         "result=start",
+         seal::diag::kv("op", opId),
+         seal::diag::pathSummary(vaultPath.toUtf8().toStdString(), "src"),
+         outputPath.empty() ? "dst_kind=stdout" : seal::diag::pathSummary(outputPath, "dst")});
+
     seal::basic_secure_string<wchar_t> masterPassword;
     try
     {
@@ -538,7 +686,13 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
     }
     catch (...)
     {
-        std::cerr << "Error: Failed to read master password\n";
+        writeCliDiag(std::cerr,
+                     seal::console::Tone::Error,
+                     "EXPORT",
+                     {"event=export.finish",
+                      "result=fail",
+                      seal::diag::kv("op", opId),
+                      "reason=password_read_failed"});
         return 1;
     }
     seal::DPAPIGuard<seal::basic_secure_string<wchar_t>> exportDpapi(&masterPassword);
@@ -551,14 +705,26 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
     }
     catch (const std::runtime_error& e)
     {
-        std::cerr << "Error: " << e.what() << "\n";
+        writeCliDiag(std::cerr,
+                     seal::console::Tone::Error,
+                     "EXPORT",
+                     {"event=export.finish",
+                      "result=fail",
+                      seal::diag::kv("op", opId),
+                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
+                      seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what())),
+                      seal::diag::pathSummary(vaultPath.toUtf8().toStdString(), "src")});
         seal::Cryptography::cleanseString(masterPassword);
         return 1;
     }
 
     if (records.empty())
     {
-        std::cerr << "Vault is empty, nothing to export.\n";
+        writeCliDiag(
+            std::cerr,
+            seal::console::Tone::Info,
+            "EXPORT",
+            {"event=export.finish", "result=ok", seal::diag::kv("op", opId), "reason=empty_vault"});
         seal::Cryptography::cleanseString(masterPassword);
         return 0;
     }
@@ -573,7 +739,14 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
         outFile.open(outputPath);
         if (!outFile.good())
         {
-            std::cerr << "Error: Could not open output file: " << outputPath << "\n";
+            writeCliDiag(std::cerr,
+                         seal::console::Tone::Error,
+                         "EXPORT",
+                         {"event=export.finish",
+                          "result=fail",
+                          seal::diag::kv("op", opId),
+                          "reason=output_open_failed",
+                          seal::diag::pathSummary(outputPath, "dst")});
             seal::Cryptography::cleanseString(masterPassword);
             return 1;
         }
@@ -582,11 +755,13 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
 
     size_t exportedCount = 0;
     bool hasColonWarning = false;
+    size_t recordIndex = 0;
     try
     {
         ScopedUnprotect dpapiScope(exportDpapi);
         for (const auto& rec : records)
         {
+            ++recordIndex;
             if (rec.deleted)
             {
                 continue;
@@ -597,9 +772,14 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
             // on the first two colons. Warn the user so they can fix the data.
             if (!hasColonWarning && (rec.platform.find(':') != std::string::npos))
             {
-                std::cerr << "Warning: platform name '" << rec.platform
-                          << "' contains ':' -- exported data cannot be re-imported.\n"
-                          << "Rename the platform to remove ':' before re-importing.\n";
+                writeCliDiag(std::cerr,
+                             seal::console::Tone::Warning,
+                             "EXPORT",
+                             {"event=export.data.warn",
+                              "result=warn",
+                              "reason=platform_contains_colon",
+                              seal::diag::kv("record_index", recordIndex),
+                              seal::diag::kv("platform_len", rec.platform.size())});
                 hasColonWarning = true;
             }
             auto cred = seal::decryptCredentialOnDemand(rec, masterPassword);
@@ -607,8 +787,15 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
             std::string pass = seal::utils::secureWideToUtf8(cred.password);
             if (!hasColonWarning && user.find(':') != std::string::npos)
             {
-                std::cerr << "Warning: username for '" << rec.platform
-                          << "' contains ':' -- exported data cannot be re-imported.\n";
+                writeCliDiag(std::cerr,
+                             seal::console::Tone::Warning,
+                             "EXPORT",
+                             {"event=export.data.warn",
+                              "result=warn",
+                              "reason=username_contains_colon",
+                              seal::diag::kv("record_index", recordIndex),
+                              seal::diag::kv("platform_len", rec.platform.size()),
+                              seal::diag::kv("username_len", user.size())});
                 hasColonWarning = true;
             }
             // Write directly to output, cleanse immediately. No intermediate
@@ -625,7 +812,13 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
     catch (const std::exception&)
     {
         seal::Cryptography::cleanseString(masterPassword);
-        std::cerr << "Error: Decryption failed - wrong password or corrupted vault.\n";
+        writeCliDiag(std::cerr,
+                     seal::console::Tone::Error,
+                     "EXPORT",
+                     {"event=export.finish",
+                      "result=fail",
+                      seal::diag::kv("op", opId),
+                      "reason=decrypt_failed"});
         return 1;
     }
     seal::Cryptography::cleanseString(masterPassword);
@@ -633,7 +826,14 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
     if (!outputPath.empty())
     {
         outFile.close();
-        std::cout << "Exported " << exportedCount << " credential(s) to " << outputPath << "\n";
+        writeCliDiag(std::cerr,
+                     seal::console::Tone::Success,
+                     "EXPORT",
+                     {"event=export.finish",
+                      "result=ok",
+                      seal::diag::kv("op", opId),
+                      seal::diag::kv("record_count", exportedCount),
+                      seal::diag::pathSummary(outputPath, "dst")});
     }
     return 0;
 }
@@ -734,7 +934,13 @@ static int handleCliMode()
     }
     catch (const std::exception& e)
     {
-        std::cerr << "Error: " << e.what() << "\n";
+        writeCliDiag(std::cerr,
+                     seal::console::Tone::Error,
+                     "CLI",
+                     {"event=cli.interactive.finish",
+                      "result=fail",
+                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
+                      seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what()))});
         return 1;
     }
     return 0;
@@ -752,6 +958,13 @@ int main(int argc, char* argv[])
     int rc = parseArguments(argc, argv, opts);
     if (rc >= 0)
         return rc;
+
+#ifdef USE_QT_UI
+    // Route Qt log output through the structured seal handler before any
+    // security-init code runs, so early qCInfo(logCrypto) calls emit the
+    // same `[ts] [LVL] [cat] [tid=N]` format as the rest of the app.
+    installSealMessageHandler();
+#endif
 
     // Qt Quick's QML engine uses a JIT compiler (V4) that needs dynamic code
     // generation. Only GUI mode loads QML; all other modes can keep the
@@ -781,7 +994,13 @@ int main(int argc, char* argv[])
 #ifdef USE_QT_UI
             return handleImportMode(opts.inputPath, opts.outputPath);
 #else
-            std::cerr << "Error: --import requires Qt UI support (USE_QT_UI).\n";
+            writeCliDiag(std::cerr,
+                         seal::console::Tone::Error,
+                         "CLI",
+                         {"event=cli.mode.dispatch",
+                          "result=fail",
+                          "command=import",
+                          "reason=qt_ui_unavailable"});
             return 1;
 #endif
 
@@ -789,7 +1008,13 @@ int main(int argc, char* argv[])
 #ifdef USE_QT_UI
             return handleExportMode(opts.inputPath, opts.outputPath);
 #else
-            std::cerr << "Error: --export requires Qt UI support (USE_QT_UI).\n";
+            writeCliDiag(std::cerr,
+                         seal::console::Tone::Error,
+                         "CLI",
+                         {"event=cli.mode.dispatch",
+                          "result=fail",
+                          "command=export",
+                          "reason=qt_ui_unavailable"});
             return 1;
 #endif
 
@@ -816,7 +1041,13 @@ int main(int argc, char* argv[])
 #ifdef USE_QT_UI
             return RunQMLMode(argc, argv);
 #else
-            std::cerr << "Error: GUI mode not available. Rebuild with USE_QT_UI or use --cli.\n";
+            writeCliDiag(std::cerr,
+                         seal::console::Tone::Error,
+                         "CLI",
+                         {"event=cli.mode.dispatch",
+                          "result=fail",
+                          "command=gui",
+                          "reason=qt_ui_unavailable"});
             return 1;
 #endif
 

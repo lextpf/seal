@@ -2,12 +2,15 @@
 
 #include "Clipboard.h"
 #include "Console.h"
+#include "ConsoleStyle.h"
 #include "Cryptography.h"
+#include "Diagnostics.h"
 #include "FileOperations.h"
 #include "PasswordGen.h"
 #include "ScopedDpapiUnprotect.h"
 #include "Utils.h"
 
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -16,6 +19,11 @@ namespace
 {
 template <class GuardT>
 using ScopedUnprotect = seal::ScopedDpapiUnprotect<GuardT>;
+
+void writeCliDiag(seal::console::Tone tone, std::initializer_list<std::string> fields)
+{
+    seal::console::writeTagged(std::cerr, tone, "CLI", seal::diag::joinFields(fields));
+}
 }  // namespace
 
 namespace seal
@@ -28,7 +36,11 @@ int HandleGenMode(int length)
     std::cout << password.view() << "\n";
 
     (void)seal::Clipboard::copyWithTTL(password.data(), password.size());
-    std::cerr << "(copied to clipboard)\n";
+    writeCliDiag(seal::console::Tone::Success,
+                 {"event=cli.password.generate.finish",
+                  "result=ok",
+                  seal::diag::kv("length", password.size()),
+                  "copied=true"});
 
     seal::Cryptography::cleanseString(password);
     return 0;
@@ -38,16 +50,35 @@ int HandleShredMode(const std::string& path)
 {
     if (!seal::utils::fileExistsA(path))
     {
-        std::cerr << "Error: File not found: " << path << "\n";
+        writeCliDiag(seal::console::Tone::Error,
+                     {"event=cli.shred.finish",
+                      "result=fail",
+                      "reason=file_not_found",
+                      seal::diag::pathSummary(path)});
         return 1;
     }
 
-    std::cerr << "Shredding: " << path << " (3-pass overwrite + delete)...\n";
+    const auto started = std::chrono::steady_clock::now();
+    writeCliDiag(seal::console::Tone::Step,
+                 {"event=cli.shred.begin", "result=start", seal::diag::pathSummary(path)});
     bool ok = seal::FileOperations::shredFile(path);
     if (ok)
-        std::cerr << "(shredded) " << path << "\n";
+    {
+        writeCliDiag(seal::console::Tone::Success,
+                     {"event=cli.shred.finish",
+                      "result=ok",
+                      seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
+                      seal::diag::pathSummary(path)});
+    }
     else
-        std::cerr << "Error: Failed to shred " << path << "\n";
+    {
+        writeCliDiag(seal::console::Tone::Error,
+                     {"event=cli.shred.finish",
+                      "result=fail",
+                      "reason=shred_failed",
+                      seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
+                      seal::diag::pathSummary(path)});
+    }
     return ok ? 0 : 1;
 }
 
@@ -55,18 +86,31 @@ int HandleHashMode(const std::string& path)
 {
     if (!seal::utils::fileExistsA(path))
     {
-        std::cerr << "Error: File not found: " << path << "\n";
+        writeCliDiag(seal::console::Tone::Error,
+                     {"event=cli.hash.finish",
+                      "result=fail",
+                      "reason=file_not_found",
+                      seal::diag::pathSummary(path)});
         return 1;
     }
 
     std::string hash = seal::FileOperations::hashFile(path);
     if (hash.empty())
     {
-        std::cerr << "Error: Failed to hash " << path << "\n";
+        writeCliDiag(seal::console::Tone::Error,
+                     {"event=cli.hash.finish",
+                      "result=fail",
+                      "reason=hash_failed",
+                      seal::diag::pathSummary(path)});
         return 1;
     }
 
     std::cout << hash << "  " << path << "\n";
+    writeCliDiag(seal::console::Tone::Success,
+                 {"event=cli.hash.finish",
+                  "result=ok",
+                  seal::diag::kv("digest_len", hash.size()),
+                  seal::diag::pathSummary(path)});
     return 0;
 }
 
@@ -74,10 +118,15 @@ int HandleVerifyMode(const std::string& path)
 {
     if (!seal::utils::fileExistsA(path))
     {
-        std::cerr << "Error: File not found: " << path << "\n";
+        writeCliDiag(seal::console::Tone::Error,
+                     {"event=cli.verify.finish",
+                      "result=fail",
+                      "reason=file_not_found",
+                      seal::diag::pathSummary(path)});
         return 1;
     }
 
+    const auto started = std::chrono::steady_clock::now();
     try
     {
         seal::basic_secure_string<wchar_t> password = seal::readPasswordConsole();
@@ -95,12 +144,22 @@ int HandleVerifyMode(const std::string& path)
         seal::Cryptography::verifyPacket(std::span<const unsigned char>(blob), password);
         seal::Cryptography::cleanseString(password);
 
-        std::cerr << "(verified) " << path << " - password correct\n";
+        writeCliDiag(seal::console::Tone::Success,
+                     {"event=cli.verify.finish",
+                      "result=ok",
+                      seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
+                      seal::diag::pathSummary(path)});
         return 0;
     }
     catch (const std::exception& e)
     {
-        std::cerr << "(failed) " << path << " - " << e.what() << "\n";
+        writeCliDiag(seal::console::Tone::Error,
+                     {"event=cli.verify.finish",
+                      "result=fail",
+                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
+                      seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what())),
+                      seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
+                      seal::diag::pathSummary(path)});
         return 1;
     }
 }
@@ -109,7 +168,8 @@ int HandleWipeMode()
 {
     (void)seal::Clipboard::copyWithTTL("");
     seal::wipeConsoleBuffer();
-    std::cerr << "(wiped) clipboard and console buffer cleared\n";
+    writeCliDiag(seal::console::Tone::Success,
+                 {"event=cli.wipe.finish", "result=ok", "clipboard=true"});
     return 0;
 }
 
@@ -117,10 +177,16 @@ int HandleFileEncrypt(const std::string& inputPath, const std::string& outputPat
 {
     if (!seal::utils::fileExistsA(inputPath))
     {
-        std::cerr << "Error: File not found: " << inputPath << "\n";
+        writeCliDiag(seal::console::Tone::Error,
+                     {"event=cli.file_encrypt.finish",
+                      "result=fail",
+                      "reason=file_not_found",
+                      seal::diag::pathSummary(inputPath)});
         return 1;
     }
 
+    const std::string opId = seal::diag::nextOpId("cli_file_encrypt");
+    const auto started = std::chrono::steady_clock::now();
     try
     {
         seal::basic_secure_string<wchar_t> password = seal::readPasswordConsole();
@@ -133,22 +199,47 @@ int HandleFileEncrypt(const std::string& inputPath, const std::string& outputPat
                                ? seal::utils::add_ext(inputPath, std::string_view{".seal"})
                                : outputPath;
 
+        writeCliDiag(seal::console::Tone::Step,
+                     {"event=cli.file_encrypt.begin",
+                      "result=start",
+                      seal::diag::kv("op", opId),
+                      seal::diag::pathSummary(inputPath)});
+
         bool ok = seal::FileOperations::encryptFileTo(inputPath, dest, password);
         if (!ok)
         {
-            std::cerr << "Error: Encryption failed for " << inputPath << "\n";
+            writeCliDiag(seal::console::Tone::Error,
+                         {"event=cli.file_encrypt.finish",
+                          "result=fail",
+                          seal::diag::kv("op", opId),
+                          "reason=encrypt_failed",
+                          seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
+                          seal::diag::pathSummary(inputPath)});
             seal::Cryptography::cleanseString(password);
             return 1;
         }
 
         DeleteFileA(inputPath.c_str());
-        std::cerr << "(encrypted) " << inputPath << " -> " << dest << "\n";
+        writeCliDiag(seal::console::Tone::Success,
+                     {"event=cli.file_encrypt.finish",
+                      "result=ok",
+                      seal::diag::kv("op", opId),
+                      seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
+                      seal::diag::pathSummary(inputPath, "src"),
+                      seal::diag::pathSummary(dest, "dst")});
         seal::Cryptography::cleanseString(password);
         return 0;
     }
     catch (const std::exception& e)
     {
-        std::cerr << "Error: " << e.what() << "\n";
+        writeCliDiag(seal::console::Tone::Error,
+                     {"event=cli.file_encrypt.finish",
+                      "result=fail",
+                      seal::diag::kv("op", opId),
+                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
+                      seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what())),
+                      seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
+                      seal::diag::pathSummary(inputPath)});
         return 1;
     }
 }
@@ -157,10 +248,16 @@ int HandleFileDecrypt(const std::string& inputPath, const std::string& outputPat
 {
     if (!seal::utils::fileExistsA(inputPath))
     {
-        std::cerr << "Error: File not found: " << inputPath << "\n";
+        writeCliDiag(seal::console::Tone::Error,
+                     {"event=cli.file_decrypt.finish",
+                      "result=fail",
+                      "reason=file_not_found",
+                      seal::diag::pathSummary(inputPath)});
         return 1;
     }
 
+    const std::string opId = seal::diag::nextOpId("cli_file_decrypt");
+    const auto started = std::chrono::steady_clock::now();
     try
     {
         seal::basic_secure_string<wchar_t> password = seal::readPasswordConsole();
@@ -178,22 +275,47 @@ int HandleFileDecrypt(const std::string& inputPath, const std::string& outputPat
                 dest = inputPath + ".decrypted";
         }
 
+        writeCliDiag(seal::console::Tone::Step,
+                     {"event=cli.file_decrypt.begin",
+                      "result=start",
+                      seal::diag::kv("op", opId),
+                      seal::diag::pathSummary(inputPath)});
+
         bool ok = seal::FileOperations::decryptFileTo(inputPath, dest, password);
         if (!ok)
         {
-            std::cerr << "Error: Decryption failed for " << inputPath << "\n";
+            writeCliDiag(seal::console::Tone::Error,
+                         {"event=cli.file_decrypt.finish",
+                          "result=fail",
+                          seal::diag::kv("op", opId),
+                          "reason=decrypt_failed",
+                          seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
+                          seal::diag::pathSummary(inputPath)});
             seal::Cryptography::cleanseString(password);
             return 1;
         }
 
         DeleteFileA(inputPath.c_str());
-        std::cerr << "(decrypted) " << inputPath << " -> " << dest << "\n";
+        writeCliDiag(seal::console::Tone::Success,
+                     {"event=cli.file_decrypt.finish",
+                      "result=ok",
+                      seal::diag::kv("op", opId),
+                      seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
+                      seal::diag::pathSummary(inputPath, "src"),
+                      seal::diag::pathSummary(dest, "dst")});
         seal::Cryptography::cleanseString(password);
         return 0;
     }
     catch (const std::exception& e)
     {
-        std::cerr << "Error: " << e.what() << "\n";
+        writeCliDiag(seal::console::Tone::Error,
+                     {"event=cli.file_decrypt.finish",
+                      "result=fail",
+                      seal::diag::kv("op", opId),
+                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
+                      seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what())),
+                      seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
+                      seal::diag::pathSummary(inputPath)});
         return 1;
     }
 }
@@ -222,7 +344,8 @@ int HandleStringMode(bool encryptMode, const std::string& inlineData)
 
         if (input.empty())
         {
-            std::cerr << "Error: No input provided\n";
+            writeCliDiag(seal::console::Tone::Error,
+                         {"event=cli.text.finish", "result=fail", "reason=no_input"});
             seal::Cryptography::cleanseString(password);
             return 1;
         }
@@ -231,10 +354,26 @@ int HandleStringMode(bool encryptMode, const std::string& inlineData)
         {
             std::string hex = seal::FileOperations::encryptLine(input, password);
             std::vector<unsigned char> raw;
-            seal::utils::from_hex(std::string_view{hex}, raw);
+            if (!seal::utils::from_hex(std::string_view{hex}, raw))
+            {
+                writeCliDiag(seal::console::Tone::Error,
+                             {"event=cli.text.finish",
+                              "result=fail",
+                              "mode=encrypt",
+                              "reason=hex_roundtrip_failed"});
+                seal::Cryptography::cleanseString(input, password, hex);
+                return 1;
+            }
             std::string b64 = seal::utils::toBase64(std::span<const unsigned char>(raw));
             std::cout << "(hex) " << hex << "\n";
             std::cout << "(b64) " << b64 << "\n";
+            writeCliDiag(seal::console::Tone::Success,
+                         {"event=cli.text.finish",
+                          "result=ok",
+                          "mode=encrypt",
+                          seal::diag::kv("input_len", input.size()),
+                          seal::diag::kv("hex_len", hex.size()),
+                          seal::diag::kv("b64_len", b64.size())});
             seal::Cryptography::cleanseString(input);
         }
         else
@@ -266,10 +405,20 @@ int HandleStringMode(bool encryptMode, const std::string& inlineData)
             }
             else
             {
-                std::cerr << "Error: Input is neither valid hex nor Base64\n";
+                writeCliDiag(seal::console::Tone::Error,
+                             {"event=cli.text.finish",
+                              "result=fail",
+                              "mode=decrypt",
+                              "reason=invalid_encoding",
+                              seal::diag::kv("input_len", input.size())});
                 seal::Cryptography::cleanseString(input, password);
                 return 1;
             }
+            writeCliDiag(seal::console::Tone::Success,
+                         {"event=cli.text.finish",
+                          "result=ok",
+                          "mode=decrypt",
+                          seal::diag::kv("input_len", input.size())});
             seal::Cryptography::cleanseString(input);
         }
 
@@ -278,7 +427,11 @@ int HandleStringMode(bool encryptMode, const std::string& inlineData)
     }
     catch (const std::exception& e)
     {
-        std::cerr << "Error: " << e.what() << "\n";
+        writeCliDiag(seal::console::Tone::Error,
+                     {"event=cli.text.finish",
+                      "result=fail",
+                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
+                      seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what()))});
         return 1;
     }
 }
