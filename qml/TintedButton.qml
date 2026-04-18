@@ -59,7 +59,7 @@ Button {
 
     background: Rectangle {
         implicitWidth: 120
-        implicitHeight: 38
+        implicitHeight: 40
         radius: Theme.radiusMedium
         clip: true
         // Four-state gradient: disabled / normal / hovered / pressed.
@@ -67,6 +67,7 @@ Button {
             GradientStop { position: 0; color: !root.enabled ? root._disTop : root.pressed ? root.tintPressed : root.hovered ? root.tintHoverTop : root.tintTop; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
             GradientStop { position: 1; color: !root.enabled ? root._disEnd : root.pressed ? root.tintPressed : root.hovered ? root.tintHoverEnd : root.tintEnd; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
         }
+
         border.width: 1
         border.color: !root.enabled ? Theme.borderDim
                     : root.hovered ? Theme.borderHover

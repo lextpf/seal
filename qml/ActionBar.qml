@@ -139,7 +139,7 @@ RowLayout {
 
         background: Rectangle {
             implicitWidth: 160
-            implicitHeight: 38
+            implicitHeight: 40
             radius: Theme.radiusMedium
             clip: true
             // Separate color branches: armed (orange) vs normal (yellow-green).

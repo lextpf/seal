@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Window
 
 // Root application window.
 //
@@ -21,12 +22,17 @@ import QtQuick.Layouts
 
 ApplicationWindow {
     id: window
-    visible: true
+    visible: false
     width: 1420
-    height: 480
+    height: 568
     minimumWidth: 1100
-    minimumHeight: 540
+    minimumHeight: 570
     title: "seal"
+    flags: Qt.Window | Qt.FramelessWindowHint
+    topPadding: 0
+    leftPadding: 0
+    rightPadding: 0
+    bottomPadding: 0
     color: Theme.bgDeep
     // Smooth cross-fade when the user toggles dark/light mode, so the
     // background doesn't snap harshly.
@@ -114,8 +120,18 @@ ApplicationWindow {
         }
     }
 
+    function openAddAccountDialog() {
+        accountDlg.dialogTitle = "Add Account";
+        accountDlg.editIndex = -1;
+        accountDlg.initialService = "";
+        accountDlg.initialUsername = "";
+        accountDlg.initialPassword = "";
+        accountDlg.open();
+    }
+
     Component.onCompleted: {
         Backend.updateWindowTheme(Theme.dark);
+        visible = true;
         // Try loading the last-used vault automatically on startup.
         Backend.autoLoadVault();
     }
@@ -127,6 +143,86 @@ ApplicationWindow {
     onClosing: function(close) {
         Backend.cleanup();
         close.accepted = true;
+    }
+
+    // Inline component for window chrome buttons. All share the same 46x36
+    // size, background hover behavior, and centered icon pattern. Optional
+    // bleed lets a hover fill cover the last compositor/frame pixel at the edge.
+    component ChromeButton: Item {
+        id: chromeButton
+        property alias iconSource: _icon.source
+        property color iconColor: _area.containsMouse ? Theme.textPrimary : Theme.textMuted
+        property alias iconRotation: _icon.rotation
+        readonly property bool hovered: _area.containsMouse
+        readonly property bool pressed: _area.pressed
+        property color hoverColor: _area.pressed ? Theme.bgInputFocus : Theme.bgHover
+        property color idleColor: "transparent"
+        property int backgroundLeftBleed: 0
+        property int backgroundTopBleed: 0
+        property int backgroundRightBleed: 0
+        property int backgroundBottomBleed: 0
+        signal clicked()
+
+        width: 46; height: 36
+
+        Rectangle {
+            id: _background
+            anchors.fill: parent
+            color: _area.containsMouse ? chromeButton.hoverColor : chromeButton.idleColor
+            Behavior on color { ColorAnimation { duration: 100 } }
+        }
+
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.top
+            height: chromeButton.backgroundTopBleed
+            visible: _area.containsMouse && chromeButton.backgroundTopBleed > 0
+            color: chromeButton.hoverColor
+        }
+
+        Rectangle {
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.right: parent.left
+            width: chromeButton.backgroundLeftBleed
+            visible: _area.containsMouse && chromeButton.backgroundLeftBleed > 0
+            color: chromeButton.hoverColor
+        }
+
+        Rectangle {
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.left: parent.right
+            width: chromeButton.backgroundRightBleed
+            visible: _area.containsMouse && chromeButton.backgroundRightBleed > 0
+            color: chromeButton.hoverColor
+        }
+
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.bottom
+            height: chromeButton.backgroundBottomBleed
+            visible: _area.containsMouse && chromeButton.backgroundBottomBleed > 0
+            color: chromeButton.hoverColor
+        }
+
+        SvgIcon {
+            id: _icon
+            width: Theme.px(12); height: Theme.px(12)
+            anchors.centerIn: parent
+            color: parent.iconColor
+            Behavior on color { ColorAnimation { duration: 100 } }
+            Behavior on rotation { NumberAnimation { duration: 200; easing.type: Easing.OutBack } }
+        }
+        MouseArea {
+            id: _area
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: parent.clicked()
+        }
     }
 
     // Drag area for the title bar strip above content. Covers the full width
@@ -147,42 +243,7 @@ ApplicationWindow {
         }
     }
 
-    // Inline component for window chrome buttons. All share the same 46x36
-    // size, background hover behavior, and centered icon pattern. Callers
-    // override iconColor/hoverColor/idleColor to customize appearance.
-    component ChromeButton: Rectangle {
-        property alias iconSource: _icon.source
-        property color iconColor: _area.containsMouse ? Theme.textPrimary : Theme.textMuted
-        property alias iconRotation: _icon.rotation
-        readonly property bool hovered: _area.containsMouse
-        readonly property bool pressed: _area.pressed
-        property color hoverColor: _area.pressed ? Theme.bgInputFocus : Theme.bgHover
-        property color idleColor: "transparent"
-        signal clicked()
-
-        width: 46; height: 36
-        color: _area.containsMouse ? hoverColor : idleColor
-        Behavior on color { ColorAnimation { duration: 100 } }
-
-        SvgIcon {
-            id: _icon
-            width: Theme.px(12); height: Theme.px(12)
-            anchors.centerIn: parent
-            color: parent.iconColor
-            Behavior on color { ColorAnimation { duration: 100 } }
-            Behavior on rotation { NumberAnimation { duration: 200; easing.type: Easing.OutBack } }
-        }
-        MouseArea {
-            id: _area
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: parent.clicked()
-        }
-    }
-
-    // Custom window control buttons pinned to the top-right corner, flush
-    // against the window edge so the hover highlight bleeds to the border.
+    // Custom window control buttons pinned to the top-right corner.
     Row {
         id: windowButtons
         anchors.top: parent.top
@@ -220,11 +281,35 @@ ApplicationWindow {
             onClicked: window.showMinimized()
         }
         ChromeButton {
+            id: closeButton
             iconSource: Theme.iconPowerOff
-            hoverColor: pressed ? "#b22a1c" : "#c42b1c"
-            iconColor: hovered ? "#ffffff" : Theme.textMuted
+            hoverColor: pressed ? Theme.windowClosePressed : Theme.windowCloseHover
+            iconColor: hovered ? Theme.textOnAccent : Theme.textMuted
             onClicked: window.close()
         }
+    }
+
+    // Paint directly on the window edge when the close button is hovered so
+    // any remaining scene-gap pixel at the top/right disappears with the same
+    // red fill as the button itself.
+    Rectangle {
+        anchors.top: parent.top
+        anchors.right: parent.right
+        width: closeButton.width
+        height: 1
+        z: 11
+        visible: closeButton.hovered
+        color: closeButton.pressed ? Theme.windowClosePressed : Theme.windowCloseHover
+    }
+
+    Rectangle {
+        anchors.top: parent.top
+        anchors.right: parent.right
+        width: 1
+        height: closeButton.height
+        z: 11
+        visible: closeButton.hovered
+        color: closeButton.pressed ? Theme.windowClosePressed : Theme.windowCloseHover
     }
 
     // Eight decorative background blobs at z:-1 create subtle depth and visual
@@ -328,8 +413,10 @@ ApplicationWindow {
             // calls VaultModel::setFilter() in C++ to re-filter the proxy list.
             // The model emits dataChanged and the ListView updates instantly.
             SearchBar {
+                id: searchBar
                 Layout.fillWidth: true
                 visible: !Backend.isCliMode
+                vaultLoaded: Backend.vaultLoaded
                 resultCount: Backend.vaultModel.count
                 onSearchRequested: function(text) { Backend.searchFilter = text }
             }
@@ -339,7 +426,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 visible: !Backend.isCliMode
-                Layout.maximumHeight: Backend.isCompact ? 102 : (44 + 4 * 48)
+                Layout.maximumHeight: Backend.isCompact ? 102 : (1 + 44 + 4 * 48 + 1)
                 model: Backend.vaultModel
                 selectedRow: Backend.selectedIndex
                 searchActive: Backend.searchFilter.length > 0
@@ -348,6 +435,12 @@ ApplicationWindow {
 
                 onRowClicked: function(row) {
                     Backend.selectedIndex = (Backend.selectedIndex === row) ? -1 : row;
+                }
+
+                onAddAccountRequested: window.openAddAccountDialog()
+                onClearSearchRequested: {
+                    searchBar.text = "";
+                    Backend.searchFilter = "";
                 }
             }
 
@@ -365,12 +458,7 @@ ApplicationWindow {
                 isBusy: Backend.isBusy
 
                 onAddClicked: {
-                    accountDlg.dialogTitle = "Add Account";
-                    accountDlg.editIndex = -1;
-                    accountDlg.initialService = "";
-                    accountDlg.initialUsername = "";
-                    accountDlg.initialPassword = "";
-                    accountDlg.open();
+                    window.openAddAccountDialog();
                 }
 
                 // Synchronous path: if the password is already set, decryptAccountForEdit()
@@ -490,17 +578,10 @@ ApplicationWindow {
                 Layout.rightMargin: 24
                 spacing: 8
 
-                Rectangle {
+                Item {
                     Layout.alignment: Qt.AlignVCenter
-                    width: Theme.px(28)
-                    height: Theme.px(28)
-                    radius: width / 2
-                    gradient: Gradient {
-                        GradientStop { position: 0; color: Qt.rgba(Theme.textError.r, Theme.textError.g, Theme.textError.b, 0.12) }
-                        GradientStop { position: 1; color: Qt.rgba(Theme.textError.r, Theme.textError.g, Theme.textError.b, 0.03) }
-                    }
-                    border.width: 1
-                    border.color: Qt.rgba(Theme.textError.r, Theme.textError.g, Theme.textError.b, 0.14)
+                    Layout.preferredWidth: Theme.px(28)
+                    Layout.preferredHeight: Theme.px(28)
 
                     SvgIcon {
                         source: Theme.iconTriangleExclamation
@@ -601,17 +682,10 @@ ApplicationWindow {
                 Layout.rightMargin: 24
                 spacing: 8
 
-                Rectangle {
+                Item {
                     Layout.alignment: Qt.AlignVCenter
-                    width: Theme.px(28)
-                    height: Theme.px(28)
-                    radius: width / 2
-                    gradient: Gradient {
-                        GradientStop { position: 0; color: Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.12) }
-                        GradientStop { position: 1; color: Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.03) }
-                    }
-                    border.width: 1
-                    border.color: Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.14)
+                    Layout.preferredWidth: Theme.px(28)
+                    Layout.preferredHeight: Theme.px(28)
 
                     SvgIcon {
                         source: Theme.iconCircleCheck
