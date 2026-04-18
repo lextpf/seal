@@ -1,6 +1,11 @@
 #include "QrCapture.h"
 
 #include "CameraSelector.h"
+#include "ConsoleStyle.h"
+#include "Diagnostics.h"
+#include "Logging.h"
+
+#include <QtCore/QString>
 
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
@@ -22,6 +27,35 @@
 
 namespace
 {
+// Route diagnostics through the Qt logging system so they inherit the
+// unified `[ts] [LVL] [seal.qr] [tid=N]` prefix from sealMessageHandler.
+// Tone maps to Qt severity: Debug→qCDebug, Info/Step/Success→qCInfo,
+// Warning→qCWarning, Error→qCCritical.
+void writeQrDiag(seal::console::Tone tone, std::initializer_list<std::string> fields)
+{
+    const QString line = QString::fromStdString(seal::diag::joinFields(fields));
+    switch (tone)
+    {
+        case seal::console::Tone::Debug:
+        case seal::console::Tone::Plain:
+            qCDebug(logQr).noquote() << line;
+            break;
+        case seal::console::Tone::Warning:
+            qCWarning(logQr).noquote() << line;
+            break;
+        case seal::console::Tone::Error:
+            qCCritical(logQr).noquote() << line;
+            break;
+        case seal::console::Tone::Info:
+        case seal::console::Tone::Step:
+        case seal::console::Tone::Success:
+        case seal::console::Tone::Summary:
+        case seal::console::Tone::Banner:
+        default:
+            qCInfo(logQr).noquote() << line;
+            break;
+    }
+}
 
 // Maximum time the QR detection loop can run before auto-cancelling.
 constexpr int kDefaultCaptureTimeoutSec = 60;
@@ -152,7 +186,7 @@ seal::secure_string<> seal::captureQrFromWebcam()
         }
     }
 
-    std::cerr << "QR scanner ready. Point webcam at a QR code.\n";
+    writeQrDiag(seal::console::Tone::Info, {"event=qr.capture.ready", "result=ok"});
 
     // QR decode loop
     cv::QRCodeDetector qrDetector;
@@ -167,7 +201,11 @@ seal::secure_string<> seal::captureQrFromWebcam()
             auto elapsed = std::chrono::steady_clock::now() - captureStart;
             if (elapsed > std::chrono::seconds(captureTimeoutSec))
             {
-                std::cerr << "QR capture timed out after " << captureTimeoutSec << "s\n";
+                writeQrDiag(seal::console::Tone::Warning,
+                            {"event=qr.capture.finish",
+                             "result=fail",
+                             "reason=timeout",
+                             seal::diag::kv("timeout_s", captureTimeoutSec)});
                 break;
             }
         }
@@ -183,8 +221,13 @@ seal::secure_string<> seal::captureQrFromWebcam()
         // Reject oversized frames from malicious virtual-camera drivers.
         if (frame.cols > kMaxFrameDimension || frame.rows > kMaxFrameDimension)
         {
-            std::cerr << "Frame " << frame.cols << "x" << frame.rows << " exceeds "
-                      << kMaxFrameDimension << "px limit, skipping\n";
+            writeQrDiag(seal::console::Tone::Warning,
+                        {"event=qr.frame.skip",
+                         "result=skip",
+                         "reason=frame_too_large",
+                         seal::diag::kv("width", frame.cols),
+                         seal::diag::kv("height", frame.rows),
+                         seal::diag::kv("limit_px", kMaxFrameDimension)});
             continue;
         }
 
@@ -217,12 +260,20 @@ seal::secure_string<> seal::captureQrFromWebcam()
             // anything bigger likely comes from a crafted virtual-camera frame.
             if (data.size() > kMaxQrDataBytes)
             {
-                std::cerr << "QR data (" << data.size() << " bytes) exceeds " << kMaxQrDataBytes
-                          << "B limit, rejected\n";
+                writeQrDiag(seal::console::Tone::Warning,
+                            {"event=qr.decode.skip",
+                             "result=skip",
+                             "reason=payload_too_large",
+                             seal::diag::kv("payload_len", data.size()),
+                             seal::diag::kv("limit_bytes", kMaxQrDataBytes)});
                 SecureZeroMemory(data.data(), data.size());
                 continue;
             }
             result.s.assign(data.begin(), data.end());
+            writeQrDiag(seal::console::Tone::Success,
+                        {"event=qr.decode.finish",
+                         "result=ok",
+                         seal::diag::kv("payload_len", result.size())});
             SecureZeroMemory(data.data(), data.size());
             break;
         }

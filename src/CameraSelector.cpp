@@ -1,5 +1,11 @@
 #include "CameraSelector.h"
 
+#include "ConsoleStyle.h"
+#include "Diagnostics.h"
+#include "Logging.h"
+
+#include <QtCore/QString>
+
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -25,6 +31,50 @@
 
 namespace
 {
+bool IsVirtualCameraName(const std::wstring& name);
+bool IsObsCameraName(const std::wstring& name);
+
+// Route diagnostics through the Qt logging system so they inherit the
+// unified `[ts] [LVL] [seal.camera] [tid=N]` prefix from sealMessageHandler.
+// Tone maps to Qt severity: Debug→qCDebug, Info/Step/Success→qCInfo,
+// Warning→qCWarning, Error→qCCritical.
+void writeCameraDiag(seal::console::Tone tone, std::initializer_list<std::string> fields)
+{
+    const QString line = QString::fromStdString(seal::diag::joinFields(fields));
+    switch (tone)
+    {
+        case seal::console::Tone::Debug:
+        case seal::console::Tone::Plain:
+            qCDebug(logCamera).noquote() << line;
+            break;
+        case seal::console::Tone::Warning:
+            qCWarning(logCamera).noquote() << line;
+            break;
+        case seal::console::Tone::Error:
+            qCCritical(logCamera).noquote() << line;
+            break;
+        case seal::console::Tone::Info:
+        case seal::console::Tone::Step:
+        case seal::console::Tone::Success:
+        case seal::console::Tone::Summary:
+        case seal::console::Tone::Banner:
+        default:
+            qCInfo(logCamera).noquote() << line;
+            break;
+    }
+}
+
+std::string narrowToken(std::string_view text, size_t maxLen = 32)
+{
+    return seal::diag::sanitizeAscii(text, maxLen);
+}
+
+std::string nameMeta(const std::wstring& name)
+{
+    return seal::diag::joinFields({seal::diag::kv("name_len", name.size()),
+                                   seal::diag::kv("virtual_hint", IsVirtualCameraName(name)),
+                                   seal::diag::kv("obs_hint", IsObsCameraName(name))});
+}
 
 // Single source of truth for virtual-camera keywords. Used by
 // ChooseCameraIndexFromNames, IsVirtualCameraName, and BuildCameraPriorityList
@@ -153,7 +203,12 @@ int ChooseCameraIndexFromNames(const std::vector<std::wstring>& names, bool log)
         if (end != forced && *end == '\0' && idx >= 0 && idx <= 99)
         {
             if (log)
-                std::cerr << "Using SEAL_CAMERA_INDEX=" << idx << "\n";
+            {
+                writeCameraDiag(seal::console::Tone::Info,
+                                {"event=camera.select.hint",
+                                 "source=env_index",
+                                 seal::diag::kv("index", static_cast<int>(idx))});
+            }
             return (int)idx;
         }
     }
@@ -165,10 +220,14 @@ int ChooseCameraIndexFromNames(const std::vector<std::wstring>& names, bool log)
 
     if (log)
     {
-        std::cerr << "Detected cameras:\n";
+        writeCameraDiag(
+            seal::console::Tone::Info,
+            {"event=camera.enumerate.finish", "result=ok", seal::diag::kv("count", names.size())});
         for (size_t i = 0; i < names.size(); ++i)
         {
-            std::wcerr << L"  [" << i << L"] " << names[i] << L"\n";
+            writeCameraDiag(
+                seal::console::Tone::Debug,
+                {"event=camera.enumerate.device", seal::diag::kv("index", i), nameMeta(names[i])});
         }
     }
 
@@ -222,8 +281,11 @@ int ChooseCameraIndexFromNames(const std::vector<std::wstring>& names, bool log)
             {
                 if (log)
                 {
-                    std::wcerr << L"Selecting preferred webcam: " << names[i] << L" (index " << i
-                               << L")\n";
+                    writeCameraDiag(seal::console::Tone::Info,
+                                    {"event=camera.select.hint",
+                                     "source=preferred_keyword",
+                                     seal::diag::kv("index", i),
+                                     nameMeta(names[i])});
                 }
                 return (int)i;
             }
@@ -248,8 +310,11 @@ int ChooseCameraIndexFromNames(const std::vector<std::wstring>& names, bool log)
         {
             if (log)
             {
-                std::wcerr << L"Selecting first non-virtual camera: " << names[i] << L" (index "
-                           << i << L")\n";
+                writeCameraDiag(seal::console::Tone::Info,
+                                {"event=camera.select.hint",
+                                 "source=first_physical",
+                                 seal::diag::kv("index", i),
+                                 nameMeta(names[i])});
             }
             return (int)i;
         }
@@ -349,18 +414,28 @@ bool TryOpenCamera(cv::VideoCapture& cap,
                    bool requestHighRes)
 {
     cap.release();
+    const std::string apiToken = narrowToken(apiName);
 
     const bool opened = (api == cv::CAP_ANY) ? cap.open(cameraIndex) : cap.open(cameraIndex, api);
     if (!opened)
     {
-        std::cerr << "Camera open failed: index " << cameraIndex << " via " << apiName << "\n";
+        writeCameraDiag(seal::console::Tone::Warning,
+                        {"event=camera.open.finish",
+                         "result=fail",
+                         seal::diag::kv("index", cameraIndex),
+                         seal::diag::kv("backend", apiToken),
+                         "reason=open_failed"});
         return false;
     }
 
     if (!ProbeFrame(cap, probeFrame))
     {
-        std::cerr << "Camera opened but no frames: index " << cameraIndex << " via " << apiName
-                  << "\n";
+        writeCameraDiag(seal::console::Tone::Warning,
+                        {"event=camera.open.finish",
+                         "result=fail",
+                         seal::diag::kv("index", cameraIndex),
+                         seal::diag::kv("backend", apiToken),
+                         "reason=no_frames"});
         cap.release();
         return false;
     }
@@ -380,28 +455,48 @@ bool TryOpenCamera(cv::VideoCapture& cap,
     {
         if (requestHighRes)
         {
-            std::cerr << "1080p unstable on index " << cameraIndex << " via " << apiName
-                      << ", falling back to 1280x720\n";
+            writeCameraDiag(seal::console::Tone::Warning,
+                            {"event=camera.open.fallback",
+                             seal::diag::kv("index", cameraIndex),
+                             seal::diag::kv("backend", apiToken),
+                             "reason=high_res_unstable",
+                             "from=1920x1080",
+                             "to=1280x720"});
             cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
             cap.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
             if (!cap.read(probeFrame) || probeFrame.empty())
             {
-                std::cerr << "Camera stream failed after resolution fallback: index " << cameraIndex
-                          << " via " << apiName << "\n";
+                writeCameraDiag(seal::console::Tone::Warning,
+                                {"event=camera.open.finish",
+                                 "result=fail",
+                                 seal::diag::kv("index", cameraIndex),
+                                 seal::diag::kv("backend", apiToken),
+                                 "reason=fallback_failed"});
                 cap.release();
                 return false;
             }
         }
         else
         {
-            std::cerr << "Camera stream failed at 720p: index " << cameraIndex << " via " << apiName
-                      << "\n";
+            writeCameraDiag(seal::console::Tone::Warning,
+                            {"event=camera.open.finish",
+                             "result=fail",
+                             seal::diag::kv("index", cameraIndex),
+                             seal::diag::kv("backend", apiToken),
+                             "reason=stream_failed_720p"});
             cap.release();
             return false;
         }
     }
 
-    std::cerr << "Camera ready: index " << cameraIndex << " via " << apiName << "\n";
+    writeCameraDiag(seal::console::Tone::Success,
+                    {"event=camera.open.finish",
+                     "result=ok",
+                     seal::diag::kv("index", cameraIndex),
+                     seal::diag::kv("backend", apiToken),
+                     seal::diag::kv("width", probeFrame.cols),
+                     seal::diag::kv("height", probeFrame.rows),
+                     seal::diag::kv("requested_high_res", requestHighRes)});
     return true;
 }
 
@@ -502,8 +597,13 @@ bool PickBestCamera(cv::VideoCapture& cap, cv::Mat& frame)
             const bool isDshow = be.api == cv::CAP_DSHOW;
             const double score = ScoreCandidate(idx, w, h, preferredIndexHint, isDshow);
 
-            std::cerr << "Candidate camera: index " << idx << " via " << be.name << " @" << w << "x"
-                      << h << " score=" << score << "\n";
+            writeCameraDiag(seal::console::Tone::Debug,
+                            {"event=camera.candidate",
+                             seal::diag::kv("index", idx),
+                             seal::diag::kv("backend", narrowToken(be.name)),
+                             seal::diag::kv("width", w),
+                             seal::diag::kv("height", h),
+                             seal::diag::kv("score", score, 2)});
 
             CameraCandidate cand;
             cand.index = idx;
@@ -527,7 +627,12 @@ bool PickBestCamera(cv::VideoCapture& cap, cv::Mat& frame)
                 chooseOk = true;
                 cameraOpenForChosen = true;
                 quickCameraHit = true;
-                std::cerr << "Quick camera select: index " << idx << " via " << be.name << "\n";
+                writeCameraDiag(seal::console::Tone::Info,
+                                {"event=camera.select.quick",
+                                 "result=ok",
+                                 seal::diag::kv("index", idx),
+                                 seal::diag::kv("backend", narrowToken(be.name)),
+                                 seal::diag::kv("forced", quickForcedHit)});
                 break;
             }
 
@@ -540,7 +645,8 @@ bool PickBestCamera(cv::VideoCapture& cap, cv::Mat& frame)
 
     if (candidates.empty())
     {
-        std::cerr << "Could not open webcam\n";
+        writeCameraDiag(seal::console::Tone::Error,
+                        {"event=camera.select.finish", "result=fail", "reason=no_candidates"});
         return false;
     }
 
@@ -571,8 +677,12 @@ bool PickBestCamera(cv::VideoCapture& cap, cv::Mat& frame)
             chooseOk = chooseBest([&](const CameraCandidate& c) { return c.index == forcedIndex; });
             if (!chooseOk)
             {
-                std::cerr << "Forced camera index SEAL_CAMERA_INDEX=" << forcedIndex
-                          << " was not available.\n";
+                writeCameraDiag(seal::console::Tone::Warning,
+                                {"event=camera.select.hint",
+                                 "result=fail",
+                                 "source=env_index",
+                                 seal::diag::kv("index", forcedIndex),
+                                 "reason=not_available"});
             }
         }
         else
@@ -606,10 +716,12 @@ bool PickBestCamera(cv::VideoCapture& cap, cv::Mat& frame)
 
     if (!chooseOk)
     {
-        std::cerr << "No usable camera found.\n"
-                  << "Close/disable Camo and OBS Virtual Camera, then retry.\n"
-                  << "Set SEAL_ALLOW_VIRTUAL_CAMERA=1 for virtual fallback.\n"
-                  << "Set SEAL_ALLOW_OBS_CAMERA=1 to allow OBS.\n";
+        writeCameraDiag(seal::console::Tone::Error,
+                        {"event=camera.select.finish",
+                         "result=fail",
+                         "reason=no_usable_camera",
+                         seal::diag::kv("allow_virtual_fallback", allowVirtualFallback),
+                         seal::diag::kv("allow_obs_camera", allowObsCamera)});
         return false;
     }
 
@@ -617,17 +729,24 @@ bool PickBestCamera(cv::VideoCapture& cap, cv::Mat& frame)
     if (!cameraOpenForChosen &&
         !TryOpenCamera(cap, chosen.index, chosen.api, chosen.backend, frame, true))
     {
-        std::cerr << "Selected camera could not be reopened for capture.\n";
+        writeCameraDiag(seal::console::Tone::Error,
+                        {"event=camera.select.finish",
+                         "result=fail",
+                         seal::diag::kv("index", chosen.index),
+                         seal::diag::kv("backend", narrowToken(chosen.backend)),
+                         "reason=reopen_failed"});
         return false;
     }
 
-    std::cerr << "Using camera index " << chosen.index << " via " << chosen.backend << " @"
-              << chosen.width << "x" << chosen.height;
-    if (chosen.knownByName)
-    {
-        std::wcerr << L" name=\"" << names[chosen.index] << L"\"";
-    }
-    std::cerr << "\n";
+    writeCameraDiag(seal::console::Tone::Success,
+                    {"event=camera.select.finish",
+                     "result=ok",
+                     seal::diag::kv("index", chosen.index),
+                     seal::diag::kv("backend", narrowToken(chosen.backend)),
+                     seal::diag::kv("width", chosen.width),
+                     seal::diag::kv("height", chosen.height),
+                     seal::diag::kv("known_by_name", chosen.knownByName),
+                     seal::diag::kv("virtual_by_name", chosen.virtualByName)});
     return true;
 }
 
