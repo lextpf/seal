@@ -84,21 +84,25 @@ bool containsPasswordHint(const QString& rawText)
     return false;
 }
 
-UiaPasswordObservation inspectPasswordHintMetadata(IUIAutomationElement* element)
+UiaPasswordObservation inspectPasswordHintMetadata(IUIAutomationElement* element,
+                                                   bool skipControlTypeGate = false)
 {
     UiaPasswordObservation observation;
     if (!element)
         return observation;
 
-    CONTROLTYPEID controlType = 0;
-    if (FAILED(element->get_CurrentControlType(&controlType)))
-        controlType = 0;
+    if (!skipControlTypeGate)
+    {
+        CONTROLTYPEID controlType = 0;
+        if (FAILED(element->get_CurrentControlType(&controlType)))
+            controlType = 0;
 
-    const bool editableLike =
-        controlType == UIA_EditControlTypeId || controlType == UIA_CustomControlTypeId ||
-        controlType == UIA_PaneControlTypeId || controlType == UIA_DocumentControlTypeId;
-    if (!editableLike)
-        return observation;
+        const bool editableLike =
+            controlType == UIA_EditControlTypeId || controlType == UIA_CustomControlTypeId ||
+            controlType == UIA_PaneControlTypeId || controlType == UIA_DocumentControlTypeId;
+        if (!editableLike)
+            return observation;
+    }
 
     struct StringPropertyProbe
     {
@@ -106,10 +110,11 @@ UiaPasswordObservation inspectPasswordHintMetadata(IUIAutomationElement* element
         const char* label;
     };
 
-    static const std::array<StringPropertyProbe, 6> kPropertyProbes = {{
+    static const std::array<StringPropertyProbe, 7> kPropertyProbes = {{
         {UIA_AutomationIdPropertyId, "AutomationId"},
         {UIA_NamePropertyId, "Name"},
         {UIA_HelpTextPropertyId, "HelpText"},
+        {UIA_FullDescriptionPropertyId, "FullDescription"},
         {UIA_ItemTypePropertyId, "ItemType"},
         {UIA_AriaRolePropertyId, "AriaRole"},
         {UIA_AriaPropertiesPropertyId, "AriaProperties"},
@@ -210,7 +215,8 @@ bool tryGetCurrentBoundingRect(IUIAutomationElement* element, RECT* rect)
     return true;
 }
 
-UiaPasswordObservation inspectElementPasswordState(IUIAutomationElement* element)
+UiaPasswordObservation inspectElementPasswordState(IUIAutomationElement* element,
+                                                   bool skipControlTypeGate = false)
 {
     UiaPasswordObservation observation;
     if (!element)
@@ -256,7 +262,8 @@ UiaPasswordObservation inspectElementPasswordState(IUIAutomationElement* element
     if (observation.isPassword)
         return observation;
 
-    UiaPasswordObservation metadataObservation = inspectPasswordHintMetadata(element);
+    UiaPasswordObservation metadataObservation =
+        inspectPasswordHintMetadata(element, skipControlTypeGate);
     if (metadataObservation.isPassword)
         return metadataObservation;
 
@@ -1017,7 +1024,8 @@ int FillController::probeIsPassword(LONG x, LONG y)
             continue;
         }
 
-        UiaPasswordObservation observation = inspectElementPasswordState(parent);
+        UiaPasswordObservation observation =
+            inspectElementPasswordState(parent, /*skipControlTypeGate=*/true);
         observedAny = observedAny || observation.observed;
         if (observation.isPassword)
         {
