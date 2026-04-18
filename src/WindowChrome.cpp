@@ -26,26 +26,38 @@ bool TitleBarFilter::nativeEventFilter(const QByteArray& eventType, void* messag
     {
         case WM_NCCALCSIZE:
         {
-            if (msg->wParam == TRUE)
+            // Claim the entire window as client area on both NCCALCSIZE paths.
+            // Some frame recalculations arrive with wParam == FALSE; letting
+            // DefWindowProc handle those leaves a 1px visible frame around the
+            // custom chrome.
+            if (IsZoomed(msg->hwnd))
             {
-                // Returning 0 makes the entire window the client area,
-                // removing the native title bar. For maximized windows,
-                // constrain to the monitor work area so the taskbar stays visible.
-                if (IsZoomed(msg->hwnd))
+                HMONITOR mon = MonitorFromWindow(msg->hwnd, MONITOR_DEFAULTTONEAREST);
+                MONITORINFO mi{};
+                mi.cbSize = sizeof(mi);
+                if (GetMonitorInfoW(mon, &mi))
                 {
-                    auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
-                    HMONITOR mon = MonitorFromWindow(msg->hwnd, MONITOR_DEFAULTTONEAREST);
-                    MONITORINFO mi{};
-                    mi.cbSize = sizeof(mi);
-                    if (GetMonitorInfoW(mon, &mi))
+                    if (msg->wParam == TRUE)
                     {
+                        auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
                         params->rgrc[0] = mi.rcWork;
                     }
+                    else
+                    {
+                        auto* rect = reinterpret_cast<RECT*>(msg->lParam);
+                        *rect = mi.rcWork;
+                    }
                 }
-                *result = 0;
-                return true;
             }
-            break;
+            *result = 0;
+            return true;
+        }
+        case WM_NCACTIVATE:
+        {
+            // Prevent the default handler from repainting an active/inactive
+            // non-client border over our edge-to-edge client surface.
+            *result = TRUE;
+            return true;
         }
         case WM_NCPAINT:
         {
@@ -143,6 +155,19 @@ void InstallWindowChrome(HWND hwnd)
     SendMessage(hwnd, WM_SETICON, ICON_SMALL, 0);
     SendMessage(hwnd, WM_SETICON, ICON_BIG, 0);
 
+    // Strip the native caption/border styles so Windows stops reserving and
+    // drawing the last visible frame pixel, while keeping the thick frame and
+    // system menu bits needed for resize, snap, minimize/maximize semantics.
+    LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
+    style &= ~static_cast<LONG_PTR>(WS_CAPTION);
+    style |= static_cast<LONG_PTR>(WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
+    SetWindowLongPtr(hwnd, GWL_STYLE, style);
+
+    LONG_PTR exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+    exStyle &= ~static_cast<LONG_PTR>(WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_DLGMODALFRAME |
+                                      WS_EX_WINDOWEDGE);
+    SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle);
+
     // Install native event filter for custom title bar
     auto* filter = new TitleBarFilter();
     filter->m_Hwnd = hwnd;
@@ -186,9 +211,16 @@ void ApplyWindowTheme(HWND hwnd, bool dark)
     BOOL darkMode = dark ? TRUE : FALSE;
     DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &darkMode, sizeof(darkMode));
 
-    // Match border color to bgDeep so the 1px DWM frame blends invisibly.
+    // Suppress the 1px DWM accent stroke so client-area content (e.g. caption
+    // button hover highlights) paints flush to the window edge. The window
+    // shadow and rounded corners remain intact -- they are separate DWM
+    // attributes. The sentinel 0xFFFFFFFE is DWMWA_COLOR_NONE.
+    COLORREF borderNone = 0xFFFFFFFE;
+    DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &borderNone, sizeof(borderNone));
+
+    // Caption color still feeds the taskbar thumbnail and alt-tab preview
+    // even though our client area covers the whole window.
     COLORREF captionColor = dark ? RGB(7, 8, 16) : RGB(248, 246, 242);
-    DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &captionColor, sizeof(captionColor));
     DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &captionColor, sizeof(captionColor));
 
     COLORREF textColor = dark ? RGB(224, 230, 244) : RGB(30, 26, 18);
