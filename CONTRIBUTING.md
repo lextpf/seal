@@ -58,35 +58,35 @@ Do not restate or fight these rules in review. Run the formatter and move on.
 
 ## Naming Conventions
 
-|                Element |          Style          | Examples                                 |
-|------------------------|-------------------------|------------------------------------------|
-|                  Files |       PascalCase        | `Renderer.h`, `Settings.cpp`             |
-|      Classes / Structs |       PascalCase        | `Game`, `TierDefinition`                 |
-|                  Enums |       PascalCase        | `enum class Direction`                   |
-|            Enum values |       PascalCase        | `Direction::Up`                          |
-|    Functions / Methods |       PascalCase        | `Initialize()`, `LoadFromFile()`         |
-|             Namespaces |       PascalCase        | `Settings`, `Renderer`                   |
-|        Local variables |        camelCase        | `deltaTime`, `tileX`                     |
-|             Parameters |        camelCase        | `float distance`                         |
-|       Member variables |    `m_` + PascalCase    | `m_Window`, `m_Width`                    |
-|       Static variables |       `s_` prefix       | `s_Count`                                |
-|       Global variables |       `g_` prefix       | `g_Device`                               |
-|     Constants / Macros |    UPPER_SNAKE_CASE     | `MAX_DISTANCE`, `TWO_PI`                 |
-| Compile-time constants |   `static constexpr`    | `static constexpr int SIZE = 16;`        |
-|           Type aliases | PascalCase with `using` | `using IndexMap = std::unordered_map<>;` |
+|                Element |          Style              | Examples                                 |
+|------------------------|-----------------------------|------------------------------------------|
+|                  Files |         PascalCase          | `Logger.h`, `Utils.cpp`                  |
+|      Classes / Structs |         PascalCase          | `Logger`, `BackgroundJob`                |
+|                  Enums |         PascalCase          | `enum class PluginType`                  |
+|            Enum values |         PascalCase          | `PluginType::Required`                   |
+|    Functions / Methods |         snake_case          | `normalize_path()`, `to_lower()`         |
+|             Namespaces |    snake_case or PascalCase | `mo2core`, `CApi`                        |
+|        Local variables |         snake_case          | `file_path`, `dep_met`                   |
+|             Parameters |         snake_case          | `const std::string& archive_path`        |
+|       Member variables | snake_case + trailing `_`   | `callback_`, `mutex_`                    |
+|       Static variables |         snake_case          | `plugin_type_map`                        |
+|       Global variables |       `g_` prefix           | `g_result`                               |
+|     Constants / Macros |      UPPER_SNAKE_CASE       | `MO2_API`, `MAX_DISTANCE`                |
+| Compile-time constants |     `static constexpr`      | `static constexpr int SIZE = 16;`        |
+|           Type aliases |   PascalCase with `using`   | `using Result = std::expected<>;`        |
 
 ### Struct members
 
-Plain structs used as passive data holders use `camelCase` with no prefix:
+Plain structs used as passive data holders use `snake_case` with no prefix:
 
 ```cpp
 struct Particle
 {
-    glm::vec2 startPosition;
-    glm::vec2 moveDirection;
-    float maxLifetime;
+    glm::vec2 start_position;
+    glm::vec2 move_direction;
+    float max_lifetime;
 };
-````
+```
 
 ### Prefer named data over positional data
 
@@ -401,7 +401,7 @@ Trailing member/enum docs:
 //!< ...
 ```
 
-In `.cpp` files`, use `//` comments only.
+In `.cpp` files, use `//` comments only.
 
 ### Doxide guidance
 
@@ -418,7 +418,7 @@ Prefer these commands where useful:
 * `@see`
 * `@ingroup`
 
-We still use `@brief`, `@class`, `@struct`, `@union`, `@enum`, and `@namespace` for readability and forward-compatibility.
+We still use `@brief`, `@class`, `@struct`, `@union`, `@enum`, `@namespace`, and `@author` for readability and forward-compatibility.
 
 Do not use: `@short`, `@file`, `@defgroup`, `@def`, `@fn`, `@var`, `@internal`.
 
