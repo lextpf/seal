@@ -79,22 +79,40 @@ CompileFlags:
     - -Itests
 
     # vcpkg-installed headers - dynamic triplet (default `.\build.bat` output).
-    # Qt6 lives one level deeper at include/Qt6/ in the vcpkg port layout, so
-    # `<QtCore/QString>` only resolves with the Qt6 sub-include path added.
-    # OpenCV is similar with include/opencv4/.
+    # Qt6 places its forwarding headers (`<QObject>`, `<QString>`, ...) inside
+    # per-module subdirs (`include/Qt6/QtCore/QObject`), so each Qt module dir
+    # the code touches must be on the include path. OpenCV needs include/opencv4.
     - -Ibuild/vcpkg_installed/x64-windows-release-msvc143/include
     - -Ibuild/vcpkg_installed/x64-windows-release-msvc143/include/Qt6
+    - -Ibuild/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtCore
+    - -Ibuild/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtGui
+    - -Ibuild/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtQml
+    - -Ibuild/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtQuick
+    - -Ibuild/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtQuickControls2
+    - -Ibuild/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtWidgets
     - -Ibuild/vcpkg_installed/x64-windows-release-msvc143/include/opencv4
 
     # vcpkg-installed headers - static triplet (`.\build.bat --static` output).
     - -Ibuild/vcpkg_installed/x64-windows-static-release-msvc143/include
     - -Ibuild/vcpkg_installed/x64-windows-static-release-msvc143/include/Qt6
+    - -Ibuild/vcpkg_installed/x64-windows-static-release-msvc143/include/Qt6/QtCore
+    - -Ibuild/vcpkg_installed/x64-windows-static-release-msvc143/include/Qt6/QtGui
+    - -Ibuild/vcpkg_installed/x64-windows-static-release-msvc143/include/Qt6/QtQml
+    - -Ibuild/vcpkg_installed/x64-windows-static-release-msvc143/include/Qt6/QtQuick
+    - -Ibuild/vcpkg_installed/x64-windows-static-release-msvc143/include/Qt6/QtQuickControls2
+    - -Ibuild/vcpkg_installed/x64-windows-static-release-msvc143/include/Qt6/QtWidgets
     - -Ibuild/vcpkg_installed/x64-windows-static-release-msvc143/include/opencv4
 
     # vcpkg-installed headers - side-by-side Ninja build for compile DB
     # (option A above). Same triplet, different output tree.
     - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include
     - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include/Qt6
+    - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtCore
+    - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtGui
+    - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtQml
+    - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtQuick
+    - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtQuickControls2
+    - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtWidgets
     - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include/opencv4
 
   Remove:
