@@ -2,6 +2,7 @@
 
 #include "FillController.h"
 #include "Clipboard.h"
+#include "Diagnostics.h"
 #include "Logging.h"
 
 #include <QtCore/QThread>
@@ -22,10 +23,10 @@ constexpr int kMaxUiaAncestorDepth = 8;
 constexpr int kMaxUiaDescendantDepth = 6;
 constexpr int kMaxUiaDescendantNodes = 64;
 
-struct UiaPasswordObservation
+struct UiaHintObservation
 {
     bool observed = false;
-    bool isPassword = false;
+    bool matched = false;
     QString source;
     QString matchedText;
 };
@@ -67,12 +68,34 @@ bool containsPasswordHint(const QString& rawText)
     if (text.isEmpty())
         return false;
 
-    static const std::array<QStringView, 5> kPasswordHints = {
-        QStringView{u"password"},
-        QStringView{u"passwort"},
-        QStringView{u"passwd"},
-        QStringView{u"pwd"},
-        QStringView{u"kennwort"},
+    // Substring-matched against lowercased UIA property values. \u escapes
+    // keep the source ASCII-only so the build is independent of MSVC's source
+    // codepage setting. ASCII fallback variants cover sites that strip
+    // diacritics before exposing labels through accessibility.
+    static const std::array<QStringView, 27> kPasswordHints = {
+        QStringView{u"password"},     QStringView{u"passwd"},   QStringView{u"passcode"},
+        QStringView{u"pwd"},          QStringView{u"passwort"}, QStringView{u"kennwort"},
+        QStringView{u"contraseña"},    // es
+        QStringView{u"mot de passe"},  // fr
+        QStringView{u"motdepasse"},    // fr (compact)
+        QStringView{u"senha"},         // pt
+        QStringView{u"wachtwoord"},    // nl
+        QStringView{u"hasło"},         // pl
+        QStringView{u"haslo"},         // pl (ASCII fallback)
+        QStringView{u"lösenord"},      // sv
+        QStringView{u"losenord"},      // sv (ASCII fallback)
+        QStringView{u"passord"},       // no
+        QStringView{u"adgangskode"},   // da
+        QStringView{u"salasana"},      // fi
+        QStringView{u"heslo"},         // cs
+        QStringView{u"jelszó"},        // hu
+        QStringView{u"jelszo"},        // hu (ASCII fallback)
+        QStringView{u"şifre"},         // tr
+        QStringView{u"sifre"},         // tr (ASCII fallback)
+        QStringView{u"пароль"},        // ru/uk
+        QStringView{u"κωδικός"},       // el
+        QStringView{u"كلمة المرور"},   // ar
+        QStringView{u"كلمةالمرور"},    // ar (no space)
     };
 
     for (const QStringView hint : kPasswordHints)
@@ -84,50 +107,128 @@ bool containsPasswordHint(const QString& rawText)
     return false;
 }
 
-UiaPasswordObservation inspectPasswordHintMetadata(IUIAutomationElement* element,
-                                                   bool skipControlTypeGate = false)
+bool containsUsernameHint(const QString& rawText)
 {
-    UiaPasswordObservation observation;
+    const QString text = rawText.trimmed().toLower();
+    if (text.isEmpty())
+        return false;
+
+    // Compound forms only - bare "user" would false-positive on user-agent,
+    // user-profile-pic, etc. Multi-word entries match against the full
+    // lowercased property value (substring contains semantics).
+    static const std::array<QStringView, 28> kUsernameHints = {
+        QStringView{u"username"},
+        QStringView{u"user-name"},
+        QStringView{u"userid"},
+        QStringView{u"user-id"},
+        QStringView{u"e-mail"},
+        QStringView{u"email"},
+        QStringView{u"login"},
+        QStringView{u"account"},
+        QStringView{u"benutzer"},
+        QStringView{u"benutzername"},
+        QStringView{u"anmelden"},
+        QStringView{u"anmeldung"},
+        QStringView{u"nutzer"},
+        QStringView{u"konto"},
+        QStringView{u"kennung"},
+        QStringView{u"usuario"},             // es
+        QStringView{u"correo electrónico"},  // es
+        QStringView{u"iniciar sesión"},      // es
+        QStringView{u"cuenta"},              // es
+        QStringView{u"utilisateur"},         // fr
+        QStringView{u"nom d'utilisateur"},   // fr
+        QStringView{u"identifiant"},         // fr
+        QStringView{u"courriel"},            // fr
+        QStringView{u"compte"},              // fr
+        QStringView{u"nome utente"},         // it
+        QStringView{u"accesso"},             // it
+        QStringView{u"nome de usuário"},     // pt
+        QStringView{u"usuário"},             // pt
+    };
+
+    for (const QStringView hint : kUsernameHints)
+    {
+        if (text.contains(hint))
+            return true;
+    }
+
+    return false;
+}
+
+struct StringPropertyProbe
+{
+    PROPERTYID propertyId;
+    const char* label;
+};
+
+// Shared between password and username metadata scans. Order matters for
+// log diagnostics (first match wins).
+static const std::array<StringPropertyProbe, 9> kHintPropertyProbes = {{
+    {UIA_AutomationIdPropertyId, "AutomationId"},
+    {UIA_NamePropertyId, "Name"},
+    {UIA_HelpTextPropertyId, "HelpText"},
+    {UIA_FullDescriptionPropertyId, "FullDescription"},
+    {UIA_LocalizedControlTypePropertyId, "LocalizedControlType"},
+    {UIA_ClassNamePropertyId, "ClassName"},
+    {UIA_ItemTypePropertyId, "ItemType"},
+    {UIA_AriaRolePropertyId, "AriaRole"},
+    {UIA_AriaPropertiesPropertyId, "AriaProperties"},
+}};
+
+bool isEditLikeControlType(IUIAutomationElement* element)
+{
+    CONTROLTYPEID controlType = 0;
+    if (FAILED(element->get_CurrentControlType(&controlType)))
+        return false;
+    return controlType == UIA_EditControlTypeId || controlType == UIA_CustomControlTypeId ||
+           controlType == UIA_PaneControlTypeId || controlType == UIA_DocumentControlTypeId;
+}
+
+UiaHintObservation inspectPasswordHintMetadata(IUIAutomationElement* element,
+                                               bool skipControlTypeGate = false)
+{
+    UiaHintObservation observation;
     if (!element)
         return observation;
 
-    if (!skipControlTypeGate)
-    {
-        CONTROLTYPEID controlType = 0;
-        if (FAILED(element->get_CurrentControlType(&controlType)))
-            controlType = 0;
+    if (!skipControlTypeGate && !isEditLikeControlType(element))
+        return observation;
 
-        const bool editableLike =
-            controlType == UIA_EditControlTypeId || controlType == UIA_CustomControlTypeId ||
-            controlType == UIA_PaneControlTypeId || controlType == UIA_DocumentControlTypeId;
-        if (!editableLike)
-            return observation;
-    }
-
-    struct StringPropertyProbe
-    {
-        PROPERTYID propertyId;
-        const char* label;
-    };
-
-    static const std::array<StringPropertyProbe, 7> kPropertyProbes = {{
-        {UIA_AutomationIdPropertyId, "AutomationId"},
-        {UIA_NamePropertyId, "Name"},
-        {UIA_HelpTextPropertyId, "HelpText"},
-        {UIA_FullDescriptionPropertyId, "FullDescription"},
-        {UIA_ItemTypePropertyId, "ItemType"},
-        {UIA_AriaRolePropertyId, "AriaRole"},
-        {UIA_AriaPropertiesPropertyId, "AriaProperties"},
-    }};
-
-    for (const StringPropertyProbe& probe : kPropertyProbes)
+    for (const StringPropertyProbe& probe : kHintPropertyProbes)
     {
         const QString value = currentStringProperty(element, probe.propertyId);
         if (!containsPasswordHint(value))
             continue;
 
         observation.observed = true;
-        observation.isPassword = true;
+        observation.matched = true;
+        observation.source = QString::fromLatin1(probe.label);
+        observation.matchedText = value;
+        return observation;
+    }
+
+    return observation;
+}
+
+UiaHintObservation inspectUsernameHintMetadata(IUIAutomationElement* element,
+                                               bool skipControlTypeGate = false)
+{
+    UiaHintObservation observation;
+    if (!element)
+        return observation;
+
+    if (!skipControlTypeGate && !isEditLikeControlType(element))
+        return observation;
+
+    for (const StringPropertyProbe& probe : kHintPropertyProbes)
+    {
+        const QString value = currentStringProperty(element, probe.propertyId);
+        if (!containsUsernameHint(value))
+            continue;
+
+        observation.observed = true;
+        observation.matched = true;
         observation.source = QString::fromLatin1(probe.label);
         observation.matchedText = value;
         return observation;
@@ -215,10 +316,10 @@ bool tryGetCurrentBoundingRect(IUIAutomationElement* element, RECT* rect)
     return true;
 }
 
-UiaPasswordObservation inspectElementPasswordState(IUIAutomationElement* element,
-                                                   bool skipControlTypeGate = false)
+UiaHintObservation inspectElementPasswordState(IUIAutomationElement* element,
+                                               bool skipControlTypeGate = false)
 {
-    UiaPasswordObservation observation;
+    UiaHintObservation observation;
     if (!element)
         return observation;
 
@@ -228,12 +329,12 @@ UiaPasswordObservation inspectElementPasswordState(IUIAutomationElement* element
     if (SUCCEEDED(hr) && val.vt == VT_BOOL)
     {
         observation.observed = true;
-        observation.isPassword = (val.boolVal == VARIANT_TRUE);
+        observation.matched = (val.boolVal == VARIANT_TRUE);
         observation.source = QStringLiteral("IsPassword");
     }
     VariantClear(&val);
 
-    if (observation.isPassword)
+    if (observation.matched)
         return observation;
 
     IUnknown* patternUnknown = nullptr;
@@ -251,7 +352,7 @@ UiaPasswordObservation inspectElementPasswordState(IUIAutomationElement* element
                 observation.observed = true;
                 if (legacyState & STATE_SYSTEM_PROTECTED)
                 {
-                    observation.isPassword = true;
+                    observation.matched = true;
                     observation.source = QStringLiteral("LegacyState");
                 }
             }
@@ -259,15 +360,23 @@ UiaPasswordObservation inspectElementPasswordState(IUIAutomationElement* element
         }
     }
 
-    if (observation.isPassword)
+    if (observation.matched)
         return observation;
 
-    UiaPasswordObservation metadataObservation =
+    UiaHintObservation metadataObservation =
         inspectPasswordHintMetadata(element, skipControlTypeGate);
-    if (metadataObservation.isPassword)
+    if (metadataObservation.matched)
         return metadataObservation;
 
     return observation;
+}
+
+UiaHintObservation inspectElementUsernameState(IUIAutomationElement* element)
+{
+    // No UIA IsUsername property exists; this is metadata-keyword-only.
+    // Permissive on control type since form-context callers may receive
+    // non-Edit wrappers around the actual input.
+    return inspectUsernameHintMetadata(element, /*skipControlTypeGate=*/true);
 }
 
 QString describeAutomationElement(IUIAutomationElement* element)
@@ -339,9 +448,9 @@ bool searchDescendantsForPassword(IUIAutomationTreeWalker* walker,
         if (shouldInspect)
         {
             --nodesRemaining;
-            UiaPasswordObservation observation = inspectElementPasswordState(child);
+            UiaHintObservation observation = inspectElementPasswordState(child);
             observedAny = observedAny || observation.observed;
-            if (observation.isPassword)
+            if (observation.matched)
             {
                 qCDebug(logFill) << "probeIsPassword: descendant matched via"
                                  << (observation.source.isEmpty() ? QStringLiteral("<unknown>")
@@ -370,6 +479,138 @@ bool searchDescendantsForPassword(IUIAutomationTreeWalker* walker,
     }
 
     return false;
+}
+
+// Walk up from `start` looking for a form-like container: an ancestor with at
+// least two direct Edit/Custom children and a bounding rectangle smaller than
+// half the primary monitor area (the half-monitor cap prevents landing on
+// <body> for short pages). Caller takes ownership of the returned element.
+IUIAutomationElement* findFormAncestor(IUIAutomationTreeWalker* walker, IUIAutomationElement* start)
+{
+    if (!walker || !start)
+        return nullptr;
+
+    const LONG screenW = GetSystemMetrics(SM_CXSCREEN);
+    const LONG screenH = GetSystemMetrics(SM_CYSCREEN);
+    const long long halfMonitorArea =
+        static_cast<long long>(screenW) * static_cast<long long>(screenH) / 2;
+
+    constexpr int kMaxFormAncestorDepth = 12;
+    constexpr int kMinPeers = 2;
+
+    IUIAutomationElement* current = start;
+    current->AddRef();
+
+    for (int depth = 0; depth < kMaxFormAncestorDepth; ++depth)
+    {
+        IUIAutomationElement* parent = nullptr;
+        HRESULT hr = walker->GetParentElement(current, &parent);
+        current->Release();
+        current = nullptr;
+
+        if (FAILED(hr) || !parent)
+            return nullptr;
+
+        RECT rect{};
+        if (tryGetCurrentBoundingRect(parent, &rect))
+        {
+            const long long area = static_cast<long long>(rect.right - rect.left) *
+                                   static_cast<long long>(rect.bottom - rect.top);
+            if (area > halfMonitorArea)
+            {
+                parent->Release();
+                return nullptr;
+            }
+        }
+
+        // Count Edit/Custom children one level deep (cheap).
+        int peerCount = 0;
+        IUIAutomationElement* child = nullptr;
+        if (SUCCEEDED(walker->GetFirstChildElement(parent, &child)) && child)
+        {
+            while (child)
+            {
+                CONTROLTYPEID ct = 0;
+                if (SUCCEEDED(child->get_CurrentControlType(&ct)) &&
+                    (ct == UIA_EditControlTypeId || ct == UIA_CustomControlTypeId))
+                {
+                    ++peerCount;
+                }
+
+                IUIAutomationElement* next = nullptr;
+                walker->GetNextSiblingElement(child, &next);
+                child->Release();
+                child = next;
+            }
+        }
+
+        if (peerCount >= kMinPeers)
+            return parent;  // ownership transfer to caller
+
+        current = parent;
+    }
+
+    if (current)
+        current->Release();
+    return nullptr;
+}
+
+// Bounded DFS through `root`'s descendants collecting Edit/Custom controls.
+// Each pushed element is AddRef'd; caller must Release every element in `out`.
+void enumerateFormInputs(IUIAutomationTreeWalker* walker,
+                         IUIAutomationElement* root,
+                         std::vector<IUIAutomationElement*>& out)
+{
+    constexpr size_t kMaxFormInputs = 32;
+    constexpr int kMaxDescendantDepth = 6;
+
+    if (!walker || !root)
+        return;
+
+    struct Frame
+    {
+        IUIAutomationElement* elem;
+        int depth;
+    };
+    std::vector<Frame> stack;
+
+    IUIAutomationElement* firstChild = nullptr;
+    if (FAILED(walker->GetFirstChildElement(root, &firstChild)) || !firstChild)
+        return;
+    stack.push_back({firstChild, 1});
+
+    while (!stack.empty() && out.size() < kMaxFormInputs)
+    {
+        Frame f = stack.back();
+        stack.pop_back();
+
+        // Push next sibling first so the stack-based DFS proceeds depth-first.
+        IUIAutomationElement* sibling = nullptr;
+        walker->GetNextSiblingElement(f.elem, &sibling);
+        if (sibling)
+            stack.push_back({sibling, f.depth});
+
+        CONTROLTYPEID ct = 0;
+        if (SUCCEEDED(f.elem->get_CurrentControlType(&ct)) &&
+            (ct == UIA_EditControlTypeId || ct == UIA_CustomControlTypeId))
+        {
+            f.elem->AddRef();
+            out.push_back(f.elem);
+        }
+
+        if (f.depth < kMaxDescendantDepth)
+        {
+            IUIAutomationElement* firstC = nullptr;
+            if (SUCCEEDED(walker->GetFirstChildElement(f.elem, &firstC)) && firstC)
+                stack.push_back({firstC, f.depth + 1});
+        }
+
+        f.elem->Release();
+    }
+
+    // Release any remaining frames if we hit the budget cap.
+    for (Frame& f : stack)
+        f.elem->Release();
 }
 
 }  // namespace
@@ -980,9 +1221,10 @@ int FillController::probeIsPassword(LONG x, LONG y)
     qCDebug(logFill) << "probeIsPassword: UIA hit element =" << describeAutomationElement(element);
 
     bool observedAny = false;
-    UiaPasswordObservation hitObservation = inspectElementPasswordState(element);
+    UiaHintObservation hitObservation =
+        inspectElementPasswordState(element, /*skipControlTypeGate=*/true);
     observedAny = hitObservation.observed;
-    if (hitObservation.isPassword)
+    if (hitObservation.matched)
     {
         qCDebug(logFill) << "probeIsPassword: UIA hit element matched via"
                          << (hitObservation.source.isEmpty() ? QStringLiteral("<unknown>")
@@ -1024,10 +1266,10 @@ int FillController::probeIsPassword(LONG x, LONG y)
             continue;
         }
 
-        UiaPasswordObservation observation =
+        UiaHintObservation observation =
             inspectElementPasswordState(parent, /*skipControlTypeGate=*/true);
         observedAny = observedAny || observation.observed;
-        if (observation.isPassword)
+        if (observation.matched)
         {
             qCDebug(logFill) << "probeIsPassword: ancestor matched at depth" << (depth + 1) << "via"
                              << (observation.source.isEmpty() ? QStringLiteral("<unknown>")
@@ -1049,14 +1291,181 @@ int FillController::probeIsPassword(LONG x, LONG y)
     int nodesRemaining = kMaxUiaDescendantNodes;
     const bool descendantMatched =
         searchDescendantsForPassword(rawWalker, element, x, y, 0, nodesRemaining, observedAny);
-    rawWalker->Release();
-    element->Release();
 
     if (descendantMatched)
+    {
+        rawWalker->Release();
+        element->Release();
         return 1;
+    }
 
-    qCDebug(logFill) << "probeIsPassword: UIA IsPassword=false on inspected path";
+    // Form-context fallback: when per-element observed UIA but found no positive
+    // password evidence, see if peer inputs in the enclosing form disambiguate.
+    // Skip the fallback if no UIA element was ever observed (probeFormContext
+    // has nothing to compare against).
+    if (observedAny)
+    {
+        int formResult = probeFormContext(rawWalker, element, x, y);
+        if (formResult > 0)
+        {
+            rawWalker->Release();
+            element->Release();
+            return 1;
+        }
+    }
+
+    // Structured fall-through diagnostic. One log line containing every signal
+    // the heuristic saw on the hit element, so future misclassifications can be
+    // root-caused from logs alone.
+    {
+        CONTROLTYPEID ct = 0;
+        element->get_CurrentControlType(&ct);
+        const auto get = [&](PROPERTYID p)
+        { return currentStringProperty(element, p).toStdString(); };
+        qCDebug(logFill).noquote() << QString::fromStdString(seal::diag::joinFields({
+            std::string("event=fill.detect.fallthrough"),
+            seal::diag::kv("control_type", controlTypeToString(ct)),
+            seal::diag::kv("is_password", false),
+            seal::diag::kv("automation_id", get(UIA_AutomationIdPropertyId)),
+            seal::diag::kv("name", get(UIA_NamePropertyId)),
+            seal::diag::kv("help_text", get(UIA_HelpTextPropertyId)),
+            seal::diag::kv("full_description", get(UIA_FullDescriptionPropertyId)),
+            seal::diag::kv("localized_control_type", get(UIA_LocalizedControlTypePropertyId)),
+            seal::diag::kv("class_name", get(UIA_ClassNamePropertyId)),
+            seal::diag::kv("item_type", get(UIA_ItemTypePropertyId)),
+            seal::diag::kv("aria_role", get(UIA_AriaRolePropertyId)),
+            seal::diag::kv("aria_properties", get(UIA_AriaPropertiesPropertyId)),
+        }));
+    }
+
+    rawWalker->Release();
+    element->Release();
     return observedAny ? 0 : -1;
+}
+
+int FillController::probeFormContext(IUIAutomationTreeWalker* walker,
+                                     IUIAutomationElement* hit,
+                                     LONG x,
+                                     LONG y)
+{
+    if (!walker || !hit || !m_UIA)
+        return 0;
+
+    IUIAutomationElement* formAncestor = findFormAncestor(walker, hit);
+    if (!formAncestor)
+        return 0;
+
+    std::vector<IUIAutomationElement*> peers;
+    enumerateFormInputs(walker, formAncestor, peers);
+    formAncestor->Release();
+
+    if (peers.size() < 2)
+    {
+        for (auto* p : peers)
+            p->Release();
+        return 0;
+    }
+
+    struct PeerClass
+    {
+        bool pwd = false;
+        bool usr = false;
+        bool isClicked = false;
+    };
+    std::vector<PeerClass> classes(peers.size());
+
+    for (size_t i = 0; i < peers.size(); ++i)
+    {
+        classes[i].pwd =
+            inspectElementPasswordState(peers[i], /*skipControlTypeGate=*/true).matched;
+        classes[i].usr = inspectElementUsernameState(peers[i]).matched;
+
+        BOOL same = FALSE;
+        if (SUCCEEDED(m_UIA->CompareElements(peers[i], hit, &same)) && same)
+            classes[i].isClicked = true;
+    }
+
+    // Geometric fallback: if no peer's RuntimeId matches `hit` (hit may be a
+    // wrapper that doesn't appear in the form's input enumeration), find the
+    // peer whose bounding rect contains the click point.
+    int clickedIdx = -1;
+    for (size_t i = 0; i < classes.size(); ++i)
+    {
+        if (classes[i].isClicked)
+        {
+            clickedIdx = static_cast<int>(i);
+            break;
+        }
+    }
+    if (clickedIdx < 0)
+    {
+        for (size_t i = 0; i < peers.size(); ++i)
+        {
+            RECT rect{};
+            if (tryGetCurrentBoundingRect(peers[i], &rect) && rectContainsPoint(rect, x, y))
+            {
+                clickedIdx = static_cast<int>(i);
+                break;
+            }
+        }
+    }
+
+    int result = 0;
+    QString reason;
+    if (clickedIdx >= 0)
+    {
+        const PeerClass& clicked = classes[clickedIdx];
+        if (clicked.pwd)
+        {
+            result = 1;
+            reason = QStringLiteral("clicked-self-pwd");
+        }
+        else if (clicked.usr)
+        {
+            result = 0;
+            reason = QStringLiteral("clicked-self-usr");
+        }
+        else
+        {
+            bool anyPwd = false, anyUsr = false;
+            for (size_t i = 0; i < classes.size(); ++i)
+            {
+                if (static_cast<int>(i) == clickedIdx)
+                    continue;
+                if (classes[i].pwd)
+                    anyPwd = true;
+                if (classes[i].usr)
+                    anyUsr = true;
+            }
+
+            if (anyUsr && !anyPwd)
+            {
+                result = 1;
+                reason = QStringLiteral("peer-usr-implies-self-pwd");
+            }
+            else if (anyPwd)
+            {
+                result = 0;
+                reason = QStringLiteral("peer-pwd-implies-self-usr");
+            }
+            else
+            {
+                result = 0;
+                reason = QStringLiteral("ambiguous-all-obfuscated");
+            }
+        }
+    }
+    else
+    {
+        reason = QStringLiteral("clicked-not-in-form");
+    }
+
+    qCDebug(logFill) << "probeFormContext: peers=" << peers.size() << "clickedIdx=" << clickedIdx
+                     << "result=" << result << "reason=" << reason;
+
+    for (auto* p : peers)
+        p->Release();
+    return result;
 }
 
 }  // namespace seal

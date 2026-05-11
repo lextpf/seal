@@ -237,6 +237,16 @@ private:
     /// @return +1 if IsPassword=TRUE, 0 if IsPassword=FALSE, -1 on probe failure.
     int probeIsPassword(LONG x, LONG y);
 
+    /// @brief Form-context fallback: classify the clicked field by inspecting
+    ///        its peers in the enclosing form. Invoked only when probeIsPassword
+    ///        observed UIA elements but found no positive password evidence.
+    /// @return +1 if peer inference identifies the clicked field as a password,
+    ///         0 otherwise (including username, ambiguous, no form ancestor).
+    int probeFormContext(IUIAutomationTreeWalker* walker,
+                         IUIAutomationElement* hit,
+                         LONG x,
+                         LONG y);
+
     std::atomic<State> m_State{State::Idle};  ///< Current state machine state.
     int m_RecordIndex = -1;                   ///< Index of the armed vault record.
     const std::vector<seal::VaultRecord>* m_Records =
