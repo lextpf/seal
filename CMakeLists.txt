@@ -28,7 +28,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 if(MSVC)
-    add_compile_options(/W4 /WX- /permissive- /Zc:__cplusplus /EHsc)
+    add_compile_options(/W4 /WX- /permissive- /Zc:__cplusplus /EHsc /utf-8)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX)
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /DNDEBUG")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Od /Zi /RTC1")
