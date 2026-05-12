@@ -111,6 +111,54 @@ TEST_F(CryptoTest, CorruptedPacketFailsAuthentication)
         std::runtime_error);
 }
 
+TEST_F(CryptoTest, VerifyPacketAcceptsValidPacket)
+{
+    auto password = make_secure_string("test_password");
+    std::string plaintext = "verify me";
+
+    std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
+
+    auto packet =
+        seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
+
+    EXPECT_NO_THROW(
+        seal::Cryptography::verifyPacket(std::span<const unsigned char>(packet), password));
+}
+
+TEST_F(CryptoTest, VerifyPacketRejectsWrongPassword)
+{
+    auto password = make_secure_string("test_password");
+    auto wrongPassword = make_secure_string("wrong_password");
+    std::string plaintext = "verify me";
+
+    std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
+
+    auto packet =
+        seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
+
+    EXPECT_THROW(
+        seal::Cryptography::verifyPacket(std::span<const unsigned char>(packet), wrongPassword),
+        std::runtime_error);
+}
+
+TEST_F(CryptoTest, VerifyPacketRejectsCorruptedPacket)
+{
+    auto password = make_secure_string("test_password");
+    std::string plaintext = "verify me";
+
+    std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
+
+    auto packet =
+        seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
+
+    std::vector<unsigned char> corrupted = packet;
+    corrupted[corrupted.size() / 2] ^= 0xFF;
+
+    EXPECT_THROW(
+        seal::Cryptography::verifyPacket(std::span<const unsigned char>(corrupted), password),
+        std::runtime_error);
+}
+
 TEST_F(CryptoTest, TooShortPacketThrows)
 {
     auto password = make_secure_string("test_password");
