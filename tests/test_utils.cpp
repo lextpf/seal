@@ -6,7 +6,7 @@
  */
 
 #include "test_helpers.h"
-
+#include "../src/PasswordGen.h"
 #include <gtest/gtest.h>
 
 #include <string>
@@ -270,4 +270,26 @@ TEST_F(HexTokenExtractionTest, WhitespaceOnly)
     auto tokens = seal::utils::extractHexTokens(input);
 
     EXPECT_TRUE(tokens.empty());
+}
+
+// Test suite for password generation
+class PasswordGenTest : public ::testing::Test
+{
+};
+
+TEST_F(PasswordGenTest, ClampsLength)
+{
+    EXPECT_EQ(seal::GeneratePassword(1).size(), 8u);
+    EXPECT_EQ(seal::GeneratePassword(999).size(), 128u);
+    EXPECT_EQ(seal::GeneratePassword(20).size(), 20u);
+}
+
+TEST_F(PasswordGenTest, UsesDocumentedCharset)
+{
+    static constexpr std::string_view allowed =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
+
+    auto password = seal::GeneratePassword(64);
+    for (char ch : password.view())
+        EXPECT_NE(allowed.find(ch), std::string_view::npos);
 }
