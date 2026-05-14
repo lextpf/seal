@@ -1,0 +1,140 @@
+# ============================================================================
+# .gitattributes for seal
+# ============================================================================
+
+# Default: auto-detect text and normalize to LF on commit.
+* text=auto eol=lf
+
+# ----------------------------------------------------------------------------
+# C / C++ source
+# ----------------------------------------------------------------------------
+*.c                     text eol=lf diff=cpp
+*.cc                    text eol=lf diff=cpp
+*.cpp                   text eol=lf diff=cpp
+*.cxx                   text eol=lf diff=cpp
+*.h                     text eol=lf diff=cpp
+*.hh                    text eol=lf diff=cpp
+*.hpp                   text eol=lf diff=cpp
+*.hxx                   text eol=lf diff=cpp
+*.inl                   text eol=lf diff=cpp
+*.ipp                   text eol=lf diff=cpp
+*.tcc                   text eol=lf diff=cpp
+
+# ----------------------------------------------------------------------------
+# Build system
+# ----------------------------------------------------------------------------
+CMakeLists.txt          text eol=lf
+*.cmake                 text eol=lf
+*.cmake.in              text eol=lf
+CMakePresets.json       text eol=lf
+*.clang-format          text eol=lf
+*.clang-tidy            text eol=lf
+.clang-format           text eol=lf
+.clang-tidy             text eol=lf
+.clangd                 text eol=lf
+.editorconfig           text eol=lf
+*.json                  text eol=lf
+*.yml                   text eol=lf
+*.yaml                  text eol=lf
+*.toml                  text eol=lf
+*.ini                   text
+*.cfg                   text
+*.md                    text diff=markdown
+*.xml                   text
+*.txt                   text
+vcpkg.json              text eol=lf
+LICENSE                 text
+Doxyfile                text
+Doxyfile.in             text
+.gitattributes          text eol=lf
+.gitignore              text eol=lf
+
+# ----------------------------------------------------------------------------
+# Qt / QML
+# ----------------------------------------------------------------------------
+*.qml                   text
+*.qrc                   text
+qt.conf                 text
+
+# ----------------------------------------------------------------------------
+# Scripts
+# ----------------------------------------------------------------------------
+*.bat                   text eol=crlf
+*.cmd                   text eol=crlf
+*.ps1                   text eol=crlf
+*.sh                    text eol=lf
+*.py                    text eol=lf
+
+# ----------------------------------------------------------------------------
+# Generated
+# ----------------------------------------------------------------------------
+docs/**                 linguist-generated=true
+site/**                 linguist-generated=true
+build/**                linguist-generated=true -diff
+
+# Third-party and assets are not authored here.
+assets/**               linguist-vendored=true
+overrides/**            linguist-documentation=true
+
+# ----------------------------------------------------------------------------
+# Binary
+# ----------------------------------------------------------------------------
+*.exe                   binary
+*.dll                   binary
+*.lib                   binary
+*.obj                   binary
+*.o                     binary
+*.a                     binary
+*.so                    binary
+*.dylib                 binary
+*.pdb                   binary
+*.exp                   binary
+*.ilk                   binary
+*.idb                   binary
+*.res                   binary
+*.bin                   binary
+
+# Images and design source
+*.png                   binary
+*.jpg                   binary
+*.jpeg                  binary
+*.gif                   binary
+*.bmp                   binary
+*.ico                   binary
+*.icns                  binary
+*.tif                   binary
+*.tiff                  binary
+*.webp                  binary
+*.psd                   binary
+*.ai                    binary
+*.svg                   text
+
+# Fonts
+*.ttf                   binary
+*.otf                   binary
+*.woff                  binary
+*.woff2                 binary
+*.eot                   binary
+
+# Archives
+*.zip                   binary
+*.tar                   binary
+*.tar.gz                binary
+*.tgz                   binary
+*.tar.bz2               binary
+*.tar.xz                binary
+*.7z                    binary
+*.rar                   binary
+*.gz                    binary
+*.bz2                   binary
+*.xz                    binary
+
+# Documents
+*.pdf                   binary
+*.docx                  binary
+*.xlsx                  binary
+
+# ----------------------------------------------------------------------------
+# GitHub linguist hints
+# ----------------------------------------------------------------------------
+*.qml                   linguist-language=QML
