@@ -14,24 +14,18 @@
 #   (A) Recommended - generate a side-by-side Ninja build that produces
 #       compile_commands.json. clangd auto-discovers it via the
 #       CompilationDatabase entry below; the main build/ tree is untouched.
+#       build.bat does this automatically as step 3; you can also run it
+#       manually from a "x64 Native Tools Command Prompt for VS 2022":
 #
-#       Run from a "x64 Native Tools Command Prompt for VS 2022" with the
-#       same MSVC version build.bat pins (14.44 ICEs on Qt6 sources):
+#         cmake --preset compile-db
 #
-#         call "%VSINSTALLDIR%VC\Auxiliary\Build\vcvars64.bat" -vcvars_ver=14.43
-#         set VCPKG_BUILDTREES_ROOT=C:\b\seal-vcpkg
-#         set VCPKG_MAX_CONCURRENCY=1
-#         cmake -B build_clangd -G Ninja ^
-#               -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%/scripts/buildsystems/vcpkg.cmake ^
-#               -DVCPKG_OVERLAY_TRIPLETS=triplets ^
-#               -DVCPKG_TARGET_TRIPLET=x64-windows-release-msvc143
-#         cmake --build build_clangd --target seal
+#       (Re-run the configure step whenever you add new source files. The
+#       sidecar configures only - it is never built.)
 #
-#       (Re-run the configure step whenever you add new source files.)
-#
-#       The MAX_PATH redirect (VCPKG_BUILDTREES_ROOT) and single-job vcpkg
-#       (VCPKG_MAX_CONCURRENCY=1) mirror build.bat - they are required to
-#       build Qt6 via vcpkg on Windows. Don't drop them.
+#       The preset shares vcpkg_installed/ with the default preset so vcpkg
+#       does not re-install Qt6 / OpenSSL / OpenCV. It uses Ninja so CMake
+#       actually emits compile_commands.json (the Visual Studio generator
+#       silently ignores CMAKE_EXPORT_COMPILE_COMMANDS).
 #
 #   (B) Skip the Ninja build. The Add: flags below cover C++23 mode, the
 #       project's include paths (src/, tests/, vcpkg_installed/Qt6/opencv4),
@@ -48,7 +42,7 @@
 # Ibuild/vcpkg_installed/<triplet>/include paths under Add: below.
 
 CompileFlags:
-  CompilationDatabase: build_clangd
+  CompilationDatabase: build-cdb
 
   Add:
     - -std=c++23
@@ -103,17 +97,9 @@ CompileFlags:
     - -Ibuild/vcpkg_installed/x64-windows-static-release-msvc143/include/Qt6/QtWidgets
     - -Ibuild/vcpkg_installed/x64-windows-static-release-msvc143/include/opencv4
 
-    # vcpkg-installed headers - side-by-side Ninja build for compile DB
-    # (option A above). Same triplet, different output tree.
-    - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include
-    - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include/Qt6
-    - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtCore
-    - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtGui
-    - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtQml
-    - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtQuick
-    - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtQuickControls2
-    - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include/Qt6/QtWidgets
-    - -Ibuild_clangd/vcpkg_installed/x64-windows-release-msvc143/include/opencv4
+    # The `compile-db` Ninja sidecar reuses the same triplet as the default
+    # build (x64-windows-release-msvc143) so its packages share the include
+    # paths already listed above. No sidecar-specific Add: entries needed.
 
   Remove:
     # MSVC-only flags clangd's GCC-style parser chokes on if a
