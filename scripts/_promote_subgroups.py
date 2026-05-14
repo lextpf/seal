@@ -17,7 +17,7 @@ Reads doxide.yml to discover the group hierarchy, then for each
 subgroup copies ParentGroup/SubGroup/ -> SubGroup/ if the top-level
 directory does not already exist.
 
-No external dependencies — uses only the Python standard library.
+No external dependencies - uses only the Python standard library.
 
 Usage:
     python scripts/promote_subgroups.py          # defaults to docs/
