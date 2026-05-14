@@ -1,6 +1,7 @@
-#include "test_helpers.hpp"
 #include "../src/PasswordGen.hpp"
+#include "test_helpers.hpp"
 
+#include <gtest/gtest.h>
 #include <string>
 #include <vector>
 
