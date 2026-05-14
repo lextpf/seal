@@ -60,7 +60,7 @@ Do not restate or fight these rules in review. Run the formatter and move on.
 
 |                Element |          Style              | Examples                                 |
 |------------------------|-----------------------------|------------------------------------------|
-|                  Files |         PascalCase          | `Logger.h`, `Utils.cpp`                  |
+|                  Files |         PascalCase          | `Logger.hpp`, `Utils.cpp`                  |
 |      Classes / Structs |         PascalCase          | `Logger`, `BackgroundJob`                |
 |                  Enums |         PascalCase          | `enum class PluginType`                  |
 |            Enum values |         PascalCase          | `PluginType::Required`                   |
