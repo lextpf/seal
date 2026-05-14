@@ -1,11 +1,4 @@
-/**
- * @file test_utils.cpp
- * @brief Unit tests for utility functions (hex encoding, string manipulation)
- * @author seal Contributors
- * @date 2024
- */
-
-#include "test_helpers.h"
+#include "test_helpers.hpp"
 
 #include <gtest/gtest.h>
 

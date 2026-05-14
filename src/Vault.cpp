@@ -1,12 +1,12 @@
 #ifdef USE_QT_UI
 
-#include "Vault.h"
+#include "Vault.hpp"
 
-#include "Cryptography.h"
-#include "Diagnostics.h"
-#include "FileOperations.h"
-#include "Logging.h"
-#include "Utils.h"
+#include "Cryptography.hpp"
+#include "Diagnostics.hpp"
+#include "FileOperations.hpp"
+#include "Logging.hpp"
+#include "Utils.hpp"
 
 #include <QtCore/QDir>
 #include <QtCore/QFile>

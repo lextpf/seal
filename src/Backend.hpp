@@ -9,9 +9,9 @@
 #include <functional>
 #include <vector>
 
-#include "Cryptography.h"
-#include "Vault.h"
-#include "VaultModel.h"
+#include "Cryptography.hpp"
+#include "Vault.hpp"
+#include "VaultModel.hpp"
 
 namespace seal
 {

@@ -2,7 +2,7 @@
 
 #ifdef USE_QT_UI
 
-#include "Vault.h"
+#include "Vault.hpp"
 
 #include <QtCore/QString>
 

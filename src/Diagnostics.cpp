@@ -1,4 +1,4 @@
-#include "Diagnostics.h"
+#include "Diagnostics.hpp"
 
 #include <algorithm>
 #include <atomic>

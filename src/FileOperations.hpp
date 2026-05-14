@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Cryptography.h"
+#include "Cryptography.hpp"
 
 #include <string>
 #include <string_view>

@@ -1,8 +1,8 @@
-#include "CameraSelector.h"
+#include "CameraSelector.hpp"
 
-#include "ConsoleStyle.h"
-#include "Diagnostics.h"
-#include "Logging.h"
+#include "ConsoleStyle.hpp"
+#include "Diagnostics.hpp"
+#include "Logging.hpp"
 
 #include <QtCore/QString>
 
@@ -36,8 +36,6 @@ bool IsObsCameraName(const std::wstring& name);
 
 // Route diagnostics through the Qt logging system so they inherit the
 // unified `[ts] [LVL] [seal.camera] [tid=N]` prefix from sealMessageHandler.
-// Tone maps to Qt severity: Debug→qCDebug, Info/Step/Success→qCInfo,
-// Warning→qCWarning, Error→qCCritical.
 void writeCameraDiag(seal::console::Tone tone, std::initializer_list<std::string> fields)
 {
     const QString line = QString::fromStdString(seal::diag::joinFields(fields));

@@ -1,18 +1,11 @@
-/**
- * @file test_helpers.h
- * @brief Shared test helper functions for seal tests
- * @author seal Contributors
- * @date 2024
- */
-
 #pragma once
 
 // Include headers to access internal functions
-#include "../src/Clipboard.h"
-#include "../src/Console.h"
-#include "../src/Cryptography.h"
-#include "../src/FileOperations.h"
-#include "../src/Utils.h"
+#include "../src/Clipboard.hpp"
+#include "../src/Console.hpp"
+#include "../src/Cryptography.hpp"
+#include "../src/FileOperations.hpp"
+#include "../src/Utils.hpp"
 
 /**
  * @brief Helper to create secure_string from std::string for testing

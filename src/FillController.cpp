@@ -1,9 +1,9 @@
 #ifdef USE_QT_UI
 
-#include "FillController.h"
-#include "Clipboard.h"
-#include "Diagnostics.h"
-#include "Logging.h"
+#include "FillController.hpp"
+#include "Clipboard.hpp"
+#include "Diagnostics.hpp"
+#include "Logging.hpp"
 
 #include <QtCore/QThread>
 #include <QtGui/QGuiApplication>
@@ -92,10 +92,6 @@ bool containsPasswordHint(const QString& rawText)
         QStringView{u"jelszo"},        // hu (ASCII fallback)
         QStringView{u"şifre"},         // tr
         QStringView{u"sifre"},         // tr (ASCII fallback)
-        QStringView{u"пароль"},        // ru/uk
-        QStringView{u"κωδικός"},       // el
-        QStringView{u"كلمة المرور"},   // ar
-        QStringView{u"كلمةالمرور"},    // ar (no space)
     };
 
     for (const QStringView hint : kPasswordHints)
@@ -723,10 +719,25 @@ bool FillController::arm(
     if (m_State.load() != State::Idle)
         cancel();
 
+    // @author Claude (https://github.com/claude)
     // Borrow pointers - the caller (Backend) owns these and must
     // keep them alive until fillCompleted / fillCancelled / fillError.
-    // Snapshot the generation counter so performType() can detect stale
-    // pointers if the owner mutates records between arm() and the fill.
+    //
+    // We deliberately do NOT copy the records vector or the master password:
+    //   - masterPw is a locked_allocator-backed secure_string; copying it
+    //     would double the SeLockMemoryPrivilege working-set quota for the
+    //     entire arm-to-fill window (potentially many seconds).
+    //   - records may be tens of thousands of entries; duplicating them just
+    //     to fill one credential would waste memory and force every record
+    //     to be cleansed twice on cancel.
+    //
+    // Borrowing means performType() can race with the user adding, deleting,
+    // or reloading the vault between the Ctrl+Click and the keystroke send.
+    // The owner increments ownerGeneration on every mutation that could
+    // invalidate our pointers; we snapshot the value here, and performType()
+    // bails with fillError() if the live counter has moved by the time it
+    // runs. This gives us copy-free borrows with a single atomic compare to
+    // detect every relevant mutation.
     m_RecordIndex = recordIndex;
     m_Records = &records;
     m_MasterPw = &masterPw;

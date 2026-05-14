@@ -1,4 +1,4 @@
-#include "PasswordGen.h"
+#include "PasswordGen.hpp"
 
 #include <openssl/rand.h>
 

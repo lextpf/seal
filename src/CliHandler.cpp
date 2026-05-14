@@ -1,10 +1,10 @@
 #ifdef USE_QT_UI
 
-#include "CliHandler.h"
-#include "Clipboard.h"
-#include "Cryptography.h"
-#include "PasswordGen.h"
-#include "Utils.h"
+#include "CliHandler.hpp"
+#include "Clipboard.hpp"
+#include "Cryptography.hpp"
+#include "PasswordGen.hpp"
+#include "Utils.hpp"
 
 #include <QtCore/QString>
 #include <QtCore/QStringLiteral>

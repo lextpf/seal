@@ -1,6 +1,6 @@
 #ifdef USE_QT_UI
 
-#include "WindowChrome.h"
+#include "WindowChrome.hpp"
 
 #include <QtCore/QCoreApplication>
 

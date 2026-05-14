@@ -1,6 +1,6 @@
 #pragma once
 
-#include "SecureString.h"
+#include "SecureString.hpp"
 
 namespace seal
 {

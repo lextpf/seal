@@ -1,8 +1,8 @@
 #ifdef USE_QT_UI
 
-#include "VaultModel.h"
-#include "Diagnostics.h"
-#include "Logging.h"
+#include "VaultModel.hpp"
+#include "Diagnostics.hpp"
+#include "Logging.hpp"
 
 namespace seal
 {

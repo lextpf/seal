@@ -1,4 +1,4 @@
-#include "ConsoleStyle.h"
+#include "ConsoleStyle.hpp"
 
 #include <iostream>
 #include <mutex>

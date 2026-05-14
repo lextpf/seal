@@ -1,6 +1,6 @@
 #pragma once
 
-#include "CryptoGuards.h"
+#include "CryptoGuards.hpp"
 
 #include <aclapi.h>
 #include <heapapi.h>

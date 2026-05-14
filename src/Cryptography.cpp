@@ -1,12 +1,12 @@
-#include "Cryptography.h"
+#include "Cryptography.hpp"
 
 #include <sddl.h>
 
 #ifdef USE_QT_UI
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QString>
-#include "Diagnostics.h"
-#include "Logging.h"
+#include "Diagnostics.hpp"
+#include "Logging.hpp"
 #endif
 
 namespace seal
@@ -211,6 +211,21 @@ BOOL Cryptography::setSecureProcessMitigations(bool allowDynamicCode)
     sigPolicy.AuditMicrosoftSignedOnly = 0;
     allSuccess &= pSet(ProcessSignaturePolicy, &sigPolicy, sizeof(sigPolicy));
 
+    // @author Codex (https://github.com/codex)
+    // 3. Side-channel isolation against transient-execution attacks. Each flag
+    // closes a different micro-architectural leak path that could disclose a
+    // secret residing in another logical core's caches or in our own pipeline:
+    //   - SmtBranchTargetIsolation: prevent Spectre-BTI cross-thread BTB poisoning
+    //   - IsolateSecurityDomain: tag this process as security-sensitive so the
+    //     scheduler avoids co-scheduling foreign work on sibling SMT threads
+    //   - DisablePageCombine: opt out of memory dedup so an attacker cannot
+    //     fingerprint vault contents via timing of CoW faults on combined pages
+    //   - SpeculativeStoreBypassDisable: block SSB (CVE-2018-3639) speculative
+    //     reads of older store buffer entries
+    //   - RestrictCoreSharing: forbid scheduling on the same physical core as
+    //     an untrusted (typically non-signed) process
+    // All five mitigations are best-effort - the kernel ignores unknown bits
+    // on older Windows builds and the call returns TRUE either way.
     PROCESS_MITIGATION_SIDE_CHANNEL_ISOLATION_POLICY sc{};
     sc.SmtBranchTargetIsolation = 1;
     sc.IsolateSecurityDomain = 1;
@@ -327,9 +342,15 @@ Cryptography::LockedKeyBuffer Cryptography::deriveKey(const SecurePwd& pwd,
     // cannot be swapped to disk between derivation and first use.
     LockedKeyBuffer key(seal::cfg::KEY_LEN);
 
-    // RWGuard temporarily changes the password's memory page from PAGE_NOACCESS
-    // to PAGE_READWRITE so that scrypt can read the raw bytes. The guard's
-    // destructor restores PAGE_NOACCESS.
+    // @author Claude (https://github.com/claude)
+    // The master password lives in a locked_allocator-backed buffer whose
+    // pages spend most of their lifetime as PAGE_NOACCESS so a stray read
+    // anywhere else in the process traps instead of leaking. scrypt needs
+    // raw byte access during this call, so RWGuard does a scoped flip to
+    // PAGE_READWRITE for exactly the span we touch, and its destructor
+    // restores PAGE_NOACCESS on every exit path - including exceptions
+    // thrown from opensslCheck() below. This RAII shape is what keeps the
+    // plaintext-readable window minimal and exception-safe.
     seal::RWGuard<CharT> guard(pwd.s.data());
 
     const char* pass = nullptr;
