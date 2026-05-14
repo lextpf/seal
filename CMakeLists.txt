@@ -10,6 +10,11 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Always emit compile_commands.json when the generator supports it (Ninja /
+# Makefiles). The Visual Studio generator silently ignores this, so build.bat
+# users still need the compile-db preset for clangd / clang-tidy.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Static CRT when using a static vcpkg triplet (/MT instead of /MD).
 # This eliminates the runtime dependency on vcruntime140.dll / msvcp140.dll.
 if(VCPKG_TARGET_TRIPLET MATCHES "static")
