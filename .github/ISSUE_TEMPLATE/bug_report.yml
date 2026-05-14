@@ -1,0 +1,81 @@
+name: Bug report
+description: Report incorrect or unexpected behaviour in seal.
+title: "[Bug] <short description>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please complete the
+        sections below so the maintainers can reproduce the issue and triage quickly.
+
+        **Before filing**, please:
+        - Search existing issues to avoid duplicates.
+        - Confirm you are on a recent seal release.
+        - This is not a security vulnerability (Private vulnerability reporting is to be used).
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences describing what is wrong.
+      placeholder: Decrypt truncates output when the input file has Windows line endings.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Exact sequence that consistently trigger the bug.
+      placeholder: |
+        1. Run `seal encrypt secret.txt out.seal`
+        2. Run `seal decrypt out.seal restored.txt`
+        3. Observe `restored.txt` is empty
+      render: bash
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What did you expect to happen instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened? Paste any error message verbatim.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Paste any relevant sections of `*.log`.
+      render: shell
+    validations:
+      required: false
+
+  - type: input
+    id: seal_version
+    attributes:
+      label: seal version
+      description: Output of `seal --version`, or commit SHA if you built from source.
+      placeholder: 1.0.0 or af0fcf9
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I have removed any sensitive material from the report.
+          required: true

@@ -1,0 +1,68 @@
+name: Technical task
+description: Refactors, code-quality work, CI changes, build hygiene, or other non-user-facing engineering.
+title: "[Task] <short description>"
+labels: ["task", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for engineering work that is not a bug and not a
+        user-visible feature: refactors, dependency upgrades, CI tweaks,
+        documentation overhauls, performance plumbing, test infrastructure,
+        and similar.
+
+        For user-visible bugs, use the Bug template. For user-visible features, use the Feature template.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why is this work needed? What is the current state?
+      placeholder: |
+        File has grown to ~250 lines with five overlapping responsibilities;
+        new bug fixes are getting harder to reason about.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind of work
+      multiple: false
+      options:
+        - Refactor / cleanup
+        - Build / packaging / CMake
+        - CI / GitHub Actions
+        - Dependency bump
+        - Test coverage
+        - Performance
+        - Static analysis / lint
+        - Documentation / comments
+        - Tooling
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the planned approach. Include file paths or module boundaries when known.
+    validations:
+      required: true
+      
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks
+      description: What could regress? Mention any subsystems that touch the change.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: This is internal engineering work and does not change user-visible behaviour.
+          required: true
