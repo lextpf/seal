@@ -4,8 +4,8 @@ REM test.bat - Run seal unit tests using Google Test
 REM ============================================================================
 REM This script:
 REM   1. Configures CMake if needed
-REM   2. Builds the test executable
-REM   3. Runs the Google Test executable
+REM   2. Builds the test executables
+REM   3. Runs all Google Test executables
 REM ============================================================================
 
 setlocal
