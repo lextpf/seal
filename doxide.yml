@@ -50,7 +50,7 @@ groups:
         description: Credential auto-fill via global Windows input hooks.
       - name: WindowController
         title: WindowController
-        description: Window chrome operations — theme, drag, always-on-top, compact mode.
+        description: Window chrome operations: theme, drag, always-on-top, compact mode.
       - name: WindowChrome
         title: WindowChrome
         description: Custom DWM title bar, resize borders, and native event filter.
