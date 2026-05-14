@@ -2,9 +2,9 @@ name: build
 
 on:
   push:
-    branches: [main, master, develop]
+    branches: [main]
   pull_request:
-    branches: [main, master, develop]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -28,6 +28,24 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Check formatting (clang-format)
+        shell: pwsh
+        run: |
+          $targets = @()
+          $targets += Get-ChildItem -Path src   -Include *.cpp,*.hpp -Recurse -File -ErrorAction SilentlyContinue
+          $targets += Get-ChildItem -Path tests -Include *.cpp,*.hpp -Recurse -File -ErrorAction SilentlyContinue
+          foreach ($f in $targets) {
+            Write-Host "Formatting $($f.FullName)"
+            clang-format -i $f.FullName
+          }
+          $diff = git diff --name-only
+          if ($diff) {
+            Write-Host "::error::The following files need formatting:"
+            Write-Host $diff
+            exit 1
+          }
+          Write-Host "All files are properly formatted."
+
       - name: Set up vcpkg
         uses: lukka/run-vcpkg@v11
         with:
@@ -44,9 +62,41 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel
 
-      - name: Upload seal.exe
+      - name: Stage artifact
+        shell: pwsh
+        run: |
+          $src = "build/bin/Release"
+          $dst = "artifact-staging/seal-windows-x64"
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+
+          $excludeFiles = @(
+            "*.pdb", "*.ilk", "*.exp", "*.lib", "*.idb", "*.obj",
+            "seal_tests.exe", "gtest.dll", "gtest_main.dll"
+          )
+          $excludeDirs  = @("test", "CMakeFiles", "moc_*", "qrc_*")
+
+          Copy-Item -Path "$src/*" -Destination $dst -Recurse -Force `
+                    -Exclude $excludeFiles
+          foreach ($d in $excludeDirs) {
+            Get-ChildItem -Path $dst -Recurse -Directory -Filter $d `
+              -ErrorAction SilentlyContinue |
+              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+          Write-Host "Artifact contents:"
+          Get-ChildItem -Path $dst -Recurse -File |
+            Select-Object @{n="Path";e={$_.FullName.Substring((Resolve-Path $dst).Path.Length + 1)}}, @{n="SizeKB";e={[math]::Round($_.Length/1KB,1)}} |
+            Sort-Object Path |
+            Format-Table -AutoSize
+
+          $total = (Get-ChildItem -Path $dst -Recurse -File | Measure-Object -Property Length -Sum).Sum
+          Write-Host ("Total artifact size: {0:N1} MB" -f ($total / 1MB))
+
+      - name: Upload seal binary bundle
         uses: actions/upload-artifact@v4
         with:
           name: seal-windows-x64
-          path: build/bin/Release/seal.exe
-          retention-days: 7
+          path: artifact-staging/seal-windows-x64
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 9
