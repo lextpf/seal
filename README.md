@@ -270,24 +270,24 @@ graph TB
 seal/
 |-- src/                        # C++ source code
 |   |-- main.cpp                # Entry point and CLI parsing
-|   |-- Cryptography.cpp/h      # AES-256-GCM, scrypt key derivation
-|   |-- FileOperations.cpp/h    # File/directory/stream encryption
-|   |-- Vault.cpp/h             # Vault format and on-demand decryption
-|   |-- VaultModel.cpp/h        # QML list model for vault entries
-|   |-- Backend.cpp/h           # QML backend bridge
-|   |-- FillController.cpp/h    # Credential auto-fill controller
-|   |-- Clipboard.cpp/h         # Clipboard with TTL scrubbing
-|   |-- Utils.cpp/h             # String, hex, path utilities
-|   |-- Console.cpp/h           # Console/CLI helpers
-|   |-- QmlMain.cpp/h           # QML application entry
-|   +-- Version.h               # Version macros
+|   |-- Cryptography.cpp/hpp      # AES-256-GCM, scrypt key derivation
+|   |-- FileOperations.cpp/hpp    # File/directory/stream encryption
+|   |-- Vault.cpp/hpp             # Vault format and on-demand decryption
+|   |-- VaultModel.cpp/hpp        # QML list model for vault entries
+|   |-- Backend.cpp/hpp           # QML backend bridge
+|   |-- FillController.cpp/hpp    # Credential auto-fill controller
+|   |-- Clipboard.cpp/hpp         # Clipboard with TTL scrubbing
+|   |-- Utils.cpp/hpp             # String, hex, path utilities
+|   |-- Console.cpp/hpp           # Console/CLI helpers
+|   |-- QmlMain.cpp/hpp           # QML application entry
+|   +-- Version.hpp             # Version macros
 |-- qml/                        # Qt6 QML UI
 |   |-- Main.qml                # Application window
 |   |-- AccountsTable.qml       # Credential list view
 |   |-- AccountDialog.qml       # Add/edit credential dialog
 |   |-- PasswordDialog.qml      # Master password prompt
 |   +-- ...                     # Theme, headers, search, icons
-|   |-- QrCapture.cpp/h         # Webcam QR capture with secure memory
+|   |-- QrCapture.cpp/hpp         # Webcam QR capture with secure memory
 |-- tests/                      # Google tests
 |-- assets/                     # Fonts and icons
 |-- scripts/                    # Documentation post-processing

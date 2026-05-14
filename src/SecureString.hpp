@@ -1,6 +1,6 @@
 #pragma once
 
-#include "LockedAllocator.h"
+#include "LockedAllocator.hpp"
 
 #include <stdexcept>
 #include <string>

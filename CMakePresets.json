@@ -1,0 +1,188 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "description": "Common settings shared by every configure preset.",
+      "generator": "Visual Studio 17 2022",
+      "architecture": {
+        "value": "x64",
+        "strategy": "set"
+      },
+      "binaryDir": "${sourceDir}/build",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VCPKG_MANIFEST_MODE": "ON",
+        "VCPKG_MANIFEST_INSTALL": "ON",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets",
+        "ENABLE_TESTS": "ON"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+
+    {
+      "name": "default",
+      "displayName": "Windows x64 (dynamic Qt)",
+      "description": "Default local build - Qt linked dynamically, /MD CRT. Uses the repo's pinned MSVC 14.43 triplet. Set VCPKG_BUILDTREES_ROOT (e.g. C:/b/seal-vcpkg) to a short path to dodge Qt's MAX_PATH overflow; build.bat handles this automatically.",
+      "inherits": "base",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows-release-msvc143",
+        "VCPKG_HOST_TRIPLET": "x64-windows-release-msvc143",
+        "VCPKG_INSTALL_OPTIONS": "--x-buildtrees-root=$env{VCPKG_BUILDTREES_ROOT}"
+      },
+      "toolset": {
+        "value": "v143,version=14.43",
+        "strategy": "external"
+      }
+    },
+
+    {
+      "name": "static",
+      "displayName": "Windows x64 (static Qt, /MT)",
+      "description": "Single-file build - Qt and CRT statically linked. Produces a portable seal.exe.",
+      "inherits": "base",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static-release-msvc143",
+        "VCPKG_HOST_TRIPLET": "x64-windows-static-release-msvc143",
+        "VCPKG_INSTALL_OPTIONS": "--x-buildtrees-root=$env{VCPKG_BUILDTREES_ROOT}"
+      },
+      "toolset": {
+        "value": "v143,version=14.43",
+        "strategy": "external"
+      }
+    },
+
+    {
+      "name": "ci",
+      "displayName": "CI (Windows x64, stock triplet)",
+      "description": "Used by GitHub Actions. Stock x64-windows triplet so cached vcpkg binaries are reused across PRs without the MSVC pin.",
+      "inherits": "base",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    },
+
+    {
+      "name": "compile-db",
+      "displayName": "compile_commands.json (Ninja sidecar)",
+      "description": "Ninja-based configure whose only purpose is to emit a real compile_commands.json for clang-tidy/clangd. Shares vcpkg_installed/ AND triplet with the default preset so vcpkg sees its packages already installed and skips the build phase (a different triplet would force a full Qt6 rebuild). Never built directly; only configured.",
+      "binaryDir": "${sourceDir}/build-cdb",
+      "generator": "Ninja",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows-release-msvc143",
+        "VCPKG_HOST_TRIPLET": "x64-windows-release-msvc143",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed",
+        "VCPKG_INSTALL_OPTIONS": "--x-buildtrees-root=$env{VCPKG_BUILDTREES_ROOT}",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    }
+  ],
+
+  "buildPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default",
+      "configuration": "Release",
+      "displayName": "Build (dynamic Qt, Release)"
+    },
+    {
+      "name": "default-debug",
+      "configurePreset": "default",
+      "configuration": "Debug",
+      "displayName": "Build (dynamic Qt, Debug)"
+    },
+    {
+      "name": "static",
+      "configurePreset": "static",
+      "configuration": "Release",
+      "displayName": "Build (static Qt, Release)"
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci",
+      "configuration": "Release",
+      "displayName": "Build (CI, Release)"
+    },
+    {
+      "name": "ci-tests",
+      "configurePreset": "ci",
+      "configuration": "Release",
+      "targets": ["seal_tests"],
+      "displayName": "Build tests only (CI)"
+    }
+  ],
+
+  "testPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "default"
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "default"
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
+    }
+  ],
+
+  "packagePresets": [
+    {
+      "name": "static",
+      "configurePreset": "static",
+      "configurations": ["Release"],
+      "generators": ["ZIP"]
+    }
+  ],
+
+  "workflowPresets": [
+    {
+      "name": "default",
+      "displayName": "Full local pipeline (dynamic Qt)",
+      "steps": [
+        { "type": "configure", "name": "default" },
+        { "type": "build",     "name": "default" },
+        { "type": "test",      "name": "default" }
+      ]
+    },
+    {
+      "name": "ci",
+      "displayName": "CI configure + build + test",
+      "steps": [
+        { "type": "configure", "name": "ci" },
+        { "type": "build",     "name": "ci" },
+        { "type": "test",      "name": "ci" }
+      ]
+    }
+  ]
+}

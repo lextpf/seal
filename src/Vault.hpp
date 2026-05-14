@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "Cryptography.h"
+#include "Cryptography.hpp"
 
 namespace seal
 {

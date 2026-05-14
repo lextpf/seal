@@ -1,6 +1,6 @@
 #ifdef USE_QT_UI
 
-#include "NativeDialogs.h"
+#include "NativeDialogs.hpp"
 
 #include <windows.h>
 

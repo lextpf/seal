@@ -1,8 +1,8 @@
-#include "FileOperations.h"
+#include "FileOperations.hpp"
 
-#include "Clipboard.h"
-#include "Console.h"
-#include "Utils.h"
+#include "Clipboard.hpp"
+#include "Console.hpp"
+#include "Utils.hpp"
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>

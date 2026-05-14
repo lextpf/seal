@@ -1,21 +1,22 @@
 @echo off
-REM ============================================================================
+REM ===========================================================================================
 REM build.bat - Complete build pipeline for seal
-REM ============================================================================
+REM ===========================================================================================
 REM This script:
-REM   1. Runs clang-format on source files
-REM   2. Configures the project using CMake with vcpkg toolchain
-REM   3. Builds the Release configuration
-REM   4. Generates documentation with doxide + mkdocs (if available)
+REM   1. clang-format - in-place formatting of src/*.cpp / src/*.hpp / src/*.h / src/*.c
+REM   2. cmake        - CMake configure with vcpkg manifest install and VS 17 2022 generator
+REM   3. clang-tidy   - static analysis for diagnosing and fixing typical programming errors
+REM   4. build        - release build of the Release configuration via cmake --build
+REM   5. doxide       - API documentation generation via doxide + mkdocs build
 REM
 REM   MSVC has Internal Compiler Errors (ICEs) when building Qt6 via vcpkg.
-REM   This forces us to: pin the compiler to 14.43 (14.44 crashes), disable
+REM   This forces us to pin the compiler to 14.43 (14.44 crashes), disable
 REM   precompiled headers, limit parallelism to 1, and redirect vcpkg
 REM   buildtrees to a short path (C:\b\) to dodge the 260-char MAX_PATH
 REM   limit that Qt's deep build tree hits. The rest is defensive cache
 REM   management so stale CMake state doesn't silently pick the wrong
 REM   (crashing) compiler.
-REM ============================================================================
+REM ===========================================================================================
 
 setlocal enabledelayedexpansion
 
@@ -145,14 +146,14 @@ echo.
 REM ============================================================================
 REM STEP 1: Run clang-format
 REM ============================================================================
-echo [1/4] Running clang-format...
+echo [1/5] Running clang-format...
 echo ----------------------------------------------------------------------------
 
 where clang-format >nul 2>&1
 if errorlevel 1 (
     echo SKIP: clang-format not found in PATH
 ) else (
-    for %%f in (src\*.cpp src\*.h src\*.hpp src\*.c) do (
+    for %%f in (src\*.cpp src\*.hpp src\*.c src\*.h) do (
         if exist "%%f" clang-format -i "%%f"
     )
     echo Formatting complete.
@@ -161,28 +162,60 @@ echo.
 
 REM ============================================================================
 REM STEP 2: CMake Configuration
+REM ----------------------------------------------------------------------------
+REM `--static` routes to the static-Qt preset; everything else uses default.
+REM Both presets read $env{VCPKG_BUILDTREES_ROOT} for Qt's MAX_PATH redirect,
+REM which this script has already exported.
 REM ============================================================================
-echo [2/4] Configuring with CMake...
+set "CONFIGURE_PRESET=default"
+if "%STATIC_BUILD%"=="1" set "CONFIGURE_PRESET=static"
+
+echo [2/5] Configuring with CMake ^(preset: %CONFIGURE_PRESET%^)...
 echo ----------------------------------------------------------------------------
-cmake -S "%REPO_ROOT%" -B "%BUILD_DIR%" -G "Visual Studio 17 2022" -A x64 %CMAKE_TOOLSET_ARG% ^
-  -DCMAKE_TOOLCHAIN_FILE="%TOOLCHAIN_FILE%" ^
-  -DVCPKG_MANIFEST_MODE=ON ^
-  -DVCPKG_MANIFEST_INSTALL=ON ^
-  %VCPKG_INSTALL_OPTIONS_ARG% ^
-  %VCPKG_OVERLAY_TRIPLETS_ARG% ^
-  -DVCPKG_TARGET_TRIPLET="%VCPKG_TRIPLET%" ^
-  -DVCPKG_HOST_TRIPLET="%VCPKG_TRIPLET%" ^
-  -DENABLE_TESTS=ON
-if errorlevel 1 (
+cmake --preset %CONFIGURE_PRESET%
+if %ERRORLEVEL% neq 0 (
     echo ERROR: CMake configuration failed
     exit /b %ERRORLEVEL%
 )
 echo.
 
 REM ============================================================================
-REM STEP 3: Build Release
+REM STEP 3: Run clang-tidy
 REM ============================================================================
-echo [3/4] Building Release...
+echo [3/5] Running clang-tidy...
+echo ----------------------------------------------------------------------------
+
+where clang-tidy >nul 2>&1
+if errorlevel 1 (
+    echo SKIP: clang-tidy not found in PATH
+) else (
+    if not exist "build-cdb\compile_commands.json" (
+        echo   Generating compile_commands.json via Ninja sidecar...
+        cmake --preset compile-db >nul
+        if errorlevel 1 (
+            echo ERROR: compile-db configure failed
+            exit /b 1
+        )
+    )
+
+    for %%f in (src\*.cpp tests\*.cpp) do (
+        if exist "%%f" (
+            echo   tidy: %%f
+            clang-tidy --quiet --header-filter="[/\\]%%~nf\.hpp$" -p build-cdb "%%f"
+            if errorlevel 1 (
+                echo ERROR: clang-tidy reported issues in %%f
+                exit /b 1
+            )
+        )
+    )
+    echo clang-tidy complete.
+)
+echo.
+
+REM ============================================================================
+REM STEP 4: Build Release
+REM ============================================================================
+echo [4/5] Building Release...
 echo ----------------------------------------------------------------------------
 cmake --build "%BUILD_DIR%" --config Release
 if errorlevel 1 (
@@ -192,9 +225,9 @@ if errorlevel 1 (
 echo.
 
 REM ============================================================================
-REM STEP 4: Generate API Documentation (doxide)
+REM STEP 5: Generate API Documentation (doxide)
 REM ============================================================================
-echo [4/4] Generating API documentation...
+echo [5/5] Generating API documentation...
 echo ----------------------------------------------------------------------------
 where doxide >nul 2>&1
 if errorlevel 1 (

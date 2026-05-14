@@ -1,10 +1,10 @@
 #ifdef USE_QT_UI
 
-#include "QmlMain.h"
-#include "Backend.h"
-#include "Cryptography.h"
-#include "Diagnostics.h"
-#include "Logging.h"
+#include "QmlMain.hpp"
+#include "Backend.hpp"
+#include "Cryptography.hpp"
+#include "Diagnostics.hpp"
+#include "Logging.hpp"
 
 #include <QtCore/QCoreApplication>
 #include <QtGui/QGuiApplication>

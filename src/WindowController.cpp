@@ -1,9 +1,9 @@
 #ifdef USE_QT_UI
 
-#include "WindowController.h"
-#include "Diagnostics.h"
-#include "Logging.h"
-#include "WindowChrome.h"
+#include "WindowController.hpp"
+#include "Diagnostics.hpp"
+#include "Logging.hpp"
+#include "WindowChrome.hpp"
 
 #include <QtGui/QGuiApplication>
 #include <QtGui/QWindow>

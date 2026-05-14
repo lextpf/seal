@@ -1,4 +1,4 @@
-#include "Console.h"
+#include "Console.hpp"
 
 #include <commdlg.h>
 

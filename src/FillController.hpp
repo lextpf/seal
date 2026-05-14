@@ -10,8 +10,8 @@
 #include <atomic>
 #include <vector>
 
-#include "Cryptography.h"
-#include "Vault.h"
+#include "Cryptography.hpp"
+#include "Vault.hpp"
 
 namespace seal
 {

@@ -1,10 +1,10 @@
 #ifdef USE_QT_UI
 
-#include "CliDispatch.h"
+#include "CliDispatch.hpp"
 
-#include "Clipboard.h"
-#include "FileOperations.h"
-#include "Utils.h"
+#include "Clipboard.hpp"
+#include "FileOperations.hpp"
+#include "Utils.hpp"
 
 #include <QtCore/QString>
 

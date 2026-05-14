@@ -1,0 +1,53 @@
+name: Feature request
+description: Propose a new capability or user-facing improvement.
+title: "[Feature] <short summary>"
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for new functionality taht describe **user-facing capabilities**.
+        For purely internal cleanup, refactoring, or developer-experience work please use
+        the *Technical task* template instead.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What problem does this feature solve? What is currently painful or impossible?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Concrete description of the new feature and how a user would interact with it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches did you consider, and why did you discard them?
+    validations:
+      required: false
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Anything that should be explicitly out of scope, blocked by, or coupled with this work
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I searched existing issues and this proposal is not a duplicate.
+          required: true
+        - label: This is a user-facing capability or improvement and not a purely internal task.
+          required: true

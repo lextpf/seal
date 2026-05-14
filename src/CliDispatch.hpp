@@ -2,7 +2,7 @@
 
 #ifdef USE_QT_UI
 
-#include "Cryptography.h"
+#include "Cryptography.hpp"
 
 #include <QtCore/QString>
 

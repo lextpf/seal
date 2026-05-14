@@ -1,21 +1,21 @@
 #ifdef USE_QT_UI
 
-#include "Backend.h"
+#include "Backend.hpp"
 
-#include "CliDispatch.h"
-#include "CliHandler.h"
-#include "Clipboard.h"
-#include "Diagnostics.h"
-#include "FileOperations.h"
-#include "FillController.h"
-#include "Logging.h"
-#include "NativeDialogs.h"
-#include "QrCapture.h"
-#include "ScopedDpapiUnprotect.h"
-#include "Utils.h"
-#include "VaultModel.h"
-#include "WindowChrome.h"
-#include "WindowController.h"
+#include "CliDispatch.hpp"
+#include "CliHandler.hpp"
+#include "Clipboard.hpp"
+#include "Diagnostics.hpp"
+#include "FileOperations.hpp"
+#include "FillController.hpp"
+#include "Logging.hpp"
+#include "NativeDialogs.hpp"
+#include "QrCapture.hpp"
+#include "ScopedDpapiUnprotect.hpp"
+#include "Utils.hpp"
+#include "VaultModel.hpp"
+#include "WindowChrome.hpp"
+#include "WindowController.hpp"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>

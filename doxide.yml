@@ -7,7 +7,7 @@ description: AES-256-GCM encryption utility with Qt6 GUI and CLI modes
 output: docs
 
 files:
-  - "src/*.h"
+  - "src/*.hpp"
   - "src/*.cpp"
 
 groups:

@@ -1,8 +1,8 @@
 #ifdef USE_QT_UI
 
-#include "Logging.h"
-#include "ConsoleStyle.h"
-#include "Diagnostics.h"
+#include "Logging.hpp"
+#include "ConsoleStyle.hpp"
+#include "Diagnostics.hpp"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QDateTime>

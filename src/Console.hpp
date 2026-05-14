@@ -1,8 +1,8 @@
 #pragma once
 
-#include "Clipboard.h"
-#include "Cryptography.h"
-#include "Utils.h"
+#include "Clipboard.hpp"
+#include "Cryptography.hpp"
+#include "Utils.hpp"
 
 #include <conio.h>
 #include <wincred.h>

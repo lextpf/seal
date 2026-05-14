@@ -1,11 +1,4 @@
-/**
- * @file test_integration.cpp
- * @brief Integration tests for high-level functions (encryptLine, decryptLine, file operations)
- * @author seal Contributors
- * @date 2024
- */
-
-#include "test_helpers.h"
+#include "test_helpers.hpp"
 
 #include <gtest/gtest.h>
 

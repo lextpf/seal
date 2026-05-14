@@ -1,13 +1,5 @@
-/**
- * @file test_utils.cpp
- * @brief Unit tests for utility functions (hex encoding, string manipulation)
- * @author seal Contributors
- * @date 2024
- */
-
-#include "test_helpers.h"
-#include "../src/PasswordGen.h"
-#include <gtest/gtest.h>
+#include "test_helpers.hpp"
+#include "../src/PasswordGen.hpp"
 
 #include <string>
 #include <vector>

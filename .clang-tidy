@@ -1,0 +1,200 @@
+# ============================================================================
+# .clang-tidy - static analysis configuration for seal
+# ----------------------------------------------------------------------------
+# clang-tidy is opt-in. Formatting is owned by clang-format and is NOT enforced
+# here (the formatter runs in build.bat). This file controls semantic checks
+# only - bug patterns, modernization, performance, and project-specific
+# naming.
+#
+# To produce a compile DB clang-tidy can consume, configure with the
+# `compile-db` CMake preset (see CMakePresets.json and .clangd):
+#
+#     cmake --preset compile-db
+#
+# (Configure only - the sidecar is never built.) Then run from the repo root:
+#
+#     .\scripts\tidy.bat                  (whole tree)
+#     .\scripts\tidy.bat src\Backend.cpp  (single file)
+#
+# Notes on the check set:
+#   - Many cppcoreguidelines / modernize checks are disabled because seal is
+#     a Windows-only Win32-heavy codebase. Win32 forces C casts, BYTE / LPVOID
+#     reinterpret_casts, variadic printf, magic numbers (HRESULT, SDDL flags,
+#     PROCESS_* rights), and so on. Enabling those checks generates thousands
+#     of warnings on first-party code that is intentionally written that way.
+#   - readability-identifier-naming is configured to match CONTRIBUTING.md
+#     (PascalCase classes / files / methods, camelBack locals/params, the
+#     m_ / s_ / g_ prefixes for member/static/global state, UPPER_CASE
+#     macros). Existing code is expected to pass this without changes.
+# ============================================================================
+
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-unchecked-optional-access,
+  -bugprone-reserved-identifier,
+  -bugprone-suspicious-include,
+  -bugprone-exception-escape,
+  -bugprone-branch-clone,
+  cppcoreguidelines-avoid-goto,
+  cppcoreguidelines-init-variables,
+  cppcoreguidelines-interfaces-global-init,
+  cppcoreguidelines-narrowing-conversions,
+  cppcoreguidelines-prefer-member-initializer,
+  cppcoreguidelines-pro-type-member-init,
+  cppcoreguidelines-pro-type-static-cast-downcast,
+  cppcoreguidelines-slicing,
+  cppcoreguidelines-special-member-functions,
+  cppcoreguidelines-virtual-class-destructor,
+  misc-const-correctness,
+  misc-definitions-in-headers,
+  misc-misplaced-const,
+  misc-redundant-expression,
+  misc-static-assert,
+  misc-throw-by-value-catch-by-reference,
+  misc-unconventional-assign-operator,
+  misc-uniqueptr-reset-release,
+  misc-unused-alias-decls,
+  misc-unused-using-decls,
+  misc-use-anonymous-namespace,
+  modernize-deprecated-headers,
+  modernize-loop-convert,
+  modernize-make-shared,
+  modernize-make-unique,
+  modernize-pass-by-value,
+  modernize-raw-string-literal,
+  modernize-redundant-void-arg,
+  modernize-replace-auto-ptr,
+  modernize-replace-random-shuffle,
+  modernize-shrink-to-fit,
+  modernize-use-bool-literals,
+  modernize-use-emplace,
+  modernize-use-equals-default,
+  modernize-use-equals-delete,
+  modernize-use-noexcept,
+  modernize-use-nullptr,
+  modernize-use-override,
+  modernize-use-transparent-functors,
+  performance-*,
+  -performance-no-int-to-ptr,
+  -performance-avoid-endl,
+  portability-std-allocator-const,
+  readability-avoid-const-params-in-decls,
+  readability-braces-around-statements,
+  readability-const-return-type,
+  readability-container-contains,
+  readability-container-size-empty,
+  readability-delete-null-pointer,
+  readability-duplicate-include,
+  readability-else-after-return,
+  readability-identifier-naming,
+  readability-inconsistent-declaration-parameter-name,
+  readability-isolate-declaration,
+  readability-make-member-function-const,
+  readability-misleading-indentation,
+  readability-misplaced-array-index,
+  readability-non-const-parameter,
+  readability-qualified-auto,
+  readability-redundant-control-flow,
+  readability-redundant-declaration,
+  readability-redundant-member-init,
+  readability-redundant-preprocessor,
+  readability-redundant-smartptr-get,
+  readability-redundant-string-cstr,
+  readability-redundant-string-init,
+  readability-simplify-boolean-expr,
+  readability-simplify-subscript-expr,
+  readability-static-accessed-through-instance,
+  readability-static-definition-in-anonymous-namespace,
+  readability-string-compare,
+  readability-uniqueptr-delete-release
+
+WarningsAsErrors: ""
+
+# Skip generated and third-party code. Qt moc/qmltyperegistrar output and
+# vcpkg installs are not first-party. The build/ tree is generated.
+HeaderFilterRegex: "^.*[\\\\/]src[\\\\/].*\\.(h|hpp|hh|hxx|inl|ipp|tpp)$"
+ExcludeHeaderFilterRegex: ".*[\\\\/](build|build-cdb|vcpkg_installed|external|\\.moc|moc_|qrc_|ui_|qmltyperegistrations|aotstats)[^\\\\/]*"
+
+FormatStyle: file
+SystemHeaders: false
+
+CheckOptions:
+  # ---------------------------------------------------------------------------
+  # readability-identifier-naming - project conventions from CONTRIBUTING.md.
+  # ---------------------------------------------------------------------------
+  - { key: readability-identifier-naming.NamespaceCase,            value: lower_case }
+  - { key: readability-identifier-naming.ClassCase,                value: CamelCase  }
+  - { key: readability-identifier-naming.StructCase,               value: CamelCase  }
+  - { key: readability-identifier-naming.UnionCase,                value: CamelCase  }
+  - { key: readability-identifier-naming.EnumCase,                 value: CamelCase  }
+  - { key: readability-identifier-naming.EnumConstantCase,         value: CamelCase  }
+  - { key: readability-identifier-naming.ScopedEnumConstantCase,   value: CamelCase  }
+  - { key: readability-identifier-naming.TypeAliasCase,            value: CamelCase  }
+  - { key: readability-identifier-naming.TypedefCase,              value: CamelCase  }
+  - { key: readability-identifier-naming.TemplateParameterCase,    value: CamelCase  }
+  - { key: readability-identifier-naming.FunctionCase,             value: camelBack  }
+  - { key: readability-identifier-naming.MethodCase,               value: camelBack  }
+  - { key: readability-identifier-naming.ParameterCase,            value: camelBack  }
+  - { key: readability-identifier-naming.VariableCase,             value: camelBack  }
+  - { key: readability-identifier-naming.LocalVariableCase,        value: camelBack  }
+  - { key: readability-identifier-naming.MemberCase,               value: CamelCase  }
+  - { key: readability-identifier-naming.MemberPrefix,             value: m_         }
+  - { key: readability-identifier-naming.PrivateMemberCase,        value: CamelCase  }
+  - { key: readability-identifier-naming.PrivateMemberPrefix,      value: m_         }
+  - { key: readability-identifier-naming.ProtectedMemberCase,      value: CamelCase  }
+  - { key: readability-identifier-naming.ProtectedMemberPrefix,    value: m_         }
+  - { key: readability-identifier-naming.PublicMemberCase,         value: CamelCase  }
+  - { key: readability-identifier-naming.PublicMemberPrefix,       value: m_         }
+  - { key: readability-identifier-naming.StaticVariableCase,       value: CamelCase  }
+  - { key: readability-identifier-naming.StaticVariablePrefix,     value: s_         }
+  - { key: readability-identifier-naming.ClassMemberCase,          value: CamelCase  }
+  - { key: readability-identifier-naming.ClassMemberPrefix,        value: s_         }
+  - { key: readability-identifier-naming.GlobalVariableCase,       value: CamelCase  }
+  - { key: readability-identifier-naming.GlobalVariablePrefix,     value: g_         }
+  - { key: readability-identifier-naming.ConstexprVariableCase,    value: CamelCase  }
+  - { key: readability-identifier-naming.ConstexprVariablePrefix,  value: k          }
+  - { key: readability-identifier-naming.GlobalConstantCase,       value: CamelCase  }
+  - { key: readability-identifier-naming.GlobalConstantPrefix,     value: k          }
+  - { key: readability-identifier-naming.MacroDefinitionCase,      value: UPPER_CASE }
+  # Trailing-underscore plain-struct fields and POD-only naming concessions are
+  # intentionally NOT enforced - the codebase uses m_PascalCase uniformly.
+
+  # ---------------------------------------------------------------------------
+  # bugprone / cppcoreguidelines tuning
+  # ---------------------------------------------------------------------------
+  - { key: bugprone-argument-comment.StrictMode,                                       value: true  }
+  - { key: bugprone-assert-side-effect.AssertMacros,                                   value: "assert,Q_ASSERT" }
+  - { key: bugprone-misplaced-widening-cast.CheckImplicitCasts,                        value: false }
+  - { key: bugprone-signed-char-misuse.CharTypdefsToIgnore,                            value: "int8_t" }
+  - { key: bugprone-sizeof-expression.WarnOnSizeOfIntegerExpression,                   value: false }
+  - { key: bugprone-string-constructor.WarnOnLargeLength,                              value: true  }
+  - { key: bugprone-suspicious-string-compare.WarnOnImplicitComparison,                value: true  }
+  - { key: cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor,            value: true  }
+  - { key: cppcoreguidelines-special-member-functions.AllowMissingMoveFunctions,       value: true  }
+  - { key: cppcoreguidelines-special-member-functions.AllowMissingMoveFunctionsWhenCopyIsDeleted, value: true }
+
+  # ---------------------------------------------------------------------------
+  # modernize tuning
+  # ---------------------------------------------------------------------------
+  - { key: modernize-loop-convert.MaxCopySize,                                          value: 16   }
+  - { key: modernize-loop-convert.MinConfidence,                                        value: reasonable }
+  - { key: modernize-pass-by-value.IncludeStyle,                                        value: google }
+  - { key: modernize-use-emplace.IgnoreImplicitConstructors,                            value: true  }
+
+  # ---------------------------------------------------------------------------
+  # performance tuning
+  # ---------------------------------------------------------------------------
+  - { key: performance-for-range-copy.WarnOnAllAutoCopies,                              value: true  }
+  - { key: performance-inefficient-string-concatenation.StrictMode,                     value: false }
+  - { key: performance-move-const-arg.CheckTriviallyCopyableMove,                       value: false }
+  - { key: performance-unnecessary-value-param.AllowedTypes,                            value: "" }
+
+  # ---------------------------------------------------------------------------
+  # misc tuning
+  # ---------------------------------------------------------------------------
+  - { key: misc-const-correctness.AnalyzeValues,                                        value: true  }
+  - { key: misc-const-correctness.WarnPointersAsValues,                                 value: false }
+  - { key: misc-const-correctness.TransformValues,                                      value: false }

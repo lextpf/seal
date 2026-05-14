@@ -1,6 +1,6 @@
 #pragma once
 
-#include "CryptoConfig.h"
+#include "CryptoConfig.hpp"
 
 #include <windows.h>
 

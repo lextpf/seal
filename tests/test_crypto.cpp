@@ -1,11 +1,4 @@
-/**
- * @file test_crypto.cpp
- * @brief Unit tests for core encryption/decryption functions
- * @author seal Contributors
- * @date 2024
- */
-
-#include "test_helpers.h"
+#include "test_helpers.hpp"
 
 #include <gtest/gtest.h>
 

@@ -23,22 +23,22 @@
  *      Repository:   https://github.com/lextpf/seal
  *      License:      MIT
  */
-#include "CliModes.h"
-#include "Clipboard.h"
-#include "Console.h"
-#include "ConsoleStyle.h"
-#include "Cryptography.h"
-#include "Diagnostics.h"
-#include "FileOperations.h"
-#include "PasswordGen.h"
-#include "ScopedDpapiUnprotect.h"
-#include "Utils.h"
-#include "Version.h"
+#include "CliModes.hpp"
+#include "Clipboard.hpp"
+#include "Console.hpp"
+#include "ConsoleStyle.hpp"
+#include "Cryptography.hpp"
+#include "Diagnostics.hpp"
+#include "FileOperations.hpp"
+#include "PasswordGen.hpp"
+#include "ScopedDpapiUnprotect.hpp"
+#include "Utils.hpp"
+#include "Version.hpp"
 
 #ifdef USE_QT_UI
 #include <QtCore/QString>
-#include "Logging.h"
-#include "Vault.h"
+#include "Logging.hpp"
+#include "Vault.hpp"
 #endif
 
 #include <cstdlib>

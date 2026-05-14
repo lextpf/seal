@@ -1,5 +1,5 @@
-#include "Clipboard.h"
-#include "Utils.h"
+#include "Clipboard.hpp"
+#include "Utils.hpp"
 
 #include <shellapi.h>
 #include <tlhelp32.h>

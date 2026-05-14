@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Cryptography.h"
+#include "Cryptography.hpp"
 
 namespace seal
 {
