@@ -108,7 +108,6 @@ TEST_F(CryptoTest, VerifyPacketAcceptsValidPacket)
 {
     auto password = make_secure_string("test_password");
     std::string plaintext = "verify me";
-
     std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
 
     auto packet =
@@ -120,14 +119,13 @@ TEST_F(CryptoTest, VerifyPacketAcceptsValidPacket)
 
 TEST_F(CryptoTest, VerifyPacketRejectsWrongPassword)
 {
-    auto password = make_secure_string("test_password");
+    auto correctPassword = make_secure_string("correct_password");
     auto wrongPassword = make_secure_string("wrong_password");
     std::string plaintext = "verify me";
-
     std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
 
-    auto packet =
-        seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
+    auto packet = seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes),
+                                                    correctPassword);
 
     EXPECT_THROW(
         seal::Cryptography::verifyPacket(std::span<const unsigned char>(packet), wrongPassword),
@@ -138,7 +136,6 @@ TEST_F(CryptoTest, VerifyPacketRejectsCorruptedPacket)
 {
     auto password = make_secure_string("test_password");
     std::string plaintext = "verify me";
-
     std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
 
     auto packet =

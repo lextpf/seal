@@ -297,3 +297,26 @@ TEST_F(FileOperationsTest, DecryptCorruptedFileFails)
         seal::FileOperations::decryptFileTo(encFile.string(), decFile.string(), password);
     EXPECT_FALSE(decryptSuccess);
 }
+
+TEST_F(FileOperationsTest, ParseTriplesRejectsEmptyFields)
+{
+    std::vector<seal::secure_triplet16_t> out;
+
+    EXPECT_FALSE(seal::FileOperations::parseTriples(":user:pass", out));
+    EXPECT_TRUE(out.empty());
+
+    EXPECT_FALSE(seal::FileOperations::parseTriples("svc::pass", out));
+    EXPECT_TRUE(out.empty());
+
+    EXPECT_FALSE(seal::FileOperations::parseTriples("svc:user:", out));
+    EXPECT_TRUE(out.empty());
+}
+
+TEST_F(FileOperationsTest, ParseTriplesTrimsServiceAndUser)
+{
+    std::vector<seal::secure_triplet16_t> out;
+
+    EXPECT_TRUE(seal::FileOperations::parseTriples(" svc : user :pass", out));
+    ASSERT_EQ(out.size(), 1U);
+    EXPECT_EQ(seal::FileOperations::tripleToUtf8(out[0]), "svc:user:pass");
+}
