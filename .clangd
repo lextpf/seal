@@ -2,44 +2,11 @@
 #
 # Why this file exists
 # --------------------
-# CMakeLists.txt does not set CMAKE_EXPORT_COMPILE_COMMANDS, and even if it
-# did, build.bat configures with the Visual Studio 17 generator, which
-# silently ignores it - only the Ninja and Makefile generators emit
-# compile_commands.json. So if you ran `.\build.bat`, build/ has no compile
-# DB, clangd has no per-file flags, and most #includes look unresolved even
-# though the project builds.
-#
-# Two ways to get accurate diagnostics:
-#
-#   (A) Recommended - generate a side-by-side Ninja build that produces
-#       compile_commands.json. clangd auto-discovers it via the
-#       CompilationDatabase entry below; the main build/ tree is untouched.
-#       build.bat does this automatically as step 3; you can also run it
-#       manually from a "x64 Native Tools Command Prompt for VS 2022":
-#
-#         cmake --preset compile-db
-#
-#       (Re-run the configure step whenever you add new source files. The
-#       sidecar configures only - it is never built.)
-#
-#       The preset shares vcpkg_installed/ with the default preset so vcpkg
-#       does not re-install Qt6 / OpenSSL / OpenCV. It uses Ninja so CMake
-#       actually emits compile_commands.json (the Visual Studio generator
-#       silently ignores CMAKE_EXPORT_COMPILE_COMMANDS).
-#
-#   (B) Skip the Ninja build. The Add: flags below cover C++23 mode, the
-#       project's include paths (src/, tests/, vcpkg_installed/Qt6/opencv4),
-#       and the runtime defines from CMakeLists.txt. Navigation and most
-#       diagnostics work; some MSVC-specific extensions and per-target
-#       defines (notably the test target's omission of USE_QT_UI) won't.
-#
-# If clangd still can't find <Windows.h> / the MSVC STL, point it at cl.exe
-# in your editor's clangd args (NOT here - .clangd doesn't accept it):
-#
-#       --query-driver=C:\\Program*Files*\\Microsoft*Visual*Studio\\**\\cl.exe
-#
-# When vcpkg is upgraded and the triplet directory name changes, update the
-# Ibuild/vcpkg_installed/<triplet>/include paths under Add: below.
+# CMakeLists.txt sets CMAKE_EXPORT_COMPILE_COMMANDS ON, but Visual Studio's
+# CMake generator silently ignores it - only the Ninja and Makefile
+# generators emit compile_commands.json. So if you configured with the
+# default `cmake -B build`, build/ has no compile DB, clangd has no per-file
+# flags, and most #includes look unresolved even though the project builds.
 
 CompileFlags:
   CompilationDatabase: build-cdb
@@ -126,8 +93,6 @@ CompileFlags:
     - /JMC
     - /sdl
     - /diagnostics:*
-    - /external:*
-    - -external:*
     - /Fp*
     - /Fd*
     - /Fo*
