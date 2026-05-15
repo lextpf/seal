@@ -922,7 +922,13 @@ bool FileOperations::shredFile(const std::string& path)
             }
             else
             {
-                RAND_bytes(buf.data(), static_cast<int>(chunk));
+                if (RAND_bytes(buf.data(), static_cast<int>(chunk)) != 1)
+                {
+                    std::cerr << "(shred) RAND_bytes failed pass " << (pass + 1) << ": " << path
+                              << "\n";
+                    CloseHandle(hFile);
+                    return false;
+                }
             }
 
             DWORD written = 0;
