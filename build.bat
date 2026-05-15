@@ -94,7 +94,7 @@ if defined VCVARS_VER (
 ) else (
     call "%VSVCVARS%"
 )
-if errorlevel 1 (
+if %ERRORLEVEL% neq 0 (
     echo ERROR: Failed to initialize Visual Studio build environment
     exit /b 1
 )
@@ -192,7 +192,7 @@ if errorlevel 1 (
     if not exist "build-cdb\compile_commands.json" (
         echo   Generating compile_commands.json via Ninja sidecar...
         cmake --preset compile-db >nul
-        if errorlevel 1 (
+        if !ERRORLEVEL! neq 0 (
             echo ERROR: compile-db configure failed
             exit /b 1
         )
@@ -202,7 +202,7 @@ if errorlevel 1 (
         if exist "%%f" (
             echo   tidy: %%f
             clang-tidy --quiet --header-filter="[/\\]%%~nf\.hpp$" -p build-cdb "%%f"
-            if errorlevel 1 (
+            if !ERRORLEVEL! neq 0 (
                 echo ERROR: clang-tidy reported issues in %%f
                 exit /b 1
             )
@@ -218,7 +218,7 @@ REM ============================================================================
 echo [4/5] Building Release...
 echo ----------------------------------------------------------------------------
 cmake --build "%BUILD_DIR%" --config Release
-if errorlevel 1 (
+if %ERRORLEVEL% neq 0 (
     echo ERROR: Build failed
     exit /b %ERRORLEVEL%
 )
@@ -235,28 +235,28 @@ if errorlevel 1 (
 ) else (
     pushd "%REPO_ROOT%"
     doxide build
-    if errorlevel 1 (
-        echo ERROR: doxide build failed
+    if !ERRORLEVEL! neq 0 (
+        echo ERROR: doxide build failed [exit code !ERRORLEVEL!]
         popd
-        exit /b %ERRORLEVEL%
+        exit /b 1
     )
     python scripts\_promote_subgroups.py
-    if errorlevel 1 (
-        echo ERROR: _promote_subgroups.py failed
+    if !ERRORLEVEL! neq 0 (
+        echo ERROR: _promote_subgroups.py failed [exit code !ERRORLEVEL!]
         popd
-        exit /b %ERRORLEVEL%
+        exit /b 1
     )
     python scripts\_clean_docs.py
-    if errorlevel 1 (
-        echo ERROR: _clean_docs.py failed
+    if !ERRORLEVEL! neq 0 (
+        echo ERROR: _clean_docs.py failed [exit code !ERRORLEVEL!]
         popd
-        exit /b %ERRORLEVEL%
+        exit /b 1
     )
     mkdocs build
-    if errorlevel 1 (
-        echo ERROR: mkdocs build failed
+    if !ERRORLEVEL! neq 0 (
+        echo ERROR: mkdocs build failed [exit code !ERRORLEVEL!]
         popd
-        exit /b %ERRORLEVEL%
+        exit /b 1
     )
     popd
 )
