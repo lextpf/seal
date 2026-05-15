@@ -230,9 +230,17 @@ def collect_group_members(docs_dir: Path, group_dir: str) -> list[tuple[str, str
         ):
             sub_name = m.group(1)
             sub_dir = m.group(2)
+            # Class-based subgroups have content at the nested path; try there first.
             sub_index = docs_dir / group_dir / sub_dir / "index.md"
-            sub_prefix = f"{group_dir}/{sub_dir}/"
-            members.extend(collect_members(sub_index, sub_prefix))
+            sub_members = collect_members(sub_index, f"{group_dir}/{sub_dir}/")
+            if sub_members:
+                members.extend(sub_members)
+                continue
+            # Namespace-based subgroups: doxide refuses @ingroup on namespaces
+            # and emits only a stub at the nested path, with the real content
+            # at the top-level dir that _promote_subgroups.py also targets.
+            top_index = docs_dir / sub_dir / "index.md"
+            members.extend(collect_members(top_index, f"{sub_dir}/"))
 
     return members
 
