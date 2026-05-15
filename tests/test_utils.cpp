@@ -2,7 +2,9 @@
 #include "test_helpers.hpp"
 
 #include <gtest/gtest.h>
+
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace std::string_literals;
@@ -279,10 +281,12 @@ TEST_F(PasswordGenTest, ClampsLength)
 
 TEST_F(PasswordGenTest, UsesDocumentedCharset)
 {
-    static constexpr std::string_view allowed =
+    static constexpr std::string_view kAllowed =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
 
     auto password = seal::GeneratePassword(64);
-    for (char ch : password.view())
-        EXPECT_NE(allowed.find(ch), std::string_view::npos);
+    for (const char ch : password.view())
+    {
+        EXPECT_NE(kAllowed.find(ch), std::string_view::npos);
+    }
 }

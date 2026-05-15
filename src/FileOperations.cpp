@@ -261,23 +261,28 @@ bool FileOperations::parseTriples(std::string_view plain,
             s.find(':', c2 + 1) != std::string::npos)
             return false;
 
-        auto mk = [&](size_t off, size_t len)
+        auto mk = [&](std::string_view field)
         {
             seal::basic_secure_string<wchar_t, A> r;
-            if (len == 0)
+            if (field.empty())
                 return r;
-            const char* src = s.data() + off;
-            int need = MultiByteToWideChar(CP_UTF8, 0, src, (int)len, nullptr, 0);
+            int need = MultiByteToWideChar(CP_UTF8, 0, field.data(), (int)field.size(), nullptr, 0);
             if (need > 0)
             {
                 r.s.resize(need);
-                MultiByteToWideChar(CP_UTF8, 0, src, (int)len, r.s.data(), need);
+                MultiByteToWideChar(CP_UTF8, 0, field.data(), (int)field.size(), r.s.data(), need);
             }
             return r;
         };
 
         // Split into (service, username, password) around the two colons.
-        out.emplace_back(mk(0, c1), mk(c1 + 1, c2 - (c1 + 1)), mk(c2 + 1, s.size() - (c2 + 1)));
+        std::string service = seal::utils::trim(s.substr(0, c1));
+        std::string user = seal::utils::trim(s.substr(c1 + 1, c2 - c1 - 1));
+        std::string pass = s.substr(c2 + 1);
+        if (service.empty() || user.empty() || pass.empty())
+            return false;
+
+        out.emplace_back(mk(service), mk(user), mk(pass));
         return true;
     };
 
