@@ -235,7 +235,7 @@ seal::secure_string<seal::locked_allocator<char>> FileOperations::decryptLine(
     return out;
 }
 
-// Parse a flat string of colon-delimited triples separated by commas or
+// Parse secret material of colon-delimited triples separated by commas or
 // newlines.  Expected format: "svc1:user1:pass1,svc2:user2:pass2\n...".
 // Each token must contain EXACTLY 2 colons (3 fields).
 template <class A>
@@ -243,22 +243,32 @@ bool FileOperations::parseTriples(std::string_view plain,
                                   std::vector<seal::secure_triplet16<A>>& out)
 {
     out.clear();
-    std::string tok;
 
-    // Flush: Validate and consume one accumulated token.
-    auto flush = [&](std::string& t) -> bool
+    // Trim leading/trailing whitespace as a sub-view.
+    auto trimView = [](std::string_view sv) -> std::string_view
     {
-        std::string s = seal::utils::trim(t);
-        t.clear();
+        size_t a = 0, b = sv.size();
+        while (a < b && std::isspace(static_cast<unsigned char>(sv[a])))
+            ++a;
+        while (b > a && std::isspace(static_cast<unsigned char>(sv[b - 1])))
+            --b;
+        return sv.substr(a, b - a);
+    };
+
+    // Validate one token (sub-view of `plain`) and append it to `out`.
+    auto flush = [&](std::string_view tok) -> bool
+    {
+        const std::string_view s = trimView(tok);
         if (s.empty())
             return true;
 
         // Locate the first and second colons. Reject if there are fewer
         // than 2 (incomplete triple) or more than 2 (ambiguous fields).
-        size_t c1 = s.find(':'),
-               c2 = (c1 == std::string::npos ? std::string::npos : s.find(':', c1 + 1));
-        if (c1 == std::string::npos || c2 == std::string::npos ||
-            s.find(':', c2 + 1) != std::string::npos)
+        const size_t c1 = s.find(':');
+        const size_t c2 =
+            (c1 == std::string_view::npos ? std::string_view::npos : s.find(':', c1 + 1));
+        if (c1 == std::string_view::npos || c2 == std::string_view::npos ||
+            s.find(':', c2 + 1) != std::string_view::npos)
             return false;
 
         auto mk = [&](std::string_view field)
@@ -276,9 +286,9 @@ bool FileOperations::parseTriples(std::string_view plain,
         };
 
         // Split into (service, username, password) around the two colons.
-        std::string service = seal::utils::trim(s.substr(0, c1));
-        std::string user = seal::utils::trim(s.substr(c1 + 1, c2 - c1 - 1));
-        std::string pass = s.substr(c2 + 1);
+        const std::string_view service = trimView(s.substr(0, c1));
+        const std::string_view user = trimView(s.substr(c1 + 1, c2 - c1 - 1));
+        const std::string_view pass = s.substr(c2 + 1);
         if (service.empty() || user.empty() || pass.empty())
             return false;
 
@@ -287,24 +297,25 @@ bool FileOperations::parseTriples(std::string_view plain,
     };
 
     // Commas and newlines both act as triple separators, so a single
-    // encrypted blob can carry multiple credentials in one payload.
-    for (char ch : plain)
+    // encrypted blob can carry multiple credentials in one payload. We walk
+    // `plain` with offsets so each token is just a sub-view of the caller's
+    // locked buffer.
+    size_t start = 0;
+    for (size_t i = 0; i < plain.size(); ++i)
     {
+        const char ch = plain[i];
         if (ch == ',' || ch == '\n' || ch == '\r')
         {
-            if (!flush(tok))
+            if (!flush(plain.substr(start, i - start)))
             {
                 out.clear();
                 return false;
             }
-        }
-        else
-        {
-            tok.push_back(ch);
+            start = i + 1;
         }
     }
-    // Don't forget the last token (no trailing delimiter required).
-    if (!flush(tok))
+
+    if (!flush(plain.substr(start)))
     {
         out.clear();
         return false;
