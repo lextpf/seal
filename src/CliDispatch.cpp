@@ -70,8 +70,8 @@ void CliDispatchHexTokens(const std::string& input, const CliDispatchCallbacks& 
         {
             auto plain = seal::FileOperations::decryptLine(tok, cb.password);
             (void)seal::Clipboard::copyWithTTL(plain.view());
-            // Mask plaintext in the output so it doesn't accumulate in the
-            // QML string buffer. The value is on the clipboard (TTL-scrubbed).
+            // Mask plaintext in the output -- value lands on the
+            // clipboard (TTL-scrubbed) so it doesn't accumulate in QML.
             cb.output(
                 QString("%1  [copied]").arg(QString(static_cast<int>(plain.size()), QChar('*'))));
             seal::Cryptography::cleanseString(plain);
@@ -94,7 +94,7 @@ bool CliDispatchBase64(const std::string& input, const CliDispatchCallbacks& cb)
                                                            cb.password);
             (void)seal::Clipboard::copyWithTTL(reinterpret_cast<const char*>(plain.data()),
                                                plain.size());
-            // Mask plaintext in the output - value is on the clipboard.
+            // Mask plaintext -- value is on the clipboard.
             cb.output(
                 QString("%1  [copied]").arg(QString(static_cast<int>(plain.size()), QChar('*'))));
             seal::Cryptography::cleanseString(plain);
@@ -103,7 +103,7 @@ bool CliDispatchBase64(const std::string& input, const CliDispatchCallbacks& cb)
     }
     catch (...)
     {
-        // Not valid base64 ciphertext, fall through to encrypt
+        // Not valid base64 ciphertext -- fall through to encrypt.
     }
     return false;
 }
@@ -156,7 +156,7 @@ void CliDispatchDirectory(const std::string& dir, const CliDispatchCallbacks& cb
 void CliDispatchEncrypt(const std::string& input, const CliDispatchCallbacks& cb)
 {
     std::string hex = seal::FileOperations::encryptLine(input, cb.password);
-    // Convert hex back to raw bytes for base64 encoding
+    // Hex -> raw bytes for base64.
     std::vector<unsigned char> raw;
     seal::utils::from_hex(std::string_view{hex}, raw);
     std::string b64 = seal::utils::toBase64(std::span<const unsigned char>(raw));
