@@ -19,9 +19,8 @@ QString OpenFileDialog(const QString& title, const QString& filter)
     std::wstring wTitle = title.toStdWString();
     std::wstring wFilter = filter.toStdWString();
 
-    // OPENFILENAME expects a double-null-terminated filter string with
-    // pairs separated by NUL, e.g. "Description\0*.ext\0\0".
-    // The caller passes pipe-separated pairs, so we replace '|' -> '\0'.
+    // OPENFILENAME wants NUL-pair filters ("Desc\0*.ext\0\0"); caller
+    // sends '|'-separated, so substitute.
     for (auto& c : wFilter)
     {
         if (c == L'|')
@@ -37,8 +36,8 @@ QString OpenFileDialog(const QString& title, const QString& filter)
     ofn.lpstrFile = fileName;
     ofn.nMaxFile = MAX_PATH;
     ofn.lpstrTitle = wTitle.c_str();
-    // OFN_NOCHANGEDIR prevents the dialog from changing the process CWD,
-    // which would break relative-path vault auto-discovery.
+    // OFN_NOCHANGEDIR keeps process CWD stable; relative-path vault
+    // auto-discovery depends on it.
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
 
     if (GetOpenFileNameW(&ofn))
