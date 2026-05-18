@@ -129,6 +129,10 @@ set(WINDOWS_LIBS
     Comdlg32
     Crypt32
     dwmapi
+    Imm32
+    UIAutomationCore
+    Bcrypt
+    Wintrust
 )
 
 # Static OpenCV videoio (MSMF backend) requires these.
@@ -160,6 +164,16 @@ set(SEAL_SOURCES
     src/CliHandler.cpp
     src/WindowController.cpp
     src/CliModes.cpp
+    src/FusionDecider.cpp
+    src/Win32StyleProbe.cpp
+    src/ImeStateProbe.cpp
+    src/UiaCommon.cpp
+    src/UiaIsPasswordProbe.cpp
+    src/UiaMetadataProbe.cpp
+    src/BridgeMessage.cpp
+    src/BrowserBridge.cpp
+    src/BrowserBridgeProbe.cpp
+    src/BrandIconResolver.cpp
 )
 
 qt_standard_project_setup()
@@ -210,7 +224,8 @@ target_compile_definitions(seal PRIVATE
     USE_QT_UI
 )
 
-file(GLOB SEAL_SVGS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} assets/svgs/*.svg)
+file(GLOB SEAL_DUOTONE_SVGS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} assets/duotone/*.svg)
+file(GLOB SEAL_BRAND_SVGS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} assets/brands/*.svg)
 
 qt_add_qml_module(seal
     URI seal
@@ -221,8 +236,9 @@ qt_add_qml_module(seal
         qml/Main.qml
         qml/HeaderBar.qml
         qml/SearchBar.qml
-        qml/AccountsTable.qml
-        qml/AccountRow.qml
+        qml/AccountsGrid.qml
+        qml/AccountsToolbar.qml
+        qml/AccountChip.qml
         qml/ActionBar.qml
         qml/StatusFooter.qml
         qml/AccountDialog.qml
@@ -233,9 +249,11 @@ qt_add_qml_module(seal
         qml/SvgIcon.qml
         qml/TintedButton.qml
         qml/CliPanel.qml
+        qml/BridgeSettings.qml
     RESOURCES
         "assets/fonts/b0a4eabe-5fe5-41e3-8dc3-2df2b82ec4eb.ttf"
-        ${SEAL_SVGS}
+        ${SEAL_DUOTONE_SVGS}
+        ${SEAL_BRAND_SVGS}
 )
 
 # Static Qt6: register QML plugins at link time (qmlimportscanner runs
@@ -292,6 +310,25 @@ if(NOT VCPKG_TARGET_TRIPLET MATCHES "static")
     )
 endif()
 
+# Native-messaging host: tiny standalone exe spawned by the browser to
+# bridge between Chrome's native-messaging stdio protocol and the seal
+# named pipe. Built as a separate target so it can be signed independently.
+option(ENABLE_BROWSER_HOST "Build seal-browser-host.exe alongside seal" ON)
+if(ENABLE_BROWSER_HOST)
+    add_subdirectory(host/seal-browser-host)
+endif()
+
+# Bundle the WebExtension folder into the install layout so the user can
+# point chrome://extensions / about:debugging at it after running
+# `seal --install-browser-extension`.
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/extensions/seal-browser"
+    DESTINATION extensions
+    FILES_MATCHING
+        PATTERN "*.json"
+        PATTERN "*.js"
+        PATTERN "*.png"
+)
+
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
@@ -309,12 +346,23 @@ if(ENABLE_TESTS)
         tests/test_crypto.cpp
         tests/test_utils.cpp
         tests/test_integration.cpp
+        tests/test_fusion_decider.cpp
+        tests/test_win32_style_probe.cpp
+        tests/test_bridge_fuzz.cpp
+        tests/test_bridge_security.cpp
+        tests/test_brand_icon_resolver.cpp
+        tests/test_url_binding.cpp
         src/Cryptography.cpp
         src/Utils.cpp
         src/Clipboard.cpp
         src/Console.cpp
         src/FileOperations.cpp
         src/PasswordGen.cpp
+        src/FusionDecider.cpp
+        src/Win32StyleProbe.cpp
+        src/ImeStateProbe.cpp
+        src/BridgeMessage.cpp
+        src/BrandIconResolver.cpp
     )
 
     target_include_directories(seal_tests PRIVATE
