@@ -5,13 +5,20 @@
 #include <QString>
 #include <QTimer>
 
-#include <UIAutomation.h>
 #include <windows.h>
 #include <atomic>
 #include <vector>
 
+#include "BrowserBridge.hpp"
+#include "BrowserBridgeProbe.hpp"
 #include "Cryptography.hpp"
+#include "FusionDecider.hpp"
+#include "ImeStateProbe.hpp"
+#include "Probe.hpp"
+#include "UiaIsPasswordProbe.hpp"
+#include "UiaMetadataProbe.hpp"
 #include "Vault.hpp"
+#include "Win32StyleProbe.hpp"
 
 namespace seal
 {
@@ -97,9 +104,10 @@ public:
     /// @brief Fill controller state machine states.
     enum class State
     {
-        Idle,    ///< No hooks, waiting for arm().
-        Armed,   ///< Hooks active, waiting for Ctrl+Click to type either field.
-        Typing,  ///< Keystrokes being sent to target window.
+        Idle,      ///< No hooks, waiting for arm() or armDiagnose().
+        Armed,     ///< Hooks active, waiting for Ctrl+Click to type either field.
+        Typing,    ///< Keystrokes being sent to target window.
+        Diagnose,  ///< Hooks active, waiting for Ctrl+Click to dry-run probes only.
     };
     Q_ENUM(State)
 
@@ -153,12 +161,61 @@ public:
         const uint64_t& ownerGeneration);
 
     /**
+     * @brief Arm the controller in dry-run "diagnose" mode.
+     *
+     * Like @ref arm but without binding a credential. Installs the same
+     * global mouse + keyboard hooks; on the next Ctrl+Click, runs the
+     * full probe pipeline (browser bridge + Win32 + UIA + IME), fuses
+     * the verdict, and emits @ref diagnoseCompleted with a human-
+     * readable summary. No decryption, no SendInput; safe to use on
+     * arbitrary fields including those that don't belong to seal.
+     *
+     * Intended for testing the browser extension end-to-end: arm
+     * diagnose mode, switch to the browser, Ctrl+Click any input field,
+     * and read the per-probe verdict to confirm the bridge fired.
+     *
+     * Esc or the @ref FILL_TIMEOUT_SECONDS timeout cancels with
+     * @ref diagnoseCancelled.
+     *
+     * @return true if hooks installed and diagnose mode is active.
+     */
+    [[nodiscard]] bool armDiagnose();
+
+    /**
      * @brief Cancel the current fill operation and remove all hooks.
      *
      * Safe to call from any state; no-op if already Idle.
-     * Emits fillCancelled.
+     * Emits fillCancelled (or diagnoseCancelled when in Diagnose state).
      */
     Q_INVOKABLE void cancel();
+
+    /**
+     * @brief Panic mode -- disable the browser bridge (M8).
+     *
+     * Drops the pipe handle, refuses further messages, and clears the in-memory
+     * bridge map. Safe to call from any state. Re-enable with enableBridge().
+     */
+    Q_INVOKABLE void disableBridge();
+
+    /**
+     * @brief Re-enable the browser bridge after a previous disableBridge() call.
+     *
+     * If currently armed and the bridge was previously stopped, attempts to
+     * restart it on a fresh token; old tokens are invalidated.
+     */
+    Q_INVOKABLE void enableBridge();
+
+    /**
+     * @brief Whether the bridge is currently enabled (not in panic mode).
+     */
+    bool isBridgeEnabled() const;
+
+    /**
+     * @brief Whether the browser-companion native messaging host is
+     * currently connected to the bridge (handshake complete, port open).
+     * Used by Backend to drive the chip's "actually working" visual.
+     */
+    bool isBridgePeerConnected() const;
 
 signals:
     void armedChanged();             ///< Armed state toggled on or off.
@@ -176,6 +233,14 @@ signals:
     /// @brief Fill was cancelled by user (Esc) or timeout.
     void fillCancelled();
 
+    /// @brief Dry-run probe completed; @p summary is a multi-line human-
+    /// readable breakdown of per-probe verdicts (one line per probe with
+    /// verdict + confidence + evidence).
+    void diagnoseCompleted(const QString& summary);
+
+    /// @brief Dry-run probe was cancelled (Esc or timeout) before any click.
+    void diagnoseCancelled();
+
 private slots:
     /// @brief Called every second while armed; decrements countdown and auto-cancels at zero.
     void onTimeoutTick();
@@ -190,6 +255,14 @@ private slots:
      * hooks and emits fillCompleted.
      */
     void performType();
+
+    /**
+     * @brief Queued from the mouse hook when in Diagnose state. Runs the
+     * probe pipeline at the captured click point, builds a multi-line
+     * summary string, emits @ref diagnoseCompleted, and returns to Idle.
+     * Never decrypts a credential or sends keystrokes.
+     */
+    void performDiagnose();
 
 private:
     /// @brief Install global low-level mouse and keyboard hooks.
@@ -233,19 +306,22 @@ private:
         TypedBoth = TypedUsername | TypedPassword,
     };
 
-    /// @brief Probe the UIA element at screen (x, y) for the IsPassword property.
-    /// @return +1 if IsPassword=TRUE, 0 if IsPassword=FALSE, -1 on probe failure.
-    int probeIsPassword(LONG x, LONG y);
-
-    /// @brief Form-context fallback: classify the clicked field by inspecting
-    ///        its peers in the enclosing form. Invoked only when probeIsPassword
-    ///        observed UIA elements but found no positive password evidence.
-    /// @return +1 if peer inference identifies the clicked field as a password,
-    ///         0 otherwise (including username, ambiguous, no form ancestor).
-    int probeFormContext(IUIAutomationTreeWalker* walker,
-                         IUIAutomationElement* hit,
-                         LONG x,
-                         LONG y);
+    /**
+     * @brief Run the probe registry against a click point and fuse results.
+     *
+     * Builds a `seal::ProbeContext`, invokes each registered probe in
+     * Tier-1 order (cheap, decisive signals first), then Tier-2 (broader
+     * heuristics), and combines the resulting `ProbeResult`s via
+     * `seal::FusionDecider`. Logs one `event=fill.decide` summary line
+     * via `logFill` with per-probe verdict, confidence, and evidence so
+     * weight tuning can be telemetry-driven.
+     *
+     * @param x Screen-space X (raw mouse hook output).
+     * @param y Screen-space Y.
+     * @return The fused verdict; `Verdict::Unknown` means the caller should
+     *         fall through to the existing sequential fallback.
+     */
+    seal::Verdict runProbeRegistry(LONG x, LONG y);
 
     std::atomic<State> m_State{State::Idle};  ///< Current state machine state.
     int m_RecordIndex = -1;                   ///< Index of the armed vault record.
@@ -270,7 +346,17 @@ private:
     std::atomic<LONG> m_ClickY{0};  ///< Screen Y captured in mouseHookProc.
 
     uint8_t m_TypedFields = TypedNone;  ///< Which fields have been typed so far.
-    IUIAutomation* m_UIA = nullptr;     ///< Cached UI Automation client; lazy-init in arm().
+
+    // BrowserBridge MUST be declared before BrowserBridgeProbe because the
+    // probe holds a non-owning pointer initialised from m_BrowserBridge.
+    seal::BrowserBridge m_BrowserBridge;
+    seal::BrowserBridgeProbe m_BrowserBridgeProbe{&m_BrowserBridge};
+    seal::Win32StyleProbe m_Win32StyleProbe;   ///< Tier-1 native ES_PASSWORD probe (stateless).
+    seal::UiaIsPasswordProbe m_UiaIsPassword;  ///< Tier-1 UIA IsPassword/MSAA probe (caches UIA).
+    seal::UiaMetadataProbe
+        m_UiaMetadata;  ///< Tier-2 UIA metadata + form-context probe (caches UIA).
+    seal::ImeStateProbe m_ImeStateProbe;  ///< Tier-2 IME context weak signal (stateless).
+    seal::FusionDecider m_FusionDecider;  ///< Fuses ProbeResults into a Verdict.
 
     static constexpr int FILL_TIMEOUT_SECONDS = 30;  ///< Max seconds to wait for user click.
 };

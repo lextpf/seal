@@ -3,15 +3,23 @@
 #include "FillController.hpp"
 #include "Clipboard.hpp"
 #include "Diagnostics.hpp"
+#include "FusionDecider.hpp"
 #include "Logging.hpp"
+#include "UrlBinding.hpp"
 
 #include <QtCore/QThread>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QWindow>
 
-#include <oleacc.h>
 #include <array>
-#include <memory>
+#include <chrono>
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+#include <bcrypt.h>
 
 namespace seal
 {
@@ -19,602 +27,44 @@ namespace seal
 namespace
 {
 
-constexpr int kMaxUiaAncestorDepth = 8;
-constexpr int kMaxUiaDescendantDepth = 6;
-constexpr int kMaxUiaDescendantNodes = 64;
-
-struct UiaHintObservation
+// Short, one-way fingerprint for logs: correlate repeated URL-binding
+// mismatches against the same site without echoing the user's hostname
+// (= browsing history) into shared log files. 8 hex chars (32 bits of
+// SHA-256 prefix) is plenty for correlation; the goal is privacy of the
+// log artifact, not unforgeability against a brute-force replay.
+std::string hostLogFingerprint(std::string_view host)
 {
-    bool observed = false;
-    bool matched = false;
-    QString source;
-    QString matchedText;
-};
-
-QString takeBstr(BSTR text)
-{
-    if (!text)
-        return {};
-    QString out = QString::fromWCharArray(text, SysStringLen(text));
-    SysFreeString(text);
+    if (host.empty())
+    {
+        return "none";
+    }
+    std::array<unsigned char, 32> digest{};
+    const NTSTATUS status = BCryptHash(BCRYPT_SHA256_ALG_HANDLE,
+                                       nullptr,
+                                       0,
+                                       reinterpret_cast<UCHAR*>(const_cast<char*>(host.data())),
+                                       static_cast<ULONG>(host.size()),
+                                       digest.data(),
+                                       static_cast<ULONG>(digest.size()));
+    if (!BCRYPT_SUCCESS(status))
+    {
+        return "hash_failed";
+    }
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string out(8, '\0');
+    for (std::size_t i = 0; i < 4; ++i)
+    {
+        out[2 * i] = kHex[(digest[i] >> 4) & 0x0F];
+        out[2 * i + 1] = kHex[digest[i] & 0x0F];
+    }
     return out;
-}
-
-QString currentStringProperty(IUIAutomationElement* element, PROPERTYID propertyId)
-{
-    if (!element)
-        return {};
-
-    VARIANT val;
-    VariantInit(&val);
-
-    QString out;
-    const HRESULT hr = element->GetCurrentPropertyValue(propertyId, &val);
-    if (SUCCEEDED(hr))
-    {
-        if (val.vt == VT_BSTR && val.bstrVal)
-            out = QString::fromWCharArray(val.bstrVal, SysStringLen(val.bstrVal));
-        else if (val.vt == (VT_BSTR | VT_BYREF) && val.pbstrVal && *val.pbstrVal)
-            out = QString::fromWCharArray(*val.pbstrVal, SysStringLen(*val.pbstrVal));
-    }
-
-    VariantClear(&val);
-    return out;
-}
-
-bool containsPasswordHint(const QString& rawText)
-{
-    const QString text = rawText.trimmed().toLower();
-    if (text.isEmpty())
-        return false;
-
-    // Substring-matched against lowercased UIA property values. \u escapes
-    // keep the source ASCII-only so the build is independent of MSVC's source
-    // codepage setting. ASCII fallback variants cover sites that strip
-    // diacritics before exposing labels through accessibility.
-    static const std::array<QStringView, 27> kPasswordHints = {
-        QStringView{u"password"},     QStringView{u"passwd"},   QStringView{u"passcode"},
-        QStringView{u"pwd"},          QStringView{u"passwort"}, QStringView{u"kennwort"},
-        QStringView{u"contraseña"},    // es
-        QStringView{u"mot de passe"},  // fr
-        QStringView{u"motdepasse"},    // fr (compact)
-        QStringView{u"senha"},         // pt
-        QStringView{u"wachtwoord"},    // nl
-        QStringView{u"hasło"},         // pl
-        QStringView{u"haslo"},         // pl (ASCII fallback)
-        QStringView{u"lösenord"},      // sv
-        QStringView{u"losenord"},      // sv (ASCII fallback)
-        QStringView{u"passord"},       // no
-        QStringView{u"adgangskode"},   // da
-        QStringView{u"salasana"},      // fi
-        QStringView{u"heslo"},         // cs
-        QStringView{u"jelszó"},        // hu
-        QStringView{u"jelszo"},        // hu (ASCII fallback)
-        QStringView{u"şifre"},         // tr
-        QStringView{u"sifre"},         // tr (ASCII fallback)
-    };
-
-    for (const QStringView hint : kPasswordHints)
-    {
-        if (text.contains(hint))
-            return true;
-    }
-
-    return false;
-}
-
-bool containsUsernameHint(const QString& rawText)
-{
-    const QString text = rawText.trimmed().toLower();
-    if (text.isEmpty())
-        return false;
-
-    // Compound forms only - bare "user" would false-positive on user-agent,
-    // user-profile-pic, etc. Multi-word entries match against the full
-    // lowercased property value (substring contains semantics).
-    static const std::array<QStringView, 28> kUsernameHints = {
-        QStringView{u"username"},
-        QStringView{u"user-name"},
-        QStringView{u"userid"},
-        QStringView{u"user-id"},
-        QStringView{u"e-mail"},
-        QStringView{u"email"},
-        QStringView{u"login"},
-        QStringView{u"account"},
-        QStringView{u"benutzer"},
-        QStringView{u"benutzername"},
-        QStringView{u"anmelden"},
-        QStringView{u"anmeldung"},
-        QStringView{u"nutzer"},
-        QStringView{u"konto"},
-        QStringView{u"kennung"},
-        QStringView{u"usuario"},             // es
-        QStringView{u"correo electrónico"},  // es
-        QStringView{u"iniciar sesión"},      // es
-        QStringView{u"cuenta"},              // es
-        QStringView{u"utilisateur"},         // fr
-        QStringView{u"nom d'utilisateur"},   // fr
-        QStringView{u"identifiant"},         // fr
-        QStringView{u"courriel"},            // fr
-        QStringView{u"compte"},              // fr
-        QStringView{u"nome utente"},         // it
-        QStringView{u"accesso"},             // it
-        QStringView{u"nome de usuário"},     // pt
-        QStringView{u"usuário"},             // pt
-    };
-
-    for (const QStringView hint : kUsernameHints)
-    {
-        if (text.contains(hint))
-            return true;
-    }
-
-    return false;
-}
-
-struct StringPropertyProbe
-{
-    PROPERTYID propertyId;
-    const char* label;
-};
-
-// Shared between password and username metadata scans. Order matters for
-// log diagnostics (first match wins).
-static const std::array<StringPropertyProbe, 9> kHintPropertyProbes = {{
-    {UIA_AutomationIdPropertyId, "AutomationId"},
-    {UIA_NamePropertyId, "Name"},
-    {UIA_HelpTextPropertyId, "HelpText"},
-    {UIA_FullDescriptionPropertyId, "FullDescription"},
-    {UIA_LocalizedControlTypePropertyId, "LocalizedControlType"},
-    {UIA_ClassNamePropertyId, "ClassName"},
-    {UIA_ItemTypePropertyId, "ItemType"},
-    {UIA_AriaRolePropertyId, "AriaRole"},
-    {UIA_AriaPropertiesPropertyId, "AriaProperties"},
-}};
-
-bool isEditLikeControlType(IUIAutomationElement* element)
-{
-    CONTROLTYPEID controlType = 0;
-    if (FAILED(element->get_CurrentControlType(&controlType)))
-        return false;
-    return controlType == UIA_EditControlTypeId || controlType == UIA_CustomControlTypeId ||
-           controlType == UIA_PaneControlTypeId || controlType == UIA_DocumentControlTypeId;
-}
-
-UiaHintObservation inspectPasswordHintMetadata(IUIAutomationElement* element,
-                                               bool skipControlTypeGate = false)
-{
-    UiaHintObservation observation;
-    if (!element)
-        return observation;
-
-    if (!skipControlTypeGate && !isEditLikeControlType(element))
-        return observation;
-
-    for (const StringPropertyProbe& probe : kHintPropertyProbes)
-    {
-        const QString value = currentStringProperty(element, probe.propertyId);
-        if (!containsPasswordHint(value))
-            continue;
-
-        observation.observed = true;
-        observation.matched = true;
-        observation.source = QString::fromLatin1(probe.label);
-        observation.matchedText = value;
-        return observation;
-    }
-
-    return observation;
-}
-
-UiaHintObservation inspectUsernameHintMetadata(IUIAutomationElement* element,
-                                               bool skipControlTypeGate = false)
-{
-    UiaHintObservation observation;
-    if (!element)
-        return observation;
-
-    if (!skipControlTypeGate && !isEditLikeControlType(element))
-        return observation;
-
-    for (const StringPropertyProbe& probe : kHintPropertyProbes)
-    {
-        const QString value = currentStringProperty(element, probe.propertyId);
-        if (!containsUsernameHint(value))
-            continue;
-
-        observation.observed = true;
-        observation.matched = true;
-        observation.source = QString::fromLatin1(probe.label);
-        observation.matchedText = value;
-        return observation;
-    }
-
-    return observation;
-}
-
-const char* controlTypeToString(CONTROLTYPEID controlType)
-{
-    switch (controlType)
-    {
-        case UIA_ButtonControlTypeId:
-            return "Button";
-        case UIA_CustomControlTypeId:
-            return "Custom";
-        case UIA_DocumentControlTypeId:
-            return "Document";
-        case UIA_EditControlTypeId:
-            return "Edit";
-        case UIA_GroupControlTypeId:
-            return "Group";
-        case UIA_HyperlinkControlTypeId:
-            return "Hyperlink";
-        case UIA_ImageControlTypeId:
-            return "Image";
-        case UIA_ListControlTypeId:
-            return "List";
-        case UIA_ListItemControlTypeId:
-            return "ListItem";
-        case UIA_MenuControlTypeId:
-            return "Menu";
-        case UIA_MenuBarControlTypeId:
-            return "MenuBar";
-        case UIA_MenuItemControlTypeId:
-            return "MenuItem";
-        case UIA_PaneControlTypeId:
-            return "Pane";
-        case UIA_RadioButtonControlTypeId:
-            return "RadioButton";
-        case UIA_ScrollBarControlTypeId:
-            return "ScrollBar";
-        case UIA_SliderControlTypeId:
-            return "Slider";
-        case UIA_SpinnerControlTypeId:
-            return "Spinner";
-        case UIA_StatusBarControlTypeId:
-            return "StatusBar";
-        case UIA_TabControlTypeId:
-            return "Tab";
-        case UIA_TabItemControlTypeId:
-            return "TabItem";
-        case UIA_TextControlTypeId:
-            return "Text";
-        case UIA_TitleBarControlTypeId:
-            return "TitleBar";
-        case UIA_ToolBarControlTypeId:
-            return "ToolBar";
-        case UIA_ToolTipControlTypeId:
-            return "ToolTip";
-        case UIA_WindowControlTypeId:
-            return "Window";
-        default:
-            return "Unknown";
-    }
-}
-
-bool rectContainsPoint(const RECT& rect, LONG x, LONG y)
-{
-    return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
-}
-
-bool tryGetCurrentBoundingRect(IUIAutomationElement* element, RECT* rect)
-{
-    if (!element || !rect)
-        return false;
-
-    RECT current{};
-    if (FAILED(element->get_CurrentBoundingRectangle(&current)))
-        return false;
-    if (current.left >= current.right || current.top >= current.bottom)
-        return false;
-
-    *rect = current;
-    return true;
-}
-
-UiaHintObservation inspectElementPasswordState(IUIAutomationElement* element,
-                                               bool skipControlTypeGate = false)
-{
-    UiaHintObservation observation;
-    if (!element)
-        return observation;
-
-    VARIANT val;
-    VariantInit(&val);
-    HRESULT hr = element->GetCurrentPropertyValue(UIA_IsPasswordPropertyId, &val);
-    if (SUCCEEDED(hr) && val.vt == VT_BOOL)
-    {
-        observation.observed = true;
-        observation.matched = (val.boolVal == VARIANT_TRUE);
-        observation.source = QStringLiteral("IsPassword");
-    }
-    VariantClear(&val);
-
-    if (observation.matched)
-        return observation;
-
-    IUnknown* patternUnknown = nullptr;
-    hr = element->GetCurrentPattern(UIA_LegacyIAccessiblePatternId, &patternUnknown);
-    if (SUCCEEDED(hr) && patternUnknown)
-    {
-        auto* legacyPattern = static_cast<IUIAutomationLegacyIAccessiblePattern*>(nullptr);
-        hr = patternUnknown->QueryInterface(IID_PPV_ARGS(&legacyPattern));
-        patternUnknown->Release();
-        if (SUCCEEDED(hr) && legacyPattern)
-        {
-            DWORD legacyState = 0;
-            if (SUCCEEDED(legacyPattern->get_CurrentState(&legacyState)))
-            {
-                observation.observed = true;
-                if (legacyState & STATE_SYSTEM_PROTECTED)
-                {
-                    observation.matched = true;
-                    observation.source = QStringLiteral("LegacyState");
-                }
-            }
-            legacyPattern->Release();
-        }
-    }
-
-    if (observation.matched)
-        return observation;
-
-    UiaHintObservation metadataObservation =
-        inspectPasswordHintMetadata(element, skipControlTypeGate);
-    if (metadataObservation.matched)
-        return metadataObservation;
-
-    return observation;
-}
-
-UiaHintObservation inspectElementUsernameState(IUIAutomationElement* element)
-{
-    // No UIA IsUsername property exists; this is metadata-keyword-only.
-    // Permissive on control type since form-context callers may receive
-    // non-Edit wrappers around the actual input.
-    return inspectUsernameHintMetadata(element, /*skipControlTypeGate=*/true);
-}
-
-QString describeAutomationElement(IUIAutomationElement* element)
-{
-    if (!element)
-        return QStringLiteral("<null>");
-
-    CONTROLTYPEID controlType = 0;
-    element->get_CurrentControlType(&controlType);
-
-    BSTR frameworkId = nullptr;
-    BSTR className = nullptr;
-    BSTR name = nullptr;
-    BSTR automationId = nullptr;
-    BSTR localizedControlType = nullptr;
-    element->get_CurrentFrameworkId(&frameworkId);
-    element->get_CurrentClassName(&className);
-    element->get_CurrentName(&name);
-    element->get_CurrentAutomationId(&automationId);
-    element->get_CurrentLocalizedControlType(&localizedControlType);
-
-    RECT rect{};
-    QString rectText = QStringLiteral("<none>");
-    if (tryGetCurrentBoundingRect(element, &rect))
-    {
-        rectText = QStringLiteral("[%1,%2 %3x%4]")
-                       .arg(rect.left)
-                       .arg(rect.top)
-                       .arg(rect.right - rect.left)
-                       .arg(rect.bottom - rect.top);
-    }
-
-    return QStringLiteral("%1(%2) framework=\"%3\" class=\"%4\" name=\"%5\" id=\"%6\" rect=%7")
-        .arg(QString::fromLatin1(controlTypeToString(controlType)))
-        .arg(takeBstr(localizedControlType))
-        .arg(takeBstr(frameworkId))
-        .arg(takeBstr(className))
-        .arg(takeBstr(name))
-        .arg(takeBstr(automationId))
-        .arg(rectText);
-}
-
-bool searchDescendantsForPassword(IUIAutomationTreeWalker* walker,
-                                  IUIAutomationElement* root,
-                                  LONG x,
-                                  LONG y,
-                                  int depth,
-                                  int& nodesRemaining,
-                                  bool& observedAny)
-{
-    if (!walker || !root || depth >= kMaxUiaDescendantDepth || nodesRemaining <= 0)
-        return false;
-
-    IUIAutomationElement* child = nullptr;
-    HRESULT hr = walker->GetFirstChildElement(root, &child);
-    if (FAILED(hr) || !child)
-        return false;
-
-    while (child && nodesRemaining > 0)
-    {
-        IUIAutomationElement* next = nullptr;
-        walker->GetNextSiblingElement(child, &next);
-
-        bool shouldInspect = true;
-        RECT rect{};
-        if (tryGetCurrentBoundingRect(child, &rect))
-            shouldInspect = rectContainsPoint(rect, x, y);
-
-        if (shouldInspect)
-        {
-            --nodesRemaining;
-            UiaHintObservation observation = inspectElementPasswordState(child);
-            observedAny = observedAny || observation.observed;
-            if (observation.matched)
-            {
-                qCDebug(logFill) << "probeIsPassword: descendant matched via"
-                                 << (observation.source.isEmpty() ? QStringLiteral("<unknown>")
-                                                                  : observation.source)
-                                 << (observation.matchedText.isEmpty() ? QStringLiteral("")
-                                                                       : observation.matchedText)
-                                 << describeAutomationElement(child);
-                child->Release();
-                if (next)
-                    next->Release();
-                return true;
-            }
-
-            if (searchDescendantsForPassword(
-                    walker, child, x, y, depth + 1, nodesRemaining, observedAny))
-            {
-                child->Release();
-                if (next)
-                    next->Release();
-                return true;
-            }
-        }
-
-        child->Release();
-        child = next;
-    }
-
-    return false;
-}
-
-// Walk up from `start` looking for a form-like container: an ancestor with at
-// least two direct Edit/Custom children and a bounding rectangle smaller than
-// half the primary monitor area (the half-monitor cap prevents landing on
-// <body> for short pages). Caller takes ownership of the returned element.
-IUIAutomationElement* findFormAncestor(IUIAutomationTreeWalker* walker, IUIAutomationElement* start)
-{
-    if (!walker || !start)
-        return nullptr;
-
-    const LONG screenW = GetSystemMetrics(SM_CXSCREEN);
-    const LONG screenH = GetSystemMetrics(SM_CYSCREEN);
-    const long long halfMonitorArea =
-        static_cast<long long>(screenW) * static_cast<long long>(screenH) / 2;
-
-    constexpr int kMaxFormAncestorDepth = 12;
-    constexpr int kMinPeers = 2;
-
-    IUIAutomationElement* current = start;
-    current->AddRef();
-
-    for (int depth = 0; depth < kMaxFormAncestorDepth; ++depth)
-    {
-        IUIAutomationElement* parent = nullptr;
-        HRESULT hr = walker->GetParentElement(current, &parent);
-        current->Release();
-        current = nullptr;
-
-        if (FAILED(hr) || !parent)
-            return nullptr;
-
-        RECT rect{};
-        if (tryGetCurrentBoundingRect(parent, &rect))
-        {
-            const long long area = static_cast<long long>(rect.right - rect.left) *
-                                   static_cast<long long>(rect.bottom - rect.top);
-            if (area > halfMonitorArea)
-            {
-                parent->Release();
-                return nullptr;
-            }
-        }
-
-        // Count Edit/Custom children one level deep (cheap).
-        int peerCount = 0;
-        IUIAutomationElement* child = nullptr;
-        if (SUCCEEDED(walker->GetFirstChildElement(parent, &child)) && child)
-        {
-            while (child)
-            {
-                CONTROLTYPEID ct = 0;
-                if (SUCCEEDED(child->get_CurrentControlType(&ct)) &&
-                    (ct == UIA_EditControlTypeId || ct == UIA_CustomControlTypeId))
-                {
-                    ++peerCount;
-                }
-
-                IUIAutomationElement* next = nullptr;
-                walker->GetNextSiblingElement(child, &next);
-                child->Release();
-                child = next;
-            }
-        }
-
-        if (peerCount >= kMinPeers)
-            return parent;  // ownership transfer to caller
-
-        current = parent;
-    }
-
-    if (current)
-        current->Release();
-    return nullptr;
-}
-
-// Bounded DFS through `root`'s descendants collecting Edit/Custom controls.
-// Each pushed element is AddRef'd; caller must Release every element in `out`.
-void enumerateFormInputs(IUIAutomationTreeWalker* walker,
-                         IUIAutomationElement* root,
-                         std::vector<IUIAutomationElement*>& out)
-{
-    constexpr size_t kMaxFormInputs = 32;
-    constexpr int kMaxDescendantDepth = 6;
-
-    if (!walker || !root)
-        return;
-
-    struct Frame
-    {
-        IUIAutomationElement* elem;
-        int depth;
-    };
-    std::vector<Frame> stack;
-
-    IUIAutomationElement* firstChild = nullptr;
-    if (FAILED(walker->GetFirstChildElement(root, &firstChild)) || !firstChild)
-        return;
-    stack.push_back({firstChild, 1});
-
-    while (!stack.empty() && out.size() < kMaxFormInputs)
-    {
-        Frame f = stack.back();
-        stack.pop_back();
-
-        // Push next sibling first so the stack-based DFS proceeds depth-first.
-        IUIAutomationElement* sibling = nullptr;
-        walker->GetNextSiblingElement(f.elem, &sibling);
-        if (sibling)
-            stack.push_back({sibling, f.depth});
-
-        CONTROLTYPEID ct = 0;
-        if (SUCCEEDED(f.elem->get_CurrentControlType(&ct)) &&
-            (ct == UIA_EditControlTypeId || ct == UIA_CustomControlTypeId))
-        {
-            f.elem->AddRef();
-            out.push_back(f.elem);
-        }
-
-        if (f.depth < kMaxDescendantDepth)
-        {
-            IUIAutomationElement* firstC = nullptr;
-            if (SUCCEEDED(walker->GetFirstChildElement(f.elem, &firstC)) && firstC)
-                stack.push_back({firstC, f.depth + 1});
-        }
-
-        f.elem->Release();
-    }
-
-    // Release any remaining frames if we hit the budget cap.
-    for (Frame& f : stack)
-        f.elem->Release();
 }
 
 }  // namespace
 
-// Only one controller can own the global hooks at a time.
-// Windows global low-level hooks are per-thread and cannot be multiplexed;
-// a second FillController installing hooks would silently replace the first
-// controller's hook chain, breaking cancel/timeout for the original session.
+// Only one controller can own the global hooks. WH_*_LL hooks are per-thread
+// and cannot be multiplexed; a second install would silently replace the
+// first chain, breaking cancel/timeout for the original session.
 std::atomic<FillController*> FillController::s_instance{nullptr};
 
 FillController::FillController(QObject* parent)
@@ -629,6 +79,39 @@ FillController::~FillController()
     // Ensure hooks are removed even if the caller forgot to cancel().
     if (m_State.load() != State::Idle)
         cancel();
+    m_BrowserBridge.stop();
+}
+
+void FillController::disableBridge()
+{
+    m_BrowserBridge.disable();
+}
+
+void FillController::enableBridge()
+{
+    m_BrowserBridge.enable();
+    // Start the bridge unconditionally when enabled, not only on
+    // arm/armDiagnose. The extension's connectNative establishes a
+    // persistent port at browser load time; if our named pipe doesn't
+    // exist yet, every retry hits an exponential backoff that grows to
+    // tens of seconds before the next attempt. Pre-starting the pipe
+    // means the extension can connect once and stay connected for the
+    // app's lifetime, so the first Ctrl+Click after seal launch already
+    // has a live channel to populate the verdict map.
+    if (!m_BrowserBridge.isRunning())
+    {
+        (void)m_BrowserBridge.start();
+    }
+}
+
+bool FillController::isBridgeEnabled() const
+{
+    return !m_BrowserBridge.isDisabled();
+}
+
+bool FillController::isBridgePeerConnected() const
+{
+    return m_BrowserBridge.isPeerConnected();
 }
 
 bool FillController::isArmed() const
@@ -661,6 +144,8 @@ static const char* stateToString(FillController::State s)
             return "Armed";
         case FillController::State::Typing:
             return "Typing";
+        case FillController::State::Diagnose:
+            return "Diagnose";
         default:
             return "Unknown";
     }
@@ -703,6 +188,9 @@ void FillController::updateStatusText()
         case State::Typing:
             m_StatusText = QStringLiteral("Typing...");
             break;
+        case State::Diagnose:
+            m_StatusText = QStringLiteral("Ctrl+Click any field to test detection");
+            break;
     }
     if (m_StatusText != prev)
         emit fillStatusTextChanged();
@@ -714,30 +202,18 @@ bool FillController::arm(
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPw,
     const uint64_t& ownerGeneration)
 {
-    // If already armed (e.g. user clicked a different record), tear down
-    // the previous session before starting a new one.
+    // If already armed (user clicked a different record), tear down first.
     if (m_State.load() != State::Idle)
         cancel();
 
-    // @author Claude (https://github.com/claude)
-    // Borrow pointers - the caller (Backend) owns these and must
-    // keep them alive until fillCompleted / fillCancelled / fillError.
+    // Borrow (no copy): masterPw is locked_allocator-backed and records can
+    // be huge -- copying would double the SeLockMemoryPrivilege quota and
+    // force double-cleanse on cancel. Caller (Backend) keeps them alive
+    // until fillCompleted / fillCancelled / fillError.
     //
-    // We deliberately do NOT copy the records vector or the master password:
-    //   - masterPw is a locked_allocator-backed secure_string; copying it
-    //     would double the SeLockMemoryPrivilege working-set quota for the
-    //     entire arm-to-fill window (potentially many seconds).
-    //   - records may be tens of thousands of entries; duplicating them just
-    //     to fill one credential would waste memory and force every record
-    //     to be cleansed twice on cancel.
-    //
-    // Borrowing means performType() can race with the user adding, deleting,
-    // or reloading the vault between the Ctrl+Click and the keystroke send.
-    // The owner increments ownerGeneration on every mutation that could
-    // invalidate our pointers; we snapshot the value here, and performType()
-    // bails with fillError() if the live counter has moved by the time it
-    // runs. This gives us copy-free borrows with a single atomic compare to
-    // detect every relevant mutation.
+    // Borrowing races with vault mutations between Ctrl+Click and keystroke
+    // send. We snapshot ownerGeneration here; performType() bails via
+    // fillError() if the live counter has moved.
     m_RecordIndex = recordIndex;
     m_Records = &records;
     m_MasterPw = &masterPw;
@@ -747,25 +223,13 @@ bool FillController::arm(
     m_PendingTarget.store(TypeTarget::Auto);
     m_TypedFields = TypedNone;
 
-    // Lazy-init the UI Automation client for password field detection.
-    // Qt's main thread is STA (OleInitialize for drag-and-drop), so
-    // CoCreateInstance for the in-process UIA server is safe here.
-    if (!m_UIA)
+    // Start the bridge (no-op if running). Non-fatal: other probes still work.
+    if (!m_BrowserBridge.isRunning() && !m_BrowserBridge.isDisabled())
     {
-        HRESULT hr = CoCreateInstance(__uuidof(CUIAutomation),
-                                      nullptr,
-                                      CLSCTX_INPROC_SERVER,
-                                      __uuidof(IUIAutomation),
-                                      reinterpret_cast<void**>(&m_UIA));
-        if (FAILED(hr))
-        {
-            qCWarning(logFill) << "UIA CoCreateInstance failed: 0x" << Qt::hex << hr
-                               << "- will fall back to sequential detection";
-            m_UIA = nullptr;
-        }
+        (void)m_BrowserBridge.start();
     }
 
-    // Register as the singleton so the static hook callbacks can find us.
+    // Singleton registration -- static hook callbacks dispatch through it.
     s_instance.store(this);
     installHooks();
 
@@ -792,42 +256,76 @@ bool FillController::arm(
 
 void FillController::cancel()
 {
-    if (m_State.load() == State::Idle)
+    const State prevState = m_State.load();
+    if (prevState == State::Idle)
         return;
 
-    qCInfo(logFill) << "cancel: from state" << stateToString(m_State.load());
+    qCInfo(logFill) << "cancel: from state" << stateToString(prevState);
     m_TimeoutTimer.stop();
     removeHooks();
     transitionTo(State::Idle);
 
-    // Clear borrowed pointers and generation snapshot so we don't dangle.
+    // Clear borrowed pointers + generation snapshot to avoid dangling.
     m_RecordIndex = -1;
     m_Records = nullptr;
     m_MasterPw = nullptr;
     m_OwnerGeneration = nullptr;
     m_SnapshotGeneration = 0;
     m_TypedFields = TypedNone;
-    if (m_UIA)
-    {
-        m_UIA->Release();
-        m_UIA = nullptr;
-    }
     m_RemainingSeconds = 0;
     emit countdownSecondsChanged();
-    emit fillCancelled();
+    // Route cancellation by mode: diagnose never bound a credential, so
+    // fillCancelled would confuse the "fill aborted" UI toast.
+    if (prevState == State::Diagnose)
+        emit diagnoseCancelled();
+    else
+        emit fillCancelled();
+}
+
+bool FillController::armDiagnose()
+{
+    if (m_State.load() != State::Idle)
+        cancel();
+
+    // Diagnose never decrypts or types, so skip the borrow + generation
+    // snapshot. Fields stay default-cleared.
+    m_RemainingSeconds = FILL_TIMEOUT_SECONDS;
+    m_PendingTarget.store(TypeTarget::Auto);
+    m_TypedFields = TypedNone;
+
+    if (!m_BrowserBridge.isRunning() && !m_BrowserBridge.isDisabled())
+    {
+        (void)m_BrowserBridge.start();
+    }
+
+    s_instance.store(this);
+    installHooks();
+    if (!m_MouseHook || !m_KeyboardHook)
+    {
+        qCWarning(logFill) << "diagnose hook install failed: mouse=" << !!m_MouseHook
+                           << "keyboard=" << !!m_KeyboardHook;
+        removeHooks();
+        emit fillError(QStringLiteral("Failed to install input hooks"));
+        return false;
+    }
+
+    transitionTo(State::Diagnose);
+    qCInfo(logFill) << "diagnose armed: timeout=" << FILL_TIMEOUT_SECONDS << "s";
+    emit countdownSecondsChanged();
+    m_TimeoutTimer.start();
+    return true;
 }
 
 void FillController::onTimeoutTick()
 {
-    // Only tick while armed - the timer should already be stopped in
-    // other states, but guard defensively.
-    if (m_State.load() != State::Armed)
+    // Tick while waiting for the click; Armed/Diagnose share the UX.
+    const State curState = m_State.load();
+    if (curState != State::Armed && curState != State::Diagnose)
         return;
 
     m_RemainingSeconds--;
     emit countdownSecondsChanged();
 
-    // Auto-cancel if the user hasn't clicked within the timeout window.
     if (m_RemainingSeconds <= 0)
     {
         qCInfo(logFill) << "timeout: auto-cancel";
@@ -837,11 +335,10 @@ void FillController::onTimeoutTick()
 
 void FillController::installHooks()
 {
-    // WH_MOUSE_LL / WH_KEYBOARD_LL are desktop-wide low-level hooks that
-    // intercept input before it reaches any window. Passing nullptr for hMod
-    // and 0 for dwThreadId means "all threads on the current desktop" - the
-    // hook DLL is our own process, and low-level hooks don't require injection
-    // into a separate module.
+    // WH_MOUSE_LL / WH_KEYBOARD_LL: desktop-wide low-level hooks that
+    // intercept input before any window sees it. hMod=nullptr/threadId=0
+    // means "all threads on the current desktop"; low-level hooks don't
+    // need cross-module injection.
     m_MouseHook = SetWindowsHookExW(WH_MOUSE_LL, mouseHookProc, nullptr, 0);
     m_KeyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL, keyboardHookProc, nullptr, 0);
     qCDebug(logFill) << "hooks installed";
@@ -859,18 +356,15 @@ void FillController::removeHooks()
         UnhookWindowsHookEx(m_KeyboardHook);
         m_KeyboardHook = nullptr;
     }
-    // Clear the singleton so stale hook callbacks (if any are still in
-    // the message queue) won't dereference a dead pointer.
+    // Clear singleton so any in-flight callback can't deref a dead pointer.
     s_instance.store(nullptr);
     qCDebug(logFill) << "hooks removed";
 }
 
 LRESULT CALLBACK FillController::mouseHookProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
-    // Load the singleton pointer exactly once into a local. This prevents a
-    // TOCTOU race where cancel() on the main thread nulls s_instance between
-    // two separate atomic loads in this callback, which would cause us to
-    // dereference nullptr on the second access.
+    // Load s_instance once; cancel() on the main thread can null it between
+    // two separate loads (TOCTOU) -> deref nullptr on the second access.
     auto* self = s_instance.load();
     if (nCode >= 0 && self && wParam == WM_LBUTTONDOWN)
     {
@@ -879,15 +373,13 @@ LRESULT CALLBACK FillController::mouseHookProc(int nCode, WPARAM wParam, LPARAM 
 
         if (ctrlDown && curState == State::Armed)
         {
-            // Capture the click coordinates so performType() can probe the
-            // UIA element at this screen position for password detection.
+            // Capture click coords for performType()'s UIA probe.
             auto* mhs = reinterpret_cast<MSLLHOOKSTRUCT*>(lParam);
             self->m_ClickX.store(mhs->pt.x);
             self->m_ClickY.store(mhs->pt.y);
 
-            // Modifier key overrides let the user force a specific field:
-            // Shift forces password, Alt forces username.
-            // Without either modifier, UIA auto-detection decides in performType().
+            // Modifier overrides: Shift=password, Alt=username.
+            // Neither -> UIA auto-detect in performType().
             bool shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
             bool altDown = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
 
@@ -905,16 +397,26 @@ LRESULT CALLBACK FillController::mouseHookProc(int nCode, WPARAM wParam, LPARAM 
                                 : target == TypeTarget::Password ? "password"
                                                                  : "auto");
 
-            // Queue performType on the Qt event loop. Low-level hook callbacks
-            // run on the thread that installed the hook but inside the OS hook
-            // dispatcher - doing Qt signal/slot work or blocking here would
-            // deadlock or corrupt Qt state. QueuedConnection posts to the
-            // event loop so performType runs in a normal call frame.
+            // Queue performType on the Qt event loop. We're inside the OS
+            // hook dispatcher; calling Qt directly here would deadlock or
+            // corrupt state. QueuedConnection defers to a normal call frame.
             QMetaObject::invokeMethod(self, "performType", Qt::QueuedConnection);
 
-            // Return 1 (non-zero) to swallow the click so the target app
-            // never receives the WM_LBUTTONDOWN. Without this, the Ctrl+Click
-            // would activate whatever button or link is under the cursor.
+            // Return 1 swallows the click so the target app never sees the
+            // WM_LBUTTONDOWN -- otherwise Ctrl+Click would activate whatever
+            // is under the cursor.
+            return 1;
+        }
+
+        if (ctrlDown && curState == State::Diagnose)
+        {
+            // Mirror Armed coord capture but route to performDiagnose --
+            // probe-only, no keystrokes, so shift/alt are irrelevant.
+            auto* mhs = reinterpret_cast<MSLLHOOKSTRUCT*>(lParam);
+            self->m_ClickX.store(mhs->pt.x);
+            self->m_ClickY.store(mhs->pt.y);
+            qCInfo(logFill) << "Ctrl+Click detected: diagnose dry-run";
+            QMetaObject::invokeMethod(self, "performDiagnose", Qt::QueuedConnection);
             return 1;
         }
     }
@@ -929,10 +431,10 @@ LRESULT CALLBACK FillController::keyboardHookProc(int nCode, WPARAM wParam, LPAR
     {
         auto* khs = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
 
-        // Esc while armed -> queued cancel. Must use QueuedConnection for
-        // the same reason as mouseHookProc: can't call Qt methods from
-        // inside the OS hook dispatcher.
-        if (khs->vkCode == VK_ESCAPE && self->m_State.load() == State::Armed)
+        // Esc while waiting -> queued cancel (same hook-dispatcher reason
+        // as mouseHookProc). Armed and Diagnose share this UX.
+        const State curState = self->m_State.load();
+        if (khs->vkCode == VK_ESCAPE && (curState == State::Armed || curState == State::Diagnose))
         {
             QMetaObject::invokeMethod(self, "cancel", Qt::QueuedConnection);
             return 1;
@@ -950,12 +452,9 @@ void FillController::performType()
     transitionTo(State::Typing);
     m_TimeoutTimer.stop();
 
-    // Poll for Ctrl release before sending keystrokes. If we type while
-    // Ctrl is still held, the target app interprets them as Ctrl+shortcuts
-    // (e.g. Ctrl+A = select-all instead of typing 'a').
-    // We use a 2-second timeout for a stuck Ctrl key (e.g. physical key
-    // jammed or remote-desktop weirdness) - beyond that we proceed anyway
-    // rather than hang indefinitely.
+    // Wait for Ctrl release before typing -- otherwise keystrokes register
+    // as Ctrl-shortcuts (Ctrl+A = select-all). 2 s cap for a stuck key
+    // (jammed physical key, RDP weirdness); we proceed anyway after that.
     auto* poll = new QTimer(this);
     poll->setInterval(20);
     connect(
@@ -972,44 +471,44 @@ void FillController::performType()
             poll->stop();
             poll->deleteLater();
 
-            // Guard against cancel() being called while we were polling.
+            // Guard against cancel() during polling.
             if (m_State.load() != State::Typing)
                 return;
 
-            // Resolve the target field. Shift/Alt overrides are already
-            // resolved in the hook; Auto means we probe the clicked element
-            // via Windows UI Automation to detect password fields.
+            // Resolve target. Shift/Alt already resolved in the hook; Auto
+            // means probe the element via UI Automation.
             TypeTarget target = pendingTarget;
             if (target == TypeTarget::Auto)
             {
-                int probe = probeIsPassword(m_ClickX.load(), m_ClickY.load());
-                if (probe > 0)
+                const seal::Verdict verdict = runProbeRegistry(m_ClickX.load(), m_ClickY.load());
+                if (verdict == seal::Verdict::Password)
                 {
                     target = TypeTarget::Password;
-                    qCInfo(logFill) << "UIA probe: password field detected";
                 }
-                else if (probe == 0)
+                else if (verdict == seal::Verdict::Username)
                 {
                     target = TypeTarget::Username;
-                    qCInfo(logFill) << "UIA probe: non-password field detected";
                 }
                 else
                 {
-                    // Probe failed - fall back to whichever field hasn't been
-                    // typed yet. If neither has been typed, default to Username
-                    // (original sequential behavior).
+                    // All probes Unknown / under the FusionDecider margin.
+                    // Fall back to whichever field hasn't been typed yet;
+                    // default Username when neither has.
                     if (m_TypedFields & TypedUsername)
+                    {
                         target = TypeTarget::Password;
+                    }
                     else
+                    {
                         target = TypeTarget::Username;
-                    qCInfo(logFill) << "UIA probe failed: falling back to"
+                    }
+                    qCInfo(logFill) << "fill.decide: registry unknown, falling back to"
                                     << (target == TypeTarget::Username ? "username" : "password");
                 }
             }
 
-            // Validate the generation counter: if the owner mutated the
-            // records vector (add/delete/load) since we armed, the borrowed
-            // pointers may reference reallocated or freed storage.
+            // Generation check: any owner mutation (add/delete/load) since
+            // arm may have reallocated or freed our borrowed pointers.
             if (m_OwnerGeneration && *m_OwnerGeneration != m_SnapshotGeneration)
             {
                 qCWarning(logFill)
@@ -1020,10 +519,8 @@ void FillController::performType()
                 return;
             }
 
-            // On-demand decrypt: the credential is AES-encrypted at rest and
-            // only decrypted into VirtualLock'd memory for the brief window
-            // needed to send keystrokes. The plaintext is wiped immediately
-            // after typing (see cred.cleanse() + trimWorkingSet below).
+            // On-demand decrypt into VirtualLock'd memory; plaintext wiped
+            // immediately after typing (cred.cleanse + trimWorkingSet below).
             seal::DecryptedCredential cred;
             const auto* records = m_Records;
             const auto* masterPw = m_MasterPw;
@@ -1046,6 +543,54 @@ void FillController::performType()
                 return;
             }
 
+            // URL/platform binding -- phishing resistance. Compare the
+            // bridge-reported page host against the record's platform
+            // label via extractKey's fuzzy reduction (TLD/case/stop-word
+            // strip): "PayPal", "paypal.com", "https://login.paypal.com",
+            // "My PayPal" all collapse to "paypal". A mismatch CANCELS the
+            // fill, so a record labelled "Paypal" cannot type into a
+            // typosquat. Skipped silently when no bridge entry exists for
+            // the click, or when the platform reduces to an empty key
+            // (caller fails open). The check runs BEFORE on-demand
+            // decryption so a phishing mismatch never produces plaintext.
+            const POINT urlClickPoint{m_ClickX.load(), m_ClickY.load()};
+            HWND urlFocusWindow = WindowFromPoint(urlClickPoint);
+            DWORD urlFocusPid = 0;
+            if (urlFocusWindow != nullptr)
+            {
+                GetWindowThreadProcessId(urlFocusWindow, &urlFocusPid);
+            }
+            if (urlFocusPid != 0)
+            {
+                const auto bridgeEntry = m_BrowserBridge.lookup(urlFocusPid, urlClickPoint);
+                if (bridgeEntry.has_value() && !bridgeEntry->m_UrlHost.isEmpty())
+                {
+                    const std::string recordKey = seal::url::extractKey(record.platform);
+                    const std::string pageKey =
+                        seal::url::extractKey(bridgeEntry->m_UrlHost.toStdString());
+                    if (!recordKey.empty() && !pageKey.empty() &&
+                        !seal::url::keysMatch(recordKey, pageKey))
+                    {
+                        // Keys are already privacy-friendly (no TLD, path,
+                        // or subdomain noise); the log line still uses
+                        // SHA-256 fingerprints for shared bug reports. The
+                        // user-facing message keeps human-readable keys
+                        // so the operator can see what tried where.
+                        qCWarning(logFill).noquote()
+                            << QString::fromStdString(seal::diag::joinFields(
+                                   {"event=fill.url_mismatch_block",
+                                    seal::diag::kv("record_key_fp", hostLogFingerprint(recordKey)),
+                                    seal::diag::kv("page_key_fp", hostLogFingerprint(pageKey))}));
+                        emit fillError(QString("Site mismatch: '%1' record cannot fill on '%2'. "
+                                               "Cancel and re-arm a record that matches this site.")
+                                           .arg(QString::fromStdString(recordKey),
+                                                QString::fromStdString(pageKey)));
+                        cancel();
+                        return;
+                    }
+                }
+            }
+
             try
             {
                 cred = seal::decryptCredentialOnDemand(record, *masterPw);
@@ -1065,25 +610,23 @@ void FillController::performType()
                 return;
             }
 
-            // Warn: auto-fill sends real keystrokes through the normal input
-            // pipeline. If third-party keyboard hooks are present, credentials
-            // could be intercepted. The master password is protected by the
-            // secure desktop dialog, but SendInput-based fill is inherently exposed.
+            // Warn: SendInput keystrokes pass through every global hook in
+            // the chain, so a third-party keylogger could intercept the
+            // credential. The master-password dialog uses the secure
+            // desktop, but the fill path itself is inherently exposed.
             qCDebug(logFill)
                 << "performType: note - auto-fill keystrokes pass through global hook chain";
 
-            // Type the selected field via synthesized keystrokes (SendInput).
+            // Send the selected field via SendInput.
             bool success = false;
             if (target == TypeTarget::Username)
                 success = seal::typeSecret(cred.username.data(), (int)cred.username.size(), 0);
             else
                 success = seal::typeSecret(cred.password.data(), (int)cred.password.size(), 0);
 
-            // Wipe plaintext immediately after typing. cleanse() overwrites
-            // the decrypted buffers with zeros, then trimWorkingSet() calls
-            // SetProcessWorkingSetSize(-1,-1) to flush dirty pages out of
-            // physical RAM so the plaintext can't be recovered from a memory
-            // dump or swap file.
+            // Wipe immediately: cleanse() zeros the decrypted buffers and
+            // trimWorkingSet() (SetProcessWorkingSetSize(-1,-1)) flushes the
+            // dirty pages so a dump or swap file can't recover plaintext.
             cred.cleanse();
             seal::Cryptography::trimWorkingSet();
 
@@ -1097,7 +640,7 @@ void FillController::performType()
 
             QString service = QString::fromUtf8(record.platform.c_str());
 
-            // Track which field was typed and check for completion.
+            // Track which field was typed.
             if (target == TypeTarget::Username)
                 m_TypedFields |= TypedUsername;
             else
@@ -1109,15 +652,9 @@ void FillController::performType()
 
             if (m_TypedFields == TypedBoth)
             {
-                // Both fields typed - fill complete. Tear down hooks and
-                // notify the backend so it can restore the window.
+                // Both fields typed: tear down hooks; backend restores window.
                 m_TimeoutTimer.stop();
                 removeHooks();
-                if (m_UIA)
-                {
-                    m_UIA->Release();
-                    m_UIA = nullptr;
-                }
                 transitionTo(State::Idle);
                 m_RecordIndex = -1;
                 m_Records = nullptr;
@@ -1129,7 +666,7 @@ void FillController::performType()
             }
             else
             {
-                // One field remains - reset countdown and stay armed.
+                // One field remains: reset countdown, stay armed.
                 m_RemainingSeconds = FILL_TIMEOUT_SECONDS;
                 emit countdownSecondsChanged();
                 transitionTo(State::Armed);
@@ -1139,344 +676,184 @@ void FillController::performType()
     poll->start();
 }
 
-int FillController::probeIsPassword(LONG x, LONG y)
+seal::Verdict FillController::runProbeRegistry(LONG x, LONG y)
 {
-    POINT pt = {x, y};
+    using seal::ProbeContext;
+    using seal::ProbeResult;
+    using seal::Verdict;
 
-    // Phase 1: MSAA probe via AccessibleObjectFromPoint.
-    // This sends WM_GETOBJECT to the target window, which triggers lazy
-    // accessibility tree creation in Chromium-based browsers (Chrome, Edge,
-    // Electron apps). Without this, UIA's ElementFromPoint returns a generic
-    // renderer pane instead of the actual DOM element.
-    // MSAA's STATE_SYSTEM_PROTECTED flag directly identifies password fields.
-    IAccessible* pAcc = nullptr;
-    VARIANT varChild;
-    VariantInit(&varChild);
-    HRESULT hr = AccessibleObjectFromPoint(pt, &pAcc, &varChild);
-    if (SUCCEEDED(hr) && pAcc)
+    ProbeContext ctx;
+    ctx.m_ClickPoint = POINT{x, y};
+    ctx.m_TargetWindow = WindowFromPoint(ctx.m_ClickPoint);
+    if (ctx.m_TargetWindow != nullptr)
     {
-        VARIANT state;
-        VariantInit(&state);
-        hr = pAcc->get_accState(varChild, &state);
-        if (SUCCEEDED(hr) && state.vt == VT_I4 && (state.lVal & STATE_SYSTEM_PROTECTED))
+        GetWindowThreadProcessId(ctx.m_TargetWindow, &ctx.m_TargetProcessId);
+    }
+    ctx.m_Deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+
+    std::array<ProbeResult, 5> results = {
+        m_BrowserBridgeProbe.run(ctx),
+        m_Win32StyleProbe.run(ctx),
+        m_UiaIsPassword.run(ctx),
+        m_UiaMetadata.run(ctx),
+        m_ImeStateProbe.run(ctx),
+    };
+
+    const Verdict verdict = m_FusionDecider.decide(results);
+
+    // One summary line per Ctrl+Click; per-probe fields let weight tuning
+    // be driven from logFill telemetry.
+    QString line = QStringLiteral("event=fill.decide chosen=%1")
+                       .arg(verdict == Verdict::Password   ? QStringLiteral("password")
+                            : verdict == Verdict::Username ? QStringLiteral("username")
+                                                           : QStringLiteral("unknown"));
+    for (const ProbeResult& r : results)
+    {
+        const QString verdictText = r.m_Verdict == Verdict::Password   ? QStringLiteral("password")
+                                    : r.m_Verdict == Verdict::Username ? QStringLiteral("username")
+                                                                       : QStringLiteral("unknown");
+        line += QString(" %1_verdict=%2 %1_conf=%3")
+                    .arg(QString::fromLatin1(r.m_ProbeName))
+                    .arg(verdictText)
+                    .arg(QString::number(r.m_Confidence, 'f', 2));
+        if (!r.m_Evidence.empty())
         {
-            qCDebug(logFill) << "probeIsPassword: MSAA STATE_SYSTEM_PROTECTED detected";
-            VariantClear(&state);
-            pAcc->Release();
-            VariantClear(&varChild);
-            return 1;
-        }
-        VariantClear(&state);
-
-        // Phase 1b: heuristic check on MSAA accessible-name and -description.
-        // Some sites use type="text" with JS-driven masking instead of
-        // type="password", so STATE_SYSTEM_PROTECTED is never set. The HTML
-        // placeholder, label, and aria-describedby text are still exposed
-        // through accName / accDescription and often contain recognizable
-        // password keywords (e.g. placeholder="Passwort").
-        VARIANT role;
-        VariantInit(&role);
-        hr = pAcc->get_accRole(varChild, &role);
-        const bool editableRole =
-            SUCCEEDED(hr) && role.vt == VT_I4 &&
-            (role.lVal == ROLE_SYSTEM_TEXT || role.lVal == ROLE_SYSTEM_COMBOBOX);
-        VariantClear(&role);
-
-        if (editableRole)
-        {
-            BSTR bstrName = nullptr;
-            if (SUCCEEDED(pAcc->get_accName(varChild, &bstrName)))
-            {
-                const QString nameStr = takeBstr(bstrName);
-                if (containsPasswordHint(nameStr))
-                {
-                    qCDebug(logFill) << "probeIsPassword: MSAA accName matched:" << nameStr;
-                    pAcc->Release();
-                    VariantClear(&varChild);
-                    return 1;
-                }
-            }
-
-            BSTR bstrDesc = nullptr;
-            if (SUCCEEDED(pAcc->get_accDescription(varChild, &bstrDesc)))
-            {
-                const QString descStr = takeBstr(bstrDesc);
-                if (containsPasswordHint(descStr))
-                {
-                    qCDebug(logFill) << "probeIsPassword: MSAA accDescription matched:" << descStr;
-                    pAcc->Release();
-                    VariantClear(&varChild);
-                    return 1;
-                }
-            }
-        }
-
-        pAcc->Release();
-    }
-    VariantClear(&varChild);
-
-    // Phase 2: UIA probe. The MSAA call above warmed the accessibility tree,
-    // so ElementFromPoint should now return the actual input element even in
-    // browsers that lazily initialize their UIA providers.
-    if (!m_UIA)
-        return -1;
-
-    IUIAutomationElement* element = nullptr;
-    hr = m_UIA->ElementFromPoint(pt, &element);
-    if (FAILED(hr) || !element)
-    {
-        qCDebug(logFill) << "probeIsPassword: ElementFromPoint failed: 0x" << Qt::hex << hr;
-        return -1;
-    }
-
-    qCDebug(logFill) << "probeIsPassword: UIA hit element =" << describeAutomationElement(element);
-
-    bool observedAny = false;
-    UiaHintObservation hitObservation =
-        inspectElementPasswordState(element, /*skipControlTypeGate=*/true);
-    observedAny = hitObservation.observed;
-    if (hitObservation.matched)
-    {
-        qCDebug(logFill) << "probeIsPassword: UIA hit element matched via"
-                         << (hitObservation.source.isEmpty() ? QStringLiteral("<unknown>")
-                                                             : hitObservation.source)
-                         << (hitObservation.matchedText.isEmpty() ? QStringLiteral("")
-                                                                  : hitObservation.matchedText);
-        element->Release();
-        return 1;
-    }
-
-    IUIAutomationTreeWalker* rawWalker = nullptr;
-    hr = m_UIA->get_RawViewWalker(&rawWalker);
-    if (FAILED(hr) || !rawWalker)
-    {
-        qCDebug(logFill) << "probeIsPassword: get_RawViewWalker failed: 0x" << Qt::hex << hr;
-        element->Release();
-        return observedAny ? 0 : -1;
-    }
-
-    // Browser hits often land on placeholder text or a renderer wrapper
-    // instead of the password edit itself. Walk both directions around the
-    // hit node so an empty password field still resolves correctly.
-    IUIAutomationElement* current = element;
-    current->AddRef();
-    for (int depth = 0; depth < kMaxUiaAncestorDepth; ++depth)
-    {
-        IUIAutomationElement* parent = nullptr;
-        hr = rawWalker->GetParentElement(current, &parent);
-        current->Release();
-        current = nullptr;
-
-        if (FAILED(hr) || !parent)
-            break;
-
-        RECT rect{};
-        if (tryGetCurrentBoundingRect(parent, &rect) && !rectContainsPoint(rect, x, y))
-        {
-            current = parent;
-            continue;
-        }
-
-        UiaHintObservation observation =
-            inspectElementPasswordState(parent, /*skipControlTypeGate=*/true);
-        observedAny = observedAny || observation.observed;
-        if (observation.matched)
-        {
-            qCDebug(logFill) << "probeIsPassword: ancestor matched at depth" << (depth + 1) << "via"
-                             << (observation.source.isEmpty() ? QStringLiteral("<unknown>")
-                                                              : observation.source)
-                             << (observation.matchedText.isEmpty() ? QStringLiteral("")
-                                                                   : observation.matchedText)
-                             << describeAutomationElement(parent);
-            parent->Release();
-            rawWalker->Release();
-            element->Release();
-            return 1;
-        }
-
-        current = parent;
-    }
-    if (current)
-        current->Release();
-
-    int nodesRemaining = kMaxUiaDescendantNodes;
-    const bool descendantMatched =
-        searchDescendantsForPassword(rawWalker, element, x, y, 0, nodesRemaining, observedAny);
-
-    if (descendantMatched)
-    {
-        rawWalker->Release();
-        element->Release();
-        return 1;
-    }
-
-    // Form-context fallback: when per-element observed UIA but found no positive
-    // password evidence, see if peer inputs in the enclosing form disambiguate.
-    // Skip the fallback if no UIA element was ever observed (probeFormContext
-    // has nothing to compare against).
-    if (observedAny)
-    {
-        int formResult = probeFormContext(rawWalker, element, x, y);
-        if (formResult > 0)
-        {
-            rawWalker->Release();
-            element->Release();
-            return 1;
+            line += QString(" %1_evidence=%2")
+                        .arg(QString::fromLatin1(r.m_ProbeName))
+                        .arg(QString::fromStdString(seal::diag::sanitizeAscii(r.m_Evidence)));
         }
     }
+    qCInfo(logFill).noquote() << line;
 
-    // Structured fall-through diagnostic. One log line containing every signal
-    // the heuristic saw on the hit element, so future misclassifications can be
-    // root-caused from logs alone.
-    {
-        CONTROLTYPEID ct = 0;
-        element->get_CurrentControlType(&ct);
-        const auto get = [&](PROPERTYID p)
-        { return currentStringProperty(element, p).toStdString(); };
-        qCDebug(logFill).noquote() << QString::fromStdString(seal::diag::joinFields({
-            std::string("event=fill.detect.fallthrough"),
-            seal::diag::kv("control_type", controlTypeToString(ct)),
-            seal::diag::kv("is_password", false),
-            seal::diag::kv("automation_id", get(UIA_AutomationIdPropertyId)),
-            seal::diag::kv("name", get(UIA_NamePropertyId)),
-            seal::diag::kv("help_text", get(UIA_HelpTextPropertyId)),
-            seal::diag::kv("full_description", get(UIA_FullDescriptionPropertyId)),
-            seal::diag::kv("localized_control_type", get(UIA_LocalizedControlTypePropertyId)),
-            seal::diag::kv("class_name", get(UIA_ClassNamePropertyId)),
-            seal::diag::kv("item_type", get(UIA_ItemTypePropertyId)),
-            seal::diag::kv("aria_role", get(UIA_AriaRolePropertyId)),
-            seal::diag::kv("aria_properties", get(UIA_AriaPropertiesPropertyId)),
-        }));
-    }
-
-    rawWalker->Release();
-    element->Release();
-    return observedAny ? 0 : -1;
+    return verdict;
 }
 
-int FillController::probeFormContext(IUIAutomationTreeWalker* walker,
-                                     IUIAutomationElement* hit,
-                                     LONG x,
-                                     LONG y)
+void FillController::performDiagnose()
 {
-    if (!walker || !hit || !m_UIA)
-        return 0;
+    using seal::ProbeContext;
+    using seal::ProbeResult;
+    using seal::Verdict;
 
-    IUIAutomationElement* formAncestor = findFormAncestor(walker, hit);
-    if (!formAncestor)
-        return 0;
+    if (m_State.load() != State::Diagnose)
+        return;
 
-    std::vector<IUIAutomationElement*> peers;
-    enumerateFormInputs(walker, formAncestor, peers);
-    formAncestor->Release();
+    m_TimeoutTimer.stop();
 
-    if (peers.size() < 2)
+    const POINT clickPoint{m_ClickX.load(), m_ClickY.load()};
+
+    auto runOnce = [&]()
     {
-        for (auto* p : peers)
-            p->Release();
-        return 0;
-    }
-
-    struct PeerClass
-    {
-        bool pwd = false;
-        bool usr = false;
-        bool isClicked = false;
+        ProbeContext ctx;
+        ctx.m_ClickPoint = clickPoint;
+        ctx.m_TargetWindow = WindowFromPoint(ctx.m_ClickPoint);
+        if (ctx.m_TargetWindow != nullptr)
+        {
+            GetWindowThreadProcessId(ctx.m_TargetWindow, &ctx.m_TargetProcessId);
+        }
+        ctx.m_Deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+        return std::make_pair(ctx,
+                              std::array<ProbeResult, 5>{
+                                  m_BrowserBridgeProbe.run(ctx),
+                                  m_Win32StyleProbe.run(ctx),
+                                  m_UiaIsPassword.run(ctx),
+                                  m_UiaMetadata.run(ctx),
+                                  m_ImeStateProbe.run(ctx),
+                              });
     };
-    std::vector<PeerClass> classes(peers.size());
 
-    for (size_t i = 0; i < peers.size(); ++i)
+    auto [ctx, results] = runOnce();
+
+    // Race-mitigation: only the browser_extension probe (index 0) depends
+    // on async content.js -> SW -> host -> bridge delivery, and a busy or
+    // just-woken SW can land that report AFTER the Ctrl+Click. If we have
+    // a live peer but Unknown, give it ~75 ms and re-probe. The fill path
+    // doesn't need this -- its Ctrl-release poll already adds delay --
+    // but diagnose probes immediately and would lose the race.
+    if (results[0].m_Verdict == Verdict::Unknown && m_BrowserBridge.isPeerConnected())
     {
-        classes[i].pwd =
-            inspectElementPasswordState(peers[i], /*skipControlTypeGate=*/true).matched;
-        classes[i].usr = inspectElementUsernameState(peers[i]).matched;
-
-        BOOL same = FALSE;
-        if (SUCCEEDED(m_UIA->CompareElements(peers[i], hit, &same)) && same)
-            classes[i].isClicked = true;
+        Sleep(75);  // synchronous on the Qt thread; trivially short.
+        auto retry = runOnce();
+        ctx = retry.first;
+        results = retry.second;
     }
 
-    // Geometric fallback: if no peer's RuntimeId matches `hit` (hit may be a
-    // wrapper that doesn't appear in the form's input enumeration), find the
-    // peer whose bounding rect contains the click point.
-    int clickedIdx = -1;
-    for (size_t i = 0; i < classes.size(); ++i)
-    {
-        if (classes[i].isClicked)
-        {
-            clickedIdx = static_cast<int>(i);
-            break;
-        }
-    }
-    if (clickedIdx < 0)
-    {
-        for (size_t i = 0; i < peers.size(); ++i)
-        {
-            RECT rect{};
-            if (tryGetCurrentBoundingRect(peers[i], &rect) && rectContainsPoint(rect, x, y))
-            {
-                clickedIdx = static_cast<int>(i);
-                break;
-            }
-        }
-    }
+    const Verdict verdict = m_FusionDecider.decide(results);
 
-    int result = 0;
-    QString reason;
-    if (clickedIdx >= 0)
+    auto verdictText = [](Verdict v)
     {
-        const PeerClass& clicked = classes[clickedIdx];
-        if (clicked.pwd)
-        {
-            result = 1;
-            reason = QStringLiteral("clicked-self-pwd");
-        }
-        else if (clicked.usr)
-        {
-            result = 0;
-            reason = QStringLiteral("clicked-self-usr");
-        }
-        else
-        {
-            bool anyPwd = false, anyUsr = false;
-            for (size_t i = 0; i < classes.size(); ++i)
-            {
-                if (static_cast<int>(i) == clickedIdx)
-                    continue;
-                if (classes[i].pwd)
-                    anyPwd = true;
-                if (classes[i].usr)
-                    anyUsr = true;
-            }
+        return v == Verdict::Password   ? QStringLiteral("password")
+               : v == Verdict::Username ? QStringLiteral("username")
+                                        : QStringLiteral("unknown");
+    };
 
-            if (anyUsr && !anyPwd)
-            {
-                result = 1;
-                reason = QStringLiteral("peer-usr-implies-self-pwd");
-            }
-            else if (anyPwd)
-            {
-                result = 0;
-                reason = QStringLiteral("peer-pwd-implies-self-usr");
-            }
-            else
-            {
-                result = 0;
-                reason = QStringLiteral("ambiguous-all-obfuscated");
-            }
-        }
-    }
-    else
+    // User-facing summary -- one line per probe, free-form (the QML popup
+    // renders this as a <pre>; nothing downstream parses it).
+    QString summary;
+    summary += QStringLiteral("Fused verdict: %1\n").arg(verdictText(verdict));
+    summary += QStringLiteral("Click point: (%1, %2)\n").arg(clickPoint.x).arg(clickPoint.y);
+    summary += QStringLiteral("Target window PID: %1\n").arg(ctx.m_TargetProcessId);
+
+    // Bridge connectivity / cache state -- key for triaging a
+    // "browser_extension: unknown": disambiguates "no host ever connected"
+    // vs "connected but didn't report this click" vs "reported elsewhere".
+    summary += QStringLiteral("\nBridge:\n");
+    summary += QStringLiteral("  running: %1\n").arg(m_BrowserBridge.isRunning() ? "yes" : "no");
+    summary += QStringLiteral("  disabled: %1\n").arg(m_BrowserBridge.isDisabled() ? "yes" : "no");
+    summary += QStringLiteral("  peer connected: %1\n")
+                   .arg(m_BrowserBridge.isPeerConnected() ? "yes" : "no");
+    summary += QStringLiteral("  cached entries: %1\n").arg(m_BrowserBridge.mapEntryCount());
+
+    summary += QStringLiteral("\nPer-probe results:\n");
+    for (const ProbeResult& r : results)
     {
-        reason = QStringLiteral("clicked-not-in-form");
+        summary += QStringLiteral("  - %1: %2 (conf %3)")
+                       .arg(QString::fromLatin1(r.m_ProbeName))
+                       .arg(verdictText(r.m_Verdict))
+                       .arg(QString::number(r.m_Confidence, 'f', 2));
+        if (!r.m_Evidence.empty())
+        {
+            summary += QStringLiteral(" [%1]").arg(
+                QString::fromStdString(seal::diag::sanitizeAscii(r.m_Evidence)));
+        }
+        summary += QLatin1Char('\n');
     }
 
-    qCDebug(logFill) << "probeFormContext: peers=" << peers.size() << "clickedIdx=" << clickedIdx
-                     << "result=" << result << "reason=" << reason;
+    // URL host is privacy-sensitive, but diagnose is user-initiated for
+    // one specific click -- showing the host in the popup is appropriate.
+    // Logs still get the redacted form via the probe's bridge_match.
+    if (ctx.m_TargetProcessId != 0)
+    {
+        const auto entry = m_BrowserBridge.lookup(ctx.m_TargetProcessId, clickPoint);
+        if (entry.has_value() && !entry->m_UrlHost.isEmpty())
+        {
+            summary += QStringLiteral("\nBridge URL host: %1\n").arg(entry->m_UrlHost);
+        }
+    }
 
-    for (auto* p : peers)
-        p->Release();
-    return result;
+    // Redacted logfmt mirror so operators see the diagnose event without
+    // leaking the URL host. Includes raw click_x/y + target_pid for cross-
+    // reference against fill.bridge.msg's x/y/qx/qy -- mismatches there
+    // diagnose "report arrived but lookup missed" situations.
+    QString line =
+        QStringLiteral("event=fill.diagnose chosen=%1 click_x=%2 click_y=%3 target_pid=%4")
+            .arg(verdictText(verdict))
+            .arg(clickPoint.x)
+            .arg(clickPoint.y)
+            .arg(ctx.m_TargetProcessId);
+    for (const ProbeResult& r : results)
+    {
+        line += QString(" %1_verdict=%2 %1_conf=%3")
+                    .arg(QString::fromLatin1(r.m_ProbeName))
+                    .arg(verdictText(r.m_Verdict))
+                    .arg(QString::number(r.m_Confidence, 'f', 2));
+    }
+    qCInfo(logFill).noquote() << line;
+
+    removeHooks();
+    transitionTo(State::Idle);
+    m_RemainingSeconds = 0;
+    emit countdownSecondsChanged();
+    emit diagnoseCompleted(summary);
 }
 
 }  // namespace seal
