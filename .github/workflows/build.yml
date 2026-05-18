@@ -92,10 +92,10 @@ jobs:
           $total = (Get-ChildItem -Path $dst -Recurse -File | Measure-Object -Property Length -Sum).Sum
           Write-Host ("Total artifact size: {0:N1} MB" -f ($total / 1MB))
 
-      - name: Upload seal binary bundle
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: seal-windows-x64
+          name: seal-windows-x64-${{ github.sha }}
           path: artifact-staging/seal-windows-x64
           if-no-files-found: error
           retention-days: 14
