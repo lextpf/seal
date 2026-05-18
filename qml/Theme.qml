@@ -63,8 +63,14 @@ QtObject {
     // so all consumers re-evaluate automatically when the theme toggles.
     function pick(d, l) { return dark ? d : l }
 
+    // Persisted accounts-grid sort preference. Maps to VaultListModel::SortMode
+    // (0 = A-Z, 1 = Z-A, 2 = Grouped by brand). Stored alongside `dark` so all
+    // UI prefs share the same Settings group.
+    property int sortMode: 0
+
     property Settings _settings: Settings {
         property alias dark: root.dark
+        property alias sortMode: root.sortMode
     }
 
     // -- Background layers --
@@ -101,14 +107,19 @@ QtObject {
     property color statusChipEnd:     pick(Qt.rgba(0.04, 0.08, 0.18, 0.90), Qt.rgba(0.88, 0.92, 0.97, 0.94))
     property color statusChipBorder:  pick(Qt.rgba(0.36, 0.50, 0.88, 0.24), Qt.rgba(0.34, 0.48, 0.72, 0.24))
     property color statusChipText:    pick("#b6c6e6", "#2a3a56")
+    // "On" state of the bridge status chip. Cool soft blue in both themes —
+    // distinct from every color already used in the button row above (Add
+    // teal-green, Edit purple, Delete red, Fill yellow-green) and a calming
+    // pairing with the green status dot. The "off" state uses the regular
+    // statusChip tokens (neutral muted gray-blue).
     property color statusChipStrongTop:
-                                      pick(Qt.rgba(0.20, 0.28, 0.08, 0.88), Qt.rgba(0.76, 0.86, 0.54, 0.92))
+                                      pick(Qt.rgba(0.10, 0.18, 0.34, 0.88), Qt.rgba(0.84, 0.90, 0.97, 0.94))
     property color statusChipStrongEnd:
-                                      pick(Qt.rgba(0.16, 0.24, 0.06, 0.92), Qt.rgba(0.70, 0.80, 0.42, 0.95))
+                                      pick(Qt.rgba(0.08, 0.14, 0.30, 0.92), Qt.rgba(0.78, 0.86, 0.95, 0.96))
     property color statusChipStrongBorder:
-                                      pick(Qt.rgba(0.58, 0.74, 0.18, 0.34), Qt.rgba(0.42, 0.56, 0.16, 0.28))
+                                      pick(Qt.rgba(0.36, 0.52, 0.92, 0.40), Qt.rgba(0.30, 0.48, 0.78, 0.30))
     property color statusChipStrongText:
-                                      pick("#eef6c2", "#40540e")
+                                      pick("#b8d0ff", "#1c3b78")
 
     // -- Button palettes --
     // Each button type carries four gradient states: rest, hover, pressed, disabled.
@@ -298,39 +309,236 @@ QtObject {
     readonly property int iconSizeSmall:     px(13)
     readonly property int iconSizeMedium:    px(15)
 
+    // Chip background palette for the accounts grid. Used as the fallback when
+    // a chip has no recognized brand icon (no entry in brandColors). 8 hues
+    // chosen to read well at α=0.12 (idle fill), α=0.22 (hover), and α=1.0
+    // (monogram circle / selected). The array re-evaluates on dark/light
+    // toggle because pick() is invoked at binding time; each entry is
+    // independent.
+    readonly property var chipPalette: [
+        pick("#80b0ff", "#2f6fd6"),  // blue
+        pick("#50d0cc", "#2e8b86"),  // teal
+        pick("#d89090", "#8868a0"),  // rose / violet (mirrors accent3 family)
+        pick("#d8a060", "#a86820"),  // amber
+        pick("#80c0c0", "#1f6a78"),  // cyan
+        pick("#a0c860", "#4a6818"),  // lime
+        pick("#e08070", "#aa3030"),  // coral
+        pick("#a090d8", "#5040a0"),  // indigo
+    ]
+
+    // Real brand colors keyed by the asset slug BrandIconResolver returns
+    // (the filename under assets/brands/ without the .svg suffix). Used so
+    // recognizable services (GitHub, Bitcoin, Discord, ...) read with their
+    // actual identity rather than a hash-mapped accent. Slugs not listed
+    // here fall back to chipPalette via the FNV-1a hash. Pure black/white
+    // brand colors are nudged toward a brand-adjacent hue that survives both
+    // dark and light themes (e.g. X uses Twitter cyan instead of #000000).
+    readonly property var brandColors: ({
+        "github":              "#6e7681",
+        "square-github":       "#6e7681",
+        "x-twitter":           "#1d9bf0",
+        "square-x-twitter":    "#1d9bf0",
+        "signal-messenger":    "#3a76f0",
+        "dropbox":             "#0061ff",
+        "bitcoin":             "#f7931a",
+        "discord":             "#5865f2",
+        "facebook-messenger":  "#00b2ff",
+        "wordpress":           "#21759b",
+        "wordpress-simple":    "#21759b",
+        "telegram":            "#0088cc",
+        "tiktok":              "#69c9d0",
+        "snapchat":            "#ffeb3b",
+        "whatsapp-square":     "#25d366",
+        "playstation":         "#003791",
+        "steam":               "#66c0f4",
+        "steam-symbol":        "#66c0f4",
+        "google-drive":        "#4285f4",
+        "google-pay":          "#4285f4",
+        "google-play":         "#4285f4",
+        "google-plus":         "#dd4b39",
+        "amazon-pay":          "#ff9900",
+        "linux":               "#fcc624",
+        "windows":             "#0078d7",
+        "android":             "#3ddc84",
+        "edge":                "#0078d7",
+        "edge-legacy":         "#0078d7",
+        "firefox":             "#ff7139",
+        "firefox-browser":     "#ff7139",
+        "safari":              "#006cff",
+        "tor-browser":         "#7d4698",
+        "etsy":                "#f56400",
+        "shopify":             "#7ab55c",
+        "stack-exchange":      "#1e5397",
+        "reddit-square":       "#ff4500",
+        "square-reddit":       "#ff4500",
+        "vimeo":               "#1ab7ea",
+        "soundcloud":          "#ff7700",
+        "linkedin":            "#0a66c2",
+        "linkedin-in":         "#0a66c2",
+        "square-linkedin":     "#0a66c2",
+        "behance":             "#053eff",
+        "behance-square":      "#053eff",
+        "mastodon":            "#6364ff",
+        "bluesky":             "#0085ff",
+        "square-bluesky":      "#0085ff",
+        "threads":             "#888888",
+        "dribbble":            "#ea4c89",
+        "square-dribbble":     "#ea4c89",
+        "gitlab":              "#fc6d26",
+        "kickstarter":         "#05ce78",
+        "kickstarter-k":       "#05ce78",
+        "lastfm":              "#d51007",
+        "square-lastfm":       "#d51007",
+        "y-combinator":        "#ff6600",
+        "hacker-news-square":  "#ff6600",
+        "blogger":             "#ff5722",
+        "medium":              "#1a8917",
+        "evernote":            "#00a82d",
+        "duolingo":            "#58cc02",
+        "yahoo":               "#5f01d1",
+        "tumblr":              "#36465d",
+        "tumblr-square":       "#36465d",
+        "slack-hash":          "#4a154b",
+        "battle-net":          "#00aeff",
+        "buffer":              "#168eea",
+        "chromecast":          "#ea4335",
+        "figma":               "#f24e1e",
+        "flickr":              "#0063dc",
+        "guilded":             "#f5c400",
+        "houzz":               "#7ac142",
+        "kaggle":              "#20beff",
+        "keybase":             "#4c8eff",
+        "line":                "#00c300",
+        "linode":              "#00a95c",
+        "lyft":                "#ff00bf",
+        "mailchimp":           "#ffe01b",
+        "mix":                 "#ff8126",
+        "octopus-deploy":      "#00b3a1",
+        "openid":              "#ff721f",
+        "opensuse":            "#73ba25",
+        "paypal":              "#0070ba",
+        "cc-paypal":           "#0070ba",
+        "cc-visa":             "#1a1f71",
+        "cc-mastercard":       "#eb001b",
+        "cc-diners-club":      "#0079be",
+        "cc-discover":         "#ff6000",
+        "pinterest-square":    "#e60023",
+        "pixiv":               "#0096fa",
+        "postgresql":          "#336791",
+        "qq":                  "#eb1923",
+        "quora":               "#b92b27",
+        "readme":              "#018ef5",
+        "rust":                "#ce422b",
+        "salesforce":          "#00a1e0",
+        "shopware":            "#189eff",
+        "speaker-deck":        "#009287",
+        "tailwind-css":        "#06b6d4",
+        "untappd":             "#ffc000",
+        "vim":                 "#019733",
+        "vk":                  "#4a76a8",
+        "webflow":             "#4353ff",
+        "weebly":              "#ff7300",
+        "weixin":              "#07c160",
+        "bootstrap":           "#7952b3",
+        "css3-alt":            "#1572b6",
+        "debian":              "#a81d33",
+        "suse":                "#0c322c",
+        "zhihu":               "#0066ff",
+        "artstation":          "#13aff0",
+        "audible":             "#f8991c",
+        "500px":               "#0099e5",
+        "scribd":              "#1e7b85",
+        "sourcetree":          "#0052cc",
+        "hotjar":              "#fd3a5c",
+        "invision":            "#ff3366",
+        "itch-io":             "#fa5c5c",
+        "mendeley":            "#9d1620",
+        "padlet":              "#ed3835",
+        "phabricator":         "#4a5f88",
+        "slideshare":          "#0077b5",
+        "wpbeginner":          "#ed5a45",
+    })
+
+    // Strip the qrc prefix/.svg suffix off a brandIconPath to recover the
+    // bare asset slug for use as a brandColors key. Returns "" if path is
+    // empty or doesn't match the expected layout.
+    function brandSlugFromPath(path)
+    {
+        if (!path) return "";
+        var prefix = "qrc:/qt/qml/seal/assets/brands/";
+        var suffix = ".svg";
+        if (path.indexOf(prefix) !== 0) return "";
+        if (path.lastIndexOf(suffix) !== path.length - suffix.length) return "";
+        return path.substring(prefix.length, path.length - suffix.length);
+    }
+
+    // Chip color resolver. If we recognize the brand (icon resolved AND the
+    // slug has a curated brand color), use the brand identity. Otherwise hash
+    // the platform name into a chipPalette slot so unbranded chips still get
+    // a deterministic-but-arbitrary hue.
+    function chipColorFor(name, brandSlug)
+    {
+        if (brandSlug && brandSlug.length > 0) {
+            var bc = brandColors[brandSlug];
+            if (bc) return bc;
+        }
+        if (!name) return chipPalette[0];
+        var h = 2166136261 >>> 0;
+        for (var i = 0; i < name.length; i++) {
+            h ^= name.charCodeAt(i);
+            h = Math.imul(h, 16777619) >>> 0;
+        }
+        return chipPalette[h % chipPalette.length];
+    }
+
+    // Return a readable foreground color (white or near-black) for text /
+    // glyphs that sit on top of `color` at full alpha — used on the selected
+    // chip background and on the monogram-circle letter so bright brand hues
+    // (Snapchat yellow, Linux yellow, ...) don't end up with white-on-white.
+    function chipTextOn(color)
+    {
+        var lum = 0.299 * color.r + 0.587 * color.g + 0.114 * color.b;
+        return lum > 0.55 ? "#15171d" : "#ffffff";
+    }
+
     // SVG icon paths. SvgIcon.qml wraps IconImage for runtime recoloring.
-    readonly property string iconLock:         "qrc:/qt/qml/seal/assets/svgs/lock.svg"
-    readonly property string iconLockOpen:     "qrc:/qt/qml/seal/assets/svgs/lock-open.svg"
-    readonly property string iconPlus:         "qrc:/qt/qml/seal/assets/svgs/plus.svg"
-    readonly property string iconPen:          "qrc:/qt/qml/seal/assets/svgs/pen.svg"
-    readonly property string iconTrash:        "qrc:/qt/qml/seal/assets/svgs/trash.svg"
-    readonly property string iconFloppyDisk:   "qrc:/qt/qml/seal/assets/svgs/floppy-disk.svg"
-    readonly property string iconFolderOpen:   "qrc:/qt/qml/seal/assets/svgs/folder-open.svg"
-    readonly property string iconEject:        "qrc:/qt/qml/seal/assets/svgs/eject.svg"
-    readonly property string iconKeyboard:     "qrc:/qt/qml/seal/assets/svgs/keyboard.svg"
-    readonly property string iconKey:          "qrc:/qt/qml/seal/assets/svgs/key.svg"
-    readonly property string iconSearch:       "qrc:/qt/qml/seal/assets/svgs/magnifying-glass.svg"
-    readonly property string iconShieldHalved: "qrc:/qt/qml/seal/assets/svgs/shield-halved.svg"
-    readonly property string iconService:      "qrc:/qt/qml/seal/assets/svgs/database.svg"
-    readonly property string iconUsername:     "qrc:/qt/qml/seal/assets/svgs/user.svg"
-    readonly property string iconPassword:     "qrc:/qt/qml/seal/assets/svgs/lock.svg"
-    readonly property string iconCamera:       "qrc:/qt/qml/seal/assets/svgs/camera-web.svg"
-    readonly property string iconQrCode:       "qrc:/qt/qml/seal/assets/svgs/qrcode-read.svg"
-    readonly property string iconFilterSlash:  "qrc:/qt/qml/seal/assets/svgs/filter-slash.svg"
-    readonly property string iconNarwhal:      "qrc:/qt/qml/seal/assets/svgs/narwhal.svg"
-    readonly property string iconEye:          "qrc:/qt/qml/seal/assets/svgs/eye.svg"
-    readonly property string iconEyeSlash:     "qrc:/qt/qml/seal/assets/svgs/eye-slash.svg"
-    readonly property string iconCrosshairs:   "qrc:/qt/qml/seal/assets/svgs/crosshairs.svg"
-    readonly property string iconSun:          "qrc:/qt/qml/seal/assets/svgs/sun-bright.svg"
-    readonly property string iconXmark:        "qrc:/qt/qml/seal/assets/svgs/xmark.svg"
-    readonly property string iconMoon:         "qrc:/qt/qml/seal/assets/svgs/moon.svg"
-    readonly property string iconChevronDown:  "qrc:/qt/qml/seal/assets/svgs/chevron-down.svg"
-    readonly property string iconPowerOff:    "qrc:/qt/qml/seal/assets/svgs/power-off.svg"
-    readonly property string iconThumbtack:   "qrc:/qt/qml/seal/assets/svgs/thumbtack.svg"
-    readonly property string iconCompress:    "qrc:/qt/qml/seal/assets/svgs/compress.svg"
-    readonly property string iconExpand:      "qrc:/qt/qml/seal/assets/svgs/expand.svg"
-    readonly property string iconTriangleExclamation: "qrc:/qt/qml/seal/assets/svgs/triangle-exclamation.svg"
-    readonly property string iconCircleInfo:  "qrc:/qt/qml/seal/assets/svgs/circle-info.svg"
-    readonly property string iconCircleCheck: "qrc:/qt/qml/seal/assets/svgs/circle-check.svg"
-    readonly property string iconTerminal:   "qrc:/qt/qml/seal/assets/svgs/terminal.svg"
+    // The new duotone/ asset set uses FA's "alt" suffix convention (lock-alt,
+    // pen-alt, trash-alt, ...) rather than bare names, and substitutes some
+    // icons entirely. Mappings below choose the closest-meaning available
+    // filename — see git history for the previous svgs/ paths.
+    readonly property string iconLock:         "qrc:/qt/qml/seal/assets/duotone/lock-alt.svg"
+    readonly property string iconLockOpen:     "qrc:/qt/qml/seal/assets/duotone/lock-keyhole-open.svg"
+    readonly property string iconPlus:         "qrc:/qt/qml/seal/assets/duotone/plus.svg"
+    readonly property string iconPen:          "qrc:/qt/qml/seal/assets/duotone/pen-alt.svg"
+    readonly property string iconTrash:        "qrc:/qt/qml/seal/assets/duotone/recycle.svg"
+    readonly property string iconFloppyDisk:   "qrc:/qt/qml/seal/assets/duotone/floppy-disk.svg"
+    readonly property string iconFolderOpen:   "qrc:/qt/qml/seal/assets/duotone/folder-open.svg"
+    readonly property string iconEject:        "qrc:/qt/qml/seal/assets/duotone/right-from-bracket.svg"
+    readonly property string iconKeyboard:     "qrc:/qt/qml/seal/assets/duotone/keyboard.svg"
+    readonly property string iconKey:          "qrc:/qt/qml/seal/assets/duotone/key-skeleton-left-right.svg"
+    readonly property string iconSearch:       "qrc:/qt/qml/seal/assets/duotone/magnifying-glass-plus.svg"
+    readonly property string iconShieldHalved: "qrc:/qt/qml/seal/assets/duotone/shield.svg"
+    readonly property string iconService:      "qrc:/qt/qml/seal/assets/duotone/database.svg"
+    readonly property string iconUsername:     "qrc:/qt/qml/seal/assets/duotone/user-circle.svg"
+    readonly property string iconPassword:     "qrc:/qt/qml/seal/assets/duotone/lock-alt.svg"
+    readonly property string iconCamera:       "qrc:/qt/qml/seal/assets/duotone/camera-alt.svg"
+    readonly property string iconQrCode:       "qrc:/qt/qml/seal/assets/duotone/qrcode.svg"
+    readonly property string iconFilterSlash:  "qrc:/qt/qml/seal/assets/duotone/filter-slash.svg"
+    readonly property string iconNarwhal:      "qrc:/qt/qml/seal/assets/duotone/narwhal.svg"
+    readonly property string iconEye:          "qrc:/qt/qml/seal/assets/duotone/eye.svg"
+    readonly property string iconEyeSlash:     "qrc:/qt/qml/seal/assets/duotone/eye-closed.svg"
+    readonly property string iconCrosshairs:   "qrc:/qt/qml/seal/assets/duotone/crosshairs-simple.svg"
+    readonly property string iconSun:          "qrc:/qt/qml/seal/assets/duotone/sun-bright.svg"
+    readonly property string iconXmark:        "qrc:/qt/qml/seal/assets/duotone/xmark.svg"
+    readonly property string iconBan:          "qrc:/qt/qml/seal/assets/duotone/ban.svg"
+    readonly property string iconMoon:         "qrc:/qt/qml/seal/assets/duotone/moon.svg"
+    readonly property string iconChevronDown:  "qrc:/qt/qml/seal/assets/duotone/angle-down.svg"
+    readonly property string iconPowerOff:    "qrc:/qt/qml/seal/assets/duotone/power-off.svg"
+    readonly property string iconThumbtack:   "qrc:/qt/qml/seal/assets/duotone/thumbtack-angle.svg"
+    readonly property string iconCompress:    "qrc:/qt/qml/seal/assets/duotone/compress.svg"
+    readonly property string iconExpand:      "qrc:/qt/qml/seal/assets/duotone/arrows-maximize.svg"
+    readonly property string iconTriangleExclamation: "qrc:/qt/qml/seal/assets/duotone/exclamation-triangle.svg"
+    readonly property string iconCircleInfo:  "qrc:/qt/qml/seal/assets/duotone/info-square.svg"
+    readonly property string iconCircleCheck: "qrc:/qt/qml/seal/assets/duotone/check-circle.svg"
+    readonly property string iconTerminal:   "qrc:/qt/qml/seal/assets/duotone/terminal.svg"
 }
