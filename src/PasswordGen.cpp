@@ -18,8 +18,8 @@ secure_string<> GeneratePassword(int length)
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
     static constexpr int charsetLen = sizeof(charset) - 1;
 
-    // Rejection sampling: Integer division truncates so `limit` is
-    // the largest multiple of charsetLen that fits in a byte.
+    // Rejection sampling: `limit` is the largest multiple of charsetLen
+    // that fits in a byte (truncating integer division).
     static constexpr unsigned char limit =
         static_cast<unsigned char>((256 / charsetLen) * charsetLen);
 
@@ -31,8 +31,8 @@ secure_string<> GeneratePassword(int length)
     while (filled < length)
     {
         int need = length - filled;
-        // Over-request to reduce the number of RAND_bytes round-trips;
-        // each byte has a ~70% acceptance rate (196/256 for charsetLen=76).
+        // Over-request to amortise RAND_bytes calls; ~70% acceptance at
+        // charsetLen=76 (196/256 useful bytes).
         int request = std::min(need * 2, static_cast<int>(sizeof(rndBuf)));
         if (RAND_bytes(rndBuf, request) != 1)
             throw std::runtime_error("RAND_bytes failed");
