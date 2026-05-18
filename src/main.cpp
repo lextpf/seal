@@ -48,7 +48,7 @@
 #include <tuple>
 #include <vector>
 
-// Forward declaration - implementation is in qmlmain.cpp
+// Forward declaration; definition is in QmlMain.cpp.
 #ifdef USE_QT_UI
 int RunQMLMode(int argc, char* argv[]);
 #endif
@@ -71,7 +71,9 @@ enum class Mode
     Shred,
     Hash,
     Verify,
-    Wipe
+    Wipe,
+    InstallBrowserExtension,
+    UninstallBrowserExtension
 };
 
 struct ProgramOptions
@@ -134,7 +136,11 @@ static void printHelp()
     std::cout << "  verify <file.seal>        Verify password for an encrypted file\n";
     std::cout << "  wipe                      Clear clipboard and console buffer\n";
     std::cout << "  import <data> [output]    Import credentials into a vault file\n";
-    std::cout << "  export <input> [output]   Export vault to plaintext (re-importable format)\n\n";
+    std::cout << "  export <input> [output]   Export vault to plaintext (re-importable format)\n";
+    std::cout
+        << "  install-browser-extension   Register the browser companion native-messaging host\n";
+    std::cout
+        << "  uninstall-browser-extension Remove the browser companion native-messaging host\n\n";
     std::cout << "Options:\n";
     std::cout << "  -e, --text-encrypt [text] Encrypt a string, output hex\n";
     std::cout << "  -d, --text-decrypt [hex]  Decrypt a hex string, output plaintext\n";
@@ -350,6 +356,16 @@ static int parseArguments(int argc, char* argv[], ProgramOptions& opts)
             if (!trySetMode(opts, Mode::Wipe))
                 return 1;
         }
+        else if (arg == "install-browser-extension" || arg == "--install-browser-extension")
+        {
+            if (!trySetMode(opts, Mode::InstallBrowserExtension))
+                return 1;
+        }
+        else if (arg == "uninstall-browser-extension" || arg == "--uninstall-browser-extension")
+        {
+            if (!trySetMode(opts, Mode::UninstallBrowserExtension))
+                return 1;
+        }
         else if (arg == "-v" || arg == "--version")
         {
             std::cout << "seal " << SEAL_VERSION << "\n";
@@ -373,8 +389,7 @@ static int parseArguments(int argc, char* argv[], ProgramOptions& opts)
             return 1;
         }
     }
-    // No explicit validation block needed: trySetMode() rejects conflicts
-    // at parse time, and the Mode enum makes invalid combinations impossible.
+    // No post-validation needed: trySetMode() rejects conflicts at parse time.
     return -1;
 }
 
@@ -382,11 +397,10 @@ static int parseArguments(int argc, char* argv[], ProgramOptions& opts)
 // Returns 0 on success, 1 if a critical mitigation fails.
 static int initializeSecurity(bool allowDynamicCode)
 {
-    // Order matters: Debugger check first (fail fast before any secrets load),
-    // then process mitigations (Control Flow Guard, Data Execution Prevention,
-    // Address Space Layout Randomization, dynamic-code policy), then
-    // heap/access hardening, and finally memory-lock privilege which is needed
-    // before any secure_string allocations touch VirtualLock.
+    // Order: debugger check first (fail fast before secrets load), process
+    // mitigations (CFG/DEP/ASLR/dynamic-code), then heap/access hardening,
+    // then SeLockMemoryPrivilege -- required before any secure_string
+    // allocation hits VirtualLock.
     seal::Cryptography::detectDebugger();
 
     // Process mitigations are best-effort
@@ -438,7 +452,7 @@ static void loadImportDataFromFile(std::string& importData)
 
     if (importData == "-")
     {
-        // Read from stdin - supports piping and paste (Ctrl+Z to end on Windows).
+        // Read from stdin: pipes + paste (Ctrl+Z to end on Windows).
         fileContent.assign(std::istreambuf_iterator<char>(std::cin),
                            std::istreambuf_iterator<char>());
         writeCliDiag(std::cerr,
@@ -462,7 +476,7 @@ static void loadImportDataFromFile(std::string& importData)
             {"event=import.read.begin", "source=file", seal::diag::pathSummary(sourcePath)});
     }
 
-    // Replace newlines with commas so entries can be one-per-line or comma-separated.
+    // Normalise newlines to commas so entries can be one-per-line or CSV.
     std::replace_if(
         fileContent.begin(), fileContent.end(), [](char c) { return c == '\n' || c == '\r'; }, ',');
     importData = fileContent;
@@ -513,9 +527,8 @@ static int parseImportEntries(
             return 1;
         }
 
-        // Reject entries with more than 2 colons: the format is strictly
-        // platform:username:password, so 3+ colons means ambiguous field
-        // boundaries that cannot be round-tripped through export/import.
+        // Reject >2 colons: ambiguous field boundaries break round-trip
+        // through export/import.
         if (token.find(':', secondColon + 1) != std::string::npos)
         {
             writeCliDiag(std::cerr,
@@ -595,9 +608,9 @@ static int handleImportMode(std::string& importData, const std::string& importOu
                       "reason=password_read_failed"});
         return 1;
     }
-    // DPAPIGuard wraps the master password with CryptProtectMemory while idle.
-    // unprotect() decrypts it in-place for the encryption loop; reprotect()
-    // (or destructor) re-encrypts it so the plaintext key is short-lived.
+    // DPAPIGuard keeps the master password CryptProtectMemory-encrypted
+    // while idle. ScopedUnprotect decrypts in-place for the loop; reprotect
+    // (or destructor) re-encrypts to minimise plaintext lifetime.
     seal::DPAPIGuard<seal::basic_secure_string<wchar_t>> importDpapi(&masterPassword);
 
     std::vector<seal::VaultRecord> records;
@@ -610,7 +623,7 @@ static int handleImportMode(std::string& importData, const std::string& importOu
             auto secUser = seal::utils::utf8ToSecureWide(user);
             auto secPass = seal::utils::utf8ToSecureWide(pass);
             records.push_back(seal::encryptCredential(platform, secUser, secPass, masterPassword));
-            // Wipe the wide copies immediately; the encrypted VaultRecord now owns the data.
+            // VaultRecord now owns the encrypted data; wipe the plaintext copies.
             seal::Cryptography::cleanseString(secUser, secPass);
         }
 
@@ -618,8 +631,7 @@ static int handleImportMode(std::string& importData, const std::string& importOu
         if (!outputPath.endsWith(".seal", Qt::CaseInsensitive))
             outputPath += ".seal";
 
-        // Cleanse the original plaintext entry strings now that every credential
-        // has been encrypted into a VaultRecord. This limits the plaintext lifetime.
+        // Original plaintext entries are now encrypted; wipe them.
         for (auto& [p, u, pw] : entries)
             seal::Cryptography::cleanseString(p, u, pw);
 
@@ -729,9 +741,8 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
         return 0;
     }
 
-    // Stream each credential directly to the output instead of accumulating
-    // all plaintext in a heap buffer. This limits plaintext exposure to one
-    // record at a time rather than the entire vault.
+    // Stream credentials one at a time; never accumulate the whole vault
+    // in a plaintext heap buffer.
     std::ofstream outFile;
     std::ostream* out = &std::cout;
     if (!outputPath.empty())
@@ -766,10 +777,9 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
             {
                 continue;
             }
-            // The export format is "platform:username:password" with exactly 2
-            // colon delimiters. If platform or username contain ':', the output
-            // cannot be round-tripped through --import because the parser splits
-            // on the first two colons. Warn the user so they can fix the data.
+            // Export format is platform:username:password (2 colons). If
+            // platform or username contains ':', --import cannot round-trip.
+            // Warn so the user can fix the data.
             if (!hasColonWarning && (rec.platform.find(':') != std::string::npos))
             {
                 writeCliDiag(std::cerr,
@@ -798,9 +808,8 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
                               seal::diag::kv("username_len", user.size())});
                 hasColonWarning = true;
             }
-            // Write directly to output, cleanse immediately. No intermediate
-            // accumulation buffer means only one credential is in pageable
-            // memory at any moment.
+            // Write + cleanse per record so only one credential ever sits
+            // in pageable memory.
             if (exportedCount > 0)
                 *out << ',';
             *out << rec.platform << ':' << user << ':' << pass;
@@ -839,9 +848,8 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
 }
 #endif  // USE_QT_UI
 
-// Process the "seal" input file (a text file named literally "seal" in the cwd).
-// It contains paths/hex tokens, one per line, terminated by '?' or '!'.
-// This runs once at startup as a batch before the interactive loop begins.
+// Process the "seal" input file in cwd (paths/hex tokens, terminated by
+// '?' or '!') as a startup batch before the interactive loop.
 static void processSealFileBatch(seal::DPAPIGuard<seal::basic_secure_string<wchar_t>>& dpapi,
                                  seal::basic_secure_string<wchar_t>& password)
 {
@@ -859,9 +867,8 @@ static void processSealFileBatch(seal::DPAPIGuard<seal::basic_secure_string<wcha
     std::cout << "\n";
 }
 
-// Re-read the "seal" input file on Esc press. Only processes the file if it
-// contains actual file/directory paths (not raw hex), acting as a quick
-// re-encrypt/re-decrypt shortcut before exiting the interactive loop.
+// Re-read "seal" on Esc. Only fires when the file contains real paths
+// (not raw hex) -- a quick re-encrypt/re-decrypt shortcut on exit.
 static bool handleEscSealFile(seal::DPAPIGuard<seal::basic_secure_string<wchar_t>>& dpapi,
                               seal::basic_secure_string<wchar_t>& password)
 {
@@ -899,11 +906,11 @@ static int handleCliMode()
         seal::basic_secure_string<wchar_t> password = seal::readPasswordConsole();
         seal::DPAPIGuard<seal::basic_secure_string<wchar_t>> dpapi(&password);
 
-        // CLI startup sequence:
-        // 1. Process the "seal" input file as an automatic batch (if present).
-        // 2. Enter the interactive loop where the user types/pastes lines
-        //    terminated by '?' (masked output) or '!' (uncensored output).
-        // 3. On Esc, re-read the "seal" file one more time, then exit cleanly.
+        // CLI startup:
+        //   1. Run the "seal" file as a startup batch (if present).
+        //   2. Interactive loop: lines end with '?' (masked) or '!'
+        //      (uncensored).
+        //   3. Esc re-runs "seal" once and exits cleanly.
         processSealFileBatch(dpapi, password);
 
         std::cout << "+----------------------------------------- seal - Interactive Mode "
@@ -946,12 +953,12 @@ static int handleCliMode()
     return 0;
 }
 
-// Program entry point. Dispatches to one of several modes based on CLI args:
-//   -e/--encrypt, -d/--decrypt  : stream encryption/decryption (stdin->stdout)
-//   -u/--ui / no args           : Qt GUI mode (default)
-//   --cli                       : interactive console mode
-//   --import / --export         : vault import/export
-//   -h/--help                   : usage information
+// Entry point. Dispatches by mode:
+//   -e/-d         stream encrypt/decrypt (stdin->stdout)
+//   -u / no args  Qt GUI mode (default)
+//   --cli         interactive console
+//   --import/--export  vault import/export
+//   -h/--help     usage
 int main(int argc, char* argv[])
 {
     ProgramOptions opts;
@@ -960,29 +967,26 @@ int main(int argc, char* argv[])
         return rc;
 
 #ifdef USE_QT_UI
-    // Route Qt log output through the structured seal handler before any
-    // security-init code runs, so early qCInfo(logCrypto) calls emit the
-    // same `[ts] [LVL] [cat] [tid=N]` format as the rest of the app.
+    // Install the structured handler before any security-init log line so
+    // early qCInfo(logCrypto) calls share the standard format.
     installSealMessageHandler();
 #endif
 
-    // Qt Quick's QML engine uses a JIT compiler (V4) that needs dynamic code
-    // generation. Only GUI mode loads QML; all other modes can keep the
-    // stricter PROCESS_MITIGATION_DYNAMIC_CODE_POLICY that blocks RWX pages.
+    // Only GUI mode loads QML (V4 JIT needs RWX). Other modes keep the
+    // stricter PROCESS_MITIGATION_DYNAMIC_CODE_POLICY.
     const bool allowDynamicCode = (opts.mode == Mode::Gui);
 
     rc = initializeSecurity(allowDynamicCode);
     if (rc != 0)
         return rc;
 
-    // Set OpenCV environment variables while still single-threaded.
-    // captureQrFromWebcam() runs on a worker thread and reads these via
-    // std::getenv; setting them here avoids a data race on the process
-    // environment block.
+    // Set OpenCV env vars while still single-threaded; captureQrFromWebcam()
+    // reads them via getenv on a worker thread, so this avoids racing on the
+    // process environment block.
     _putenv_s("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0");
 
-    // RAII guard ensures the clipboard TTL thread is joined before static
-    // destruction begins, preventing potential deadlock when DLLs unload.
+    // RAII guard joins the clipboard TTL thread before static destruction,
+    // avoiding a DLL-unload deadlock.
     struct ClipboardShutdownGuard
     {
         ~ClipboardShutdownGuard() { seal::Clipboard::shutdown(); }
@@ -1028,6 +1032,10 @@ int main(int argc, char* argv[])
             return seal::HandleVerifyMode(opts.inputPath);
         case Mode::Wipe:
             return seal::HandleWipeMode();
+        case Mode::InstallBrowserExtension:
+            return seal::HandleInstallBrowserExtensionMode();
+        case Mode::UninstallBrowserExtension:
+            return seal::HandleUninstallBrowserExtensionMode();
         case Mode::FileEncrypt:
             return seal::HandleFileEncrypt(opts.inputPath, opts.outputPath);
         case Mode::FileDecrypt:
