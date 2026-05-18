@@ -35,7 +35,7 @@ bool IsVirtualCameraName(const std::wstring& name);
 bool IsObsCameraName(const std::wstring& name);
 
 // Route diagnostics through the Qt logging system so they inherit the
-// unified `[ts] [LVL] [seal.camera] [tid=N]` prefix from sealMessageHandler.
+// unified `[ts] [LVL] [seal.camera] [tid=N]` prefix.
 void writeCameraDiag(seal::console::Tone tone, std::initializer_list<std::string> fields)
 {
     const QString line = QString::fromStdString(seal::diag::joinFields(fields));
@@ -74,9 +74,8 @@ std::string nameMeta(const std::wstring& name)
                                    seal::diag::kv("obs_hint", IsObsCameraName(name))});
 }
 
-// Single source of truth for virtual-camera keywords. Used by
-// ChooseCameraIndexFromNames, IsVirtualCameraName, and BuildCameraPriorityList
-// to avoid duplication and ensure consistent filtering.
+// Virtual-camera keywords used by ChooseCameraIndexFromNames,
+// IsVirtualCameraName, and BuildCameraPriorityList for consistent filtering.
 constexpr std::array<std::wstring_view, 5> kVirtualCameraKeywords = {
     L"camo", L"virtual", L"obs", L"droidcam", L"ndi"};
 
@@ -112,20 +111,17 @@ bool TryGetEnvIndex(const char* key, int& out)
     return false;
 }
 
-// Walk DirectShow's COM device enumerator (CLSID_SystemDeviceEnum) to list
-// all video capture devices by their "FriendlyName" property.
-// Returns one name per device in enumeration order (index 0 = first device).
-// Empty strings are inserted for devices whose name cannot be read so that
-// indices stay aligned with OpenCV's integer camera indices.
+// List video capture devices via DirectShow (CLSID_SystemDeviceEnum) by
+// FriendlyName. Indices match OpenCV's camera indices; unreadable names
+// become empty strings to keep the mapping aligned.
 std::vector<std::wstring> EnumerateVideoDeviceNamesDShow()
 {
     std::vector<std::wstring> names;
 
-    // Try MTA first; if the thread is already STA (e.g. Qt event loop),
-    // CoInitializeEx returns RPC_E_CHANGED_MODE - retry with STA to match.
-    // S_OK  = we initialized COM (must call CoUninitialize).
-    // S_FALSE = COM was already initialized on this thread (do NOT uninitialize,
-    //           or we'll unbalance the reference count for the calling thread).
+    // Try MTA; if the thread is STA (Qt event loop), retry STA so
+    // CoInitializeEx doesn't return RPC_E_CHANGED_MODE.
+    //   S_OK    -> we own the init; must CoUninitialize.
+    //   S_FALSE -> COM was already initialised; DO NOT uninitialize.
     HRESULT hrCo = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (hrCo == RPC_E_CHANGED_MODE)
     {
@@ -186,14 +182,14 @@ std::vector<std::wstring> EnumerateVideoDeviceNamesDShow()
     return names;
 }
 
-// Pick the best camera index using a priority cascade:
-//   1. SEAL_CAMERA_INDEX env var (user override, highest priority)
-//   2. Preferred keyword match (e.g. "razer kiyo") - known-good physical webcams
-//   3. First non-virtual camera (skips OBS, Camo, DroidCam, etc.)
-//   4. Fallback to index 0
+// Priority cascade:
+//   1. SEAL_CAMERA_INDEX env override.
+//   2. Preferred keyword match (e.g. "razer kiyo").
+//   3. First non-virtual camera (skips OBS, Camo, DroidCam, ...).
+//   4. Index 0 as last-resort fallback.
 int ChooseCameraIndexFromNames(const std::vector<std::wstring>& names, bool log)
 {
-    // Priority 1: forced env override
+    // Priority 1: env override.
     if (const char* forced = std::getenv("SEAL_CAMERA_INDEX"))
     {
         char* end = nullptr;
@@ -229,13 +225,11 @@ int ChooseCameraIndexFromNames(const std::vector<std::wstring>& names, bool log)
         }
     }
 
-    // Priority 2: preferred physical cameras by keyword match.
-    // Configurable via SEAL_PREFERRED_CAMERA env var (comma-separated keywords).
-    // If not set, this tier is skipped entirely.
+    // Priority 2: preferred-keyword match (comma-separated
+    // SEAL_PREFERRED_CAMERA). Skipped if unset.
     std::vector<std::wstring> preferredKeywords;
     if (const char* pref = std::getenv("SEAL_PREFERRED_CAMERA"))
     {
-        // Parse comma-separated keywords from the env var.
         std::string raw = pref;
         size_t start = 0;
         while (start < raw.size())
@@ -246,7 +240,6 @@ int ChooseCameraIndexFromNames(const std::vector<std::wstring>& names, bool log)
                 end = raw.size();
             }
             std::string token = raw.substr(start, end - start);
-            // Trim whitespace
             while (!token.empty() && token.front() == ' ')
             {
                 token.erase(token.begin());
@@ -290,8 +283,8 @@ int ChooseCameraIndexFromNames(const std::vector<std::wstring>& names, bool log)
         }
     }
 
-    // Priority 3: first non-virtual camera.
-    // Virtual cameras often produce garbage frames or require special setup.
+    // Priority 3: first non-virtual camera (virtuals often deliver
+    // garbage frames or need special setup).
     for (size_t i = 0; i < names.size(); ++i)
     {
         const std::wstring nameLower = ToLower(names[i]);
@@ -321,7 +314,7 @@ int ChooseCameraIndexFromNames(const std::vector<std::wstring>& names, bool log)
     return 0;
 }
 
-// Heuristic: names containing these keywords are usually software cameras.
+// Heuristic match against keywords used by software cameras.
 bool IsVirtualCameraName(const std::wstring& name)
 {
     const std::wstring nameLower = ToLower(name);
@@ -341,9 +334,8 @@ bool IsObsCameraName(const std::wstring& name)
     return nameLower.find(L"obs") != std::wstring::npos;
 }
 
-// Build a de-duplicated probe order: forced > preferred > physical > virtual > fallback 0-3.
-// The set<int> 'seen' ensures each index appears at most once, even if multiple
-// priority tiers would select the same device.
+// De-duped probe order: forced > preferred > physical > virtual >
+// fallback 0..3. 'seen' guarantees uniqueness across tiers.
 std::vector<int> BuildCameraPriorityList(const std::vector<std::wstring>& names,
                                          int preferredFromNames)
 {
@@ -498,20 +490,19 @@ bool TryOpenCamera(cv::VideoCapture& cap,
     return true;
 }
 
-// Score-based camera ranking. Higher score = better camera.
-//   - Resolution dominates (pixel area / 1000, plus a big bonus for >= 1080p)
-//   - DShow backend bonus (+500): more reliable than MSMF on many UVC devices
-//   - Preferred index bonus (+200): user's or auto-detected favourite camera
+// Higher score = better camera. Resolution dominates (pixel area / 1000 +
+// a large bonus at >= 1080p); +500 for DShow (more reliable than MSMF on
+// UVC); +200 for the preferred index.
 double ScoreCandidate(int index, int w, int h, int preferredIndex, bool backendDshow)
 {
     double score = 0.0;
-    score += (double)w * (double)h / 1000.0;  // base: pixel count
+    score += (double)w * (double)h / 1000.0;  // pixel area
     if (w >= 1900 && h >= 1000)
-        score += 5000.0;  // large bonus for Full HD or higher
+        score += 5000.0;  // Full HD or higher
     if (backendDshow)
-        score += 500.0;  // DShow is more stable than MSMF on most hardware
+        score += 500.0;  // DShow > MSMF on most UVC hardware
     if (index == preferredIndex)
-        score += 200.0;  // slight boost for the user's preferred camera
+        score += 200.0;  // preferred camera boost
     return score;
 }
 
@@ -667,7 +658,7 @@ bool PickBestCamera(cv::VideoCapture& cap, cv::Mat& frame)
         return found;
     };
 
-    // Selection cascade: forced env > preferred name > physical > unknown > virtual.
+    // Cascade: forced env > preferred name > physical > unknown > virtual.
     if (!chooseOk)
     {
         if (hasForcedIndex)
@@ -723,7 +714,7 @@ bool PickBestCamera(cv::VideoCapture& cap, cv::Mat& frame)
         return false;
     }
 
-    // Re-open the chosen camera if it was released during scoring.
+    // Re-open the chosen camera if scoring released it.
     if (!cameraOpenForChosen &&
         !TryOpenCamera(cap, chosen.index, chosen.api, chosen.backend, frame, true))
     {
