@@ -65,7 +65,18 @@ public:
         Platform = Qt::UserRole + 1,  ///< Cleartext service/platform name.
         MaskedUsername,               ///< Fixed asterisk placeholder for username.
         MaskedPassword,               ///< Fixed asterisk placeholder for password.
-        RecordIndex                   ///< Real index for decrypt-on-demand lookups.
+        RecordIndex,                  ///< Real index for decrypt-on-demand lookups.
+        BrandIconPath                 ///< qrc path for the resolved brand icon, or empty.
+    };
+
+    /// @enum SortMode
+    /// @brief Visual ordering for the filtered chip grid.
+    enum class SortMode
+    {
+        Alphabetical = 0,    ///< Platform name A to Z (case-insensitive).
+        ReverseAlpha = 1,    ///< Platform name Z to A (case-insensitive).
+        GroupedByBrand = 2,  ///< Records with a resolved brand icon first, then unbranded, each
+                             ///< group sorted alphabetically.
     };
 
     /// @brief Construct the model with no backing data.
@@ -91,6 +102,13 @@ public:
     /// @param filter Substring to match (empty shows all non-deleted records).
     void setFilter(const QString& filter);
 
+    /// @brief Set the visual ordering applied after filtering.
+    /// @param mode One of the SortMode enum values.
+    Q_INVOKABLE void setSortMode(int mode);
+
+    /// @brief Get the active ordering mode.
+    int sortMode() const;
+
     /// @brief Force a full model reset (re-filter + notify views).
     void refresh();
 
@@ -113,6 +131,7 @@ private:
     uint64_t m_SnapshotGeneration = 0;  ///< Generation at last setRecords(); stale = skip.
     QString m_Filter;
     std::vector<int> m_FilteredIndices;
+    SortMode m_SortMode = SortMode::Alphabetical;
 };
 
 }  // namespace seal
