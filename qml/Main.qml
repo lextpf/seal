@@ -118,6 +118,21 @@ ApplicationWindow {
             accountDlg.initialPassword = data.password;
             accountDlg.open();
         }
+
+        // Browser-bridge diagnose dry-run finished. The summary is a
+        // multi-line per-probe breakdown; reuse the info dialog so we
+        // don't ship a bespoke surface for a tooling shortcut.
+        function onBridgeDiagnoseReady(summary) {
+            infoDialog.title = "Bridge diagnose";
+            infoDialog.message = summary;
+            infoDialog.open();
+        }
+
+        // Diagnose was cancelled (Esc or timeout). If the user happened to
+        // have the info dialog open from a previous run, leave it alone -
+        // there's nothing actionable to do here other than swallow the
+        // signal. setStatus() already updates the footer.
+        function onBridgeDiagnoseCancelled() {}
     }
 
     function openAddAccountDialog() {
@@ -421,12 +436,21 @@ ApplicationWindow {
                 onSearchRequested: function(text) { Backend.searchFilter = text }
             }
 
-            // Toggle-select: clicking the same row deselects it.
-            AccountsTable {
+            // Single-click toggles selection (same row twice deselects).
+            // Double-click skips the ActionBar's Fill button and arms autofill
+            // for the clicked chip directly — power-user shortcut.
+            AccountsGrid {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 visible: !Backend.isCliMode
-                Layout.maximumHeight: Backend.isCompact ? 102 : (1 + 44 + 4 * 48 + 1)
+                // Compact: top/bottom border (1+1) + toolbar (32) + ScrollView's
+                //          symmetric top/bottom padding (14+14) + one chip Item
+                //          (38, includes hover-lift headroom). The Flow's
+                //          `padding` property used to live here but was a silent
+                //          no-op; padding now lives on the ScrollView itself.
+                Layout.maximumHeight: Backend.isCompact
+                                      ? (1 + 32 + 14 + 38 + 14 + 1)
+                                      : (1 + 32 + 4 * 44 + 14 + 14 + 1)
                 model: Backend.vaultModel
                 selectedRow: Backend.selectedIndex
                 searchActive: Backend.searchFilter.length > 0
@@ -435,6 +459,13 @@ ApplicationWindow {
 
                 onRowClicked: function(row) {
                     Backend.selectedIndex = (Backend.selectedIndex === row) ? -1 : row;
+                }
+
+                onRowDoubleClicked: function(row) {
+                    var realIdx = Backend.vaultModel.recordIndexForRow(row);
+                    if (realIdx < 0) return;
+                    Backend.selectedIndex = row;
+                    Backend.armFill(realIdx);
                 }
 
                 onAddAccountRequested: window.openAddAccountDialog()
