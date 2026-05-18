@@ -124,6 +124,10 @@ class Backend : public QObject
     Q_PROPERTY(bool isAlwaysOnTop READ isAlwaysOnTop NOTIFY alwaysOnTopChanged)
     Q_PROPERTY(bool isCompact READ isCompact NOTIFY compactChanged)
     Q_PROPERTY(bool isCliMode READ isCliMode NOTIFY cliModeChanged)
+    Q_PROPERTY(
+        bool bridgeEnabled READ bridgeEnabled WRITE setBridgeEnabled NOTIFY bridgeEnabledChanged)
+    Q_PROPERTY(bool bridgePeerConnected READ bridgePeerConnected NOTIFY bridgePeerConnectedChanged)
+    Q_PROPERTY(QString bridgeStatusText READ bridgeStatusText NOTIFY bridgeStatusTextChanged)
 
 public:
     /// @brief Construct the backend, creating the vault model and fill controller.
@@ -410,6 +414,47 @@ public:
     /// @brief Check whether the CLI panel is active.
     bool isCliMode() const;
 
+    /// @brief Whether the browser bridge is enabled (M8 panic-mode off).
+    bool bridgeEnabled() const;
+
+    /// @brief Whether the bridge currently has a connected peer (the
+    /// browser-companion native-messaging host has completed handshake
+    /// and the pipe is open). Drives the chip's "actually working"
+    /// indicator: enabled-but-disconnected and enabled-but-no-extension
+    /// states must NOT light up green.
+    bool bridgePeerConnected() const;
+
+    /// @brief Toggle the browser bridge on/off (M8 panic mode).
+    /// @param enabled true to allow extension reports, false to disable.
+    Q_INVOKABLE void setBridgeEnabled(bool enabled);
+
+    /// @brief Human-readable bridge status for the settings panel.
+    QString bridgeStatusText() const;
+
+    /// @brief Install the browser-companion native-messaging manifest (HKCU).
+    ///
+    /// Wraps CliModes::installBrowserExtensionInternal so the QML settings
+    /// surface invokes the same code path as the install-browser-extension
+    /// CLI subcommand.
+    Q_INVOKABLE void runInstallBrowserExtension();
+
+    /// @brief Remove the browser-companion native-messaging manifest (HKCU).
+    Q_INVOKABLE void runUninstallBrowserExtension();
+
+    /// @brief Arm the FillController in dry-run "diagnose" mode.
+    ///
+    /// The next Ctrl+Click anywhere on screen runs the full probe pipeline
+    /// (browser bridge + Win32 + UIA + IME) without decrypting any
+    /// credential or sending any keystrokes, then emits @ref
+    /// bridgeDiagnoseReady with a human-readable per-probe summary the
+    /// UI can show in a dialog. Useful for verifying the browser
+    /// extension is reporting click positions correctly through the
+    /// bridge.
+    ///
+    /// Esc or a 30-second timeout cancels the diagnose without firing
+    /// the ready signal.
+    Q_INVOKABLE void runBridgeDiagnose();
+
 signals:
     void vaultLoadedChanged();    ///< Vault open/close state changed.
     void vaultFileNameChanged();  ///< Vault file name changed.
@@ -464,6 +509,18 @@ signals:
     void alwaysOnTopChanged();           ///< Always-on-top toggled.
     void compactChanged();               ///< Compact mode toggled.
     void cliModeChanged();               ///< CLI mode toggled.
+    void bridgeEnabledChanged();         ///< Browser bridge enabled/disabled.
+    void bridgePeerConnectedChanged();   ///< Bridge peer connect/disconnect edge.
+    void bridgeStatusTextChanged();      ///< Bridge status text updated.
+
+    /// @brief Diagnose dry-run finished; @p summary holds the per-probe
+    /// breakdown. QML can show it in a dialog or copy it to the
+    /// clipboard for sharing.
+    void bridgeDiagnoseReady(const QString& summary);
+
+    /// @brief Diagnose dry-run was cancelled (Esc or timeout). The QML
+    /// listener should close any pending diagnose dialog.
+    void bridgeDiagnoseCancelled();
 
     /// @brief Output text from CLI command execution.
     /// @param text The output line to display in the CLI panel.
@@ -551,8 +608,11 @@ private:
 
     std::function<void()> m_PendingAction;  ///< Action deferred until password is entered.
 
-    VaultListModel* m_Model = nullptr;               ///< Vault list model for QML binding.
-    FillController* m_FillController = nullptr;      ///< Auto-fill hook controller.
+    VaultListModel* m_Model = nullptr;           ///< Vault list model for QML binding.
+    FillController* m_FillController = nullptr;  ///< Auto-fill hook controller.
+
+    QTimer m_BridgePeerPoll;           ///< Polls bridge peer-connected state (1 Hz).
+    bool m_LastPeerConnected = false;  ///< Last observed peer-connected level, for edge detection.
     WindowController* m_WindowController = nullptr;  ///< Window chrome controller.
 
     seal::basic_secure_string<wchar_t> m_Password;  ///< Master password in locked memory.
@@ -575,6 +635,7 @@ private:
     bool m_CliMode = false;                          ///< CLI panel active.
     bool m_CliWelcomeShown = false;                  ///< Welcome banner shown once.
     QThread* m_QrThread = nullptr;                   ///< Active QR capture worker thread.
+    QString m_BridgeStatusText;                      ///< Last bridge action result for QML.
 };
 
 }  // namespace seal

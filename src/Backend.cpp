@@ -4,6 +4,7 @@
 
 #include "CliDispatch.hpp"
 #include "CliHandler.hpp"
+#include "CliModes.hpp"
 #include "Clipboard.hpp"
 #include "Diagnostics.hpp"
 #include "FileOperations.hpp"
@@ -20,6 +21,7 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
+#include <QtCore/QSettings>
 #include <QtCore/QString>
 #include <QtCore/QThread>
 #include <QtCore/QTimer>
@@ -50,9 +52,8 @@ basic_secure_string<wchar_t, locked_allocator<wchar_t>> Backend::qstringToSecure
     if (qstr.isEmpty())
         return result;
 
-    // Copy directly from the QString internal buffer into locked (non-pageable)
-    // memory, avoiding the intermediate heap-allocated std::wstring that
-    // toStdWString() would create. On Windows sizeof(wchar_t) == sizeof(QChar).
+    // Copy directly into locked memory; toStdWString() would heap-allocate
+    // an intermediate plaintext std::wstring. wchar_t==QChar on Windows.
     static_assert(sizeof(wchar_t) == sizeof(QChar), "wchar_t/QChar size mismatch");
     const auto* src = reinterpret_cast<const wchar_t*>(qstr.data());
     result.s.assign(src, src + qstr.size());
@@ -86,8 +87,7 @@ Backend::Backend(QObject* parent)
             &Backend::fillCountdownSecondsChanged);
 
     // Fill complete/cancel: stay minimized so seal doesn't steal focus from
-    // the app the user fills credentials into. Only restore on error
-    // so the user can see what went wrong.
+    // the target app. Only restore on error so the user sees what went wrong.
     connect(m_FillController,
             &FillController::fillCompleted,
             this,
@@ -119,6 +119,61 @@ Backend::Backend(QObject* parent)
                 m_DPAPIGuard.reprotect();
                 setStatus("Fill cancelled");
             });
+
+    // Diagnose dry-run: forward the summary up to QML. No DPAPI re-protect
+    // is needed because diagnose never touches the master password.
+    connect(m_FillController,
+            &FillController::diagnoseCompleted,
+            this,
+            [this](const QString& summary)
+            {
+                setStatus("Bridge diagnose complete");
+                emit bridgeDiagnoseReady(summary);
+            });
+    connect(m_FillController,
+            &FillController::diagnoseCancelled,
+            this,
+            [this]()
+            {
+                setStatus("Bridge diagnose cancelled");
+                emit bridgeDiagnoseCancelled();
+            });
+
+    // Restore persisted bridge enablement (M8). Default true; QSettings
+    // resolves to HKCU\Software\seal\seal via QmlMain. enableBridge() starts
+    // the pipe immediately (not only on arm) so the extension can connect at
+    // launch -- otherwise its reconnect backoff can stall the first fill by
+    // ~60 s.
+    QSettings settings;
+    const bool bridgeEnabledPref = settings.value("bridge/enabled", true).toBool();
+    if (bridgeEnabledPref)
+    {
+        m_FillController->enableBridge();
+    }
+    else
+    {
+        m_FillController->disableBridge();
+    }
+
+    // BrowserBridge isn't a QObject, so poll its peer-connected atomic at
+    // 1 Hz and convert level changes into bridgePeerConnectedChanged. The
+    // QML chip lights green only after a real handshake; the underlying
+    // atomic still flips immediately on connect/disconnect.
+    m_LastPeerConnected = m_FillController->isBridgePeerConnected();
+    m_BridgePeerPoll.setInterval(1000);
+    connect(&m_BridgePeerPoll,
+            &QTimer::timeout,
+            this,
+            [this]()
+            {
+                const bool now = m_FillController->isBridgePeerConnected();
+                if (now != m_LastPeerConnected)
+                {
+                    m_LastPeerConnected = now;
+                    emit bridgePeerConnectedChanged();
+                }
+            });
+    m_BridgePeerPoll.start();
 }
 
 Backend::~Backend()
@@ -215,14 +270,101 @@ int Backend::fillCountdownSeconds() const
     return m_FillController->countdownSeconds();
 }
 
+// ---------------------------------------------------------------------------
+// Browser bridge (M8 panic-mode toggle + install helpers)
+// ---------------------------------------------------------------------------
+
+bool Backend::bridgeEnabled() const
+{
+    return m_FillController->isBridgeEnabled();
+}
+
+bool Backend::bridgePeerConnected() const
+{
+    return m_FillController->isBridgePeerConnected();
+}
+
+void Backend::setBridgeEnabled(bool enabled)
+{
+    const bool was = m_FillController->isBridgeEnabled();
+    if (was == enabled)
+    {
+        return;
+    }
+    if (enabled)
+    {
+        m_FillController->enableBridge();
+    }
+    else
+    {
+        m_FillController->disableBridge();
+    }
+
+    // Persist preference -- QSettings resolves to HKCU\Software\seal\seal
+    // (org/app names set in QmlMain).
+    QSettings settings;
+    settings.setValue("bridge/enabled", enabled);
+
+    emit bridgeEnabledChanged();
+}
+
+QString Backend::bridgeStatusText() const
+{
+    return m_BridgeStatusText;
+}
+
+void Backend::runInstallBrowserExtension()
+{
+    std::string message;
+    const int rc = seal::installBrowserExtensionInternal(&message);
+    m_BridgeStatusText = QString::fromStdString(message);
+    emit bridgeStatusTextChanged();
+    if (rc == 0)
+    {
+        emit infoMessage(QStringLiteral("Browser companion"), m_BridgeStatusText);
+    }
+    else
+    {
+        emit errorOccurred(QStringLiteral("Browser companion"), m_BridgeStatusText);
+    }
+}
+
+void Backend::runUninstallBrowserExtension()
+{
+    std::string message;
+    const int rc = seal::uninstallBrowserExtensionInternal(&message);
+    m_BridgeStatusText = QString::fromStdString(message);
+    emit bridgeStatusTextChanged();
+    if (rc == 0)
+    {
+        emit infoMessage(QStringLiteral("Browser companion"), m_BridgeStatusText);
+    }
+    else
+    {
+        emit errorOccurred(QStringLiteral("Browser companion"), m_BridgeStatusText);
+    }
+}
+
+void Backend::runBridgeDiagnose()
+{
+    // Diagnose never touches the master password, so deliberately skip
+    // ensurePassword() -- user can run this with a locked vault.
+    if (!m_FillController->armDiagnose())
+    {
+        emit errorOccurred(QStringLiteral("Bridge diagnose"),
+                           QStringLiteral("Failed to install input hooks"));
+        return;
+    }
+    setStatus("Ctrl+Click any field to test field detection (30s)");
+}
+
 bool Backend::ensurePassword()
 {
     if (m_PasswordSet)
         return true;
 
-    // Signal the QML layer to show the password dialog.
-    // The caller should have already stashed a lambda in m_PendingAction
-    // so submitPassword() can resume the operation once the user enters it.
+    // Signal QML to show the password dialog. Caller must have stashed a
+    // lambda in m_PendingAction so submitPassword() can resume.
     emit passwordRequired();
     return false;
 }
@@ -233,9 +375,8 @@ void Backend::submitPassword(QString password)
     // Wipe the input QString to reduce plaintext residency in pageable memory.
     password.fill(QChar(0));
     m_Password = std::move(wide);
-    // Wrap the password in a DPAPI guard: when "protected", the memory is
-    // encrypted in-place by the OS, making it unreadable even if the process
-    // memory is dumped.
+    // Wrap in a DPAPI guard: while "protected", the OS encrypts the memory
+    // in-place so a process dump cannot read it.
     m_DPAPIGuard = seal::DPAPIGuard<seal::basic_secure_string<wchar_t>>(&m_Password);
     m_PasswordSet = true;
     qCInfo(logBackend).noquote() << QString::fromStdString(
@@ -246,9 +387,8 @@ void Backend::submitPassword(QString password)
     setStatus("Password set");
     emit passwordSetChanged();
 
-    // Resume the action that was waiting for a password (e.g. loadVault, addAccount).
-    // The pending-action pattern: callers stash a lambda in m_PendingAction
-    // before triggering the password dialog.
+    // Resume the pending-action lambda (loadVault, addAccount, ...).
+    // Callers stash it in m_PendingAction before triggering the dialog.
     if (m_PendingAction)
     {
         auto action = std::move(m_PendingAction);
@@ -262,7 +402,6 @@ void Backend::requestQrCapture()
     const std::string opId = seal::diag::nextOpId("qr_capture");
     const auto started = std::chrono::steady_clock::now();
 
-    // If a QR capture is already running, don't start another one.
     if (m_QrThread && m_QrThread->isRunning())
     {
         qCWarning(logBackend).noquote()
@@ -273,26 +412,21 @@ void Backend::requestQrCapture()
         return;
     }
 
-    // AllowSetForegroundWindow(ASFW_ANY) grants any process permission to
-    // steal foreground focus. Without this, the QR scanner's OpenCV window
-    // would open behind our window because Windows blocks background
-    // processes from taking the foreground.
+    // ASFW_ANY lets any process take the foreground; without it, the QR
+    // scanner's OpenCV window would open behind ours.
     AllowSetForegroundWindow(ASFW_ANY);
 
     qCInfo(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
         {"event=qr.capture.begin", "result=start", seal::diag::kv("op", opId), "worker=true"}));
 
-    // Run the blocking OpenCV capture on a worker thread so the Qt event
-    // loop stays responsive. captureQrFromWebcam() can block for up to
-    // 60 seconds (capture timeout); doing that on the GUI thread would
-    // freeze the entire UI.
+    // Run captureQrFromWebcam() on a worker thread; it can block for up
+    // to 60 s, which would freeze the UI if done on the GUI thread.
     m_QrThread = QThread::create(
         [this, opId, started]()
         {
             seal::secure_string<> qrResult = seal::captureQrFromWebcam();
 
-            // Deliver the result back to the GUI thread via a queued invocation
-            // so all signal emissions happen on the correct thread.
+            // Queued invocation keeps all signal emissions on the GUI thread.
             QMetaObject::invokeMethod(
                 this,
                 [this, opId, started, result = std::move(qrResult)]() mutable
@@ -312,8 +446,8 @@ void Backend::requestQrCapture()
                         return;
                     }
 
-                    // Convert the UTF-8 QR result to a QString for pre-filling the
-                    // password dialog. Don't set m_Password yet - let the user confirm.
+                    // Pre-fill the password dialog with the QR text; don't
+                    // commit to m_Password yet -- let the user confirm.
                     QString captured = QString::fromUtf8(result.data(), (int)result.size());
                     // result auto-wipes on scope exit
 
@@ -327,18 +461,17 @@ void Backend::requestQrCapture()
                     setStatus("QR captured - confirm password");
                     emit qrCaptureFinished(true);
 
-                    // Signal the QML layer to re-open the password dialog with the
-                    // captured text pre-filled.
+                    // Re-open the password dialog with the captured text.
                     emit qrTextReady(captured);
 
-                    // Wipe the local QString copy so the raw QR text doesn't linger
-                    // on the heap after the signal delivers it to QML.
+                    // Wipe the local copy so the QR text doesn't linger in
+                    // the heap after QML receives its copy.
                     captured.fill(QChar(0));
                 },
                 Qt::QueuedConnection);
         });
 
-    // Null out the member when the thread finishes so we know it's done.
+    // Null the member on thread finish so we know it's done.
     connect(m_QrThread,
             &QThread::finished,
             this,
@@ -379,8 +512,8 @@ void Backend::loadVaultFromPath(const QString& filePath, bool isAutoLoad)
     const auto started = std::chrono::steady_clock::now();
     const std::string pathMeta = seal::diag::pathSummary(filePath.toUtf8().toStdString());
 
-    // Cancel any active fill before replacing the records vector,
-    // otherwise FillController's borrowed pointer to m_Records would dangle.
+    // Cancel any active fill before swapping m_Records; otherwise
+    // FillController's borrowed pointer dangles.
     cancelFillIfArmed();
     qCInfo(logBackend).noquote() << QString::fromStdString(
         seal::diag::joinFields({"event=vault.load.begin",
@@ -414,12 +547,9 @@ void Backend::loadVaultFromPath(const QString& filePath, bool isAutoLoad)
     {
         if (std::string(e.what()) == "Wrong password")
         {
-            // Wrong-password retry flow:
-            // 1. Destroy the DPAPI guard and wipe the bad password.
-            // 2. Clear passwordSet so the UI knows no valid key is loaded.
-            // 3. Stash a lambda that re-attempts this same load once the
-            //    user enters a new password (the pending-action pattern).
-            // 4. Signal QML to re-show the password dialog with an error hint.
+            // Wrong-password retry: drop the guard, wipe the bad password,
+            // clear passwordSet, stash a pending-action lambda to redo this
+            // load, and signal QML to re-show the dialog with an error hint.
             qCWarning(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
                 {"event=vault.load.finish",
                  "result=retry",
@@ -449,9 +579,8 @@ void Backend::loadVaultFromPath(const QString& filePath, bool isAutoLoad)
 
 void Backend::loadVault()
 {
-    // Defer to password dialog if the master key isn't available yet.
-    // The lambda captures `this` and re-invokes loadVault() once the
-    // user supplies the password.
+    // Defer to the password dialog; the lambda re-invokes loadVault()
+    // once the user supplies the password.
     if (!m_PasswordSet)
     {
         m_PendingAction = [this]() { loadVault(); };
@@ -503,8 +632,7 @@ void Backend::saveVault()
     {
         m_CurrentVaultPath = fileName;
 
-        // Clear dirty flags and purge soft-deleted records now that
-        // they've been committed to disk.
+        // Records are now on disk: clear dirty flags, purge soft-deletes.
         for (auto& rec : m_Records)
             rec.dirty = false;
         cancelFillIfArmed();
@@ -536,8 +664,8 @@ void Backend::saveVault()
 
 void Backend::unloadVault()
 {
-    // Cancel any active fill before clearing records, otherwise
-    // FillController's borrowed pointer to m_Records would dangle.
+    // Cancel any active fill so FillController's borrowed pointer to
+    // m_Records does not dangle once we clear.
     cancelFillIfArmed();
     qCInfo(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
         {"event=vault.unload", "result=ok", seal::diag::kv("record_count", m_Records.size())}));
@@ -560,19 +688,18 @@ void Backend::addAccount(const QString& service, const QString& username, const 
 
     if (!m_PasswordSet)
     {
-        // Convert credentials to locked-page memory before capture so
-        // plaintext doesn't sit in pageable heap while the password dialog
-        // is open. shared_ptr makes the lambda copyable (std::function
-        // requires it) while keeping the secret in a single locked allocation.
+        // Move credentials into locked-page memory before the dialog opens
+        // so plaintext doesn't sit in pageable heap. shared_ptr makes the
+        // lambda std::function-copyable without duplicating the secret.
         auto secUser =
             std::make_shared<seal::basic_secure_string<wchar_t>>(qstringToSecureWide(username));
         auto secPass =
             std::make_shared<seal::basic_secure_string<wchar_t>>(qstringToSecureWide(password));
         m_PendingAction = [this, service, secUser, secPass]()
         {
-            // Encrypt directly from locked memory - no round-trip through
-            // pageable QString.  The shared_ptrs keep the secure strings
-            // alive across the std::function copy boundary.
+            // Encrypt directly from locked memory -- no pageable-QString
+            // round-trip. shared_ptrs keep the secrets alive across the
+            // std::function copy boundary.
             cancelFillIfArmed();
             ScopedDpapiUnprotect dpapiScope(m_DPAPIGuard);
             seal::VaultRecord newRecord = seal::encryptCredential(
@@ -595,8 +722,7 @@ void Backend::addAccount(const QString& service, const QString& username, const 
         return;
     }
 
-    // Convert to locked-page wide strings so plaintext doesn't sit in
-    // pageable memory any longer than necessary.
+    // Locked-page wide strings minimise plaintext residency.
     auto secUsername = qstringToSecureWide(username);
     auto secPassword = qstringToSecureWide(password);
 
@@ -637,10 +763,9 @@ void Backend::editAccount(int index,
 
     if (!m_PasswordSet)
     {
-        // Capture only the index (not username/password) to avoid holding
-        // plaintext credentials in pageable heap memory. After the master
-        // password is entered, re-decrypt and re-show the edit dialog so
-        // the user can re-enter their changes.
+        // Capture only the index, not the credentials, so plaintext does
+        // not sit in pageable heap while the dialog is open. After the
+        // master password arrives, re-decrypt and re-open the edit dialog.
         m_PendingAction = [this, index]()
         {
             QVariantMap data = decryptAccountForEdit(index);
@@ -654,7 +779,7 @@ void Backend::editAccount(int index,
     auto secUsername = qstringToSecureWide(username);
     auto secPassword = qstringToSecureWide(password);
 
-    // Replace the record entirely - re-encrypt with a fresh salt/IV.
+    // Replace the record entirely -- fresh salt/IV on re-encrypt.
     cancelFillIfArmed();
     ScopedDpapiUnprotect dpapiScope(m_DPAPIGuard);
     m_Records[index] = seal::encryptCredential(
@@ -677,8 +802,8 @@ void Backend::deleteAccount(int index)
     if (index < 0 || index >= (int)m_Records.size())
         return;
 
-    // Soft-delete, flag the record so it's excluded from the model
-    // immediately, but keep it around until saveVault() commits to disk.
+    // Soft-delete: hide from the model immediately but keep the record
+    // until saveVault() commits to disk.
     cancelFillIfArmed();
     m_Records[index].deleted = true;
     m_Records[index].dirty = true;
@@ -691,8 +816,7 @@ void Backend::deleteAccount(int index)
     refreshModel();
     setStatus("Account deleted");
 
-    // If every record is now deleted, notify QML so it can show the
-    // empty-vault state.
+    // If nothing visible remains, notify QML to render the empty state.
     bool anyVisible = false;
     for (const auto& rec : m_Records)
     {
@@ -717,8 +841,8 @@ QVariantMap Backend::decryptAccountForEdit(int index)
     if (index < 0 || index >= (int)m_Records.size())
         return result;
 
-    // If no password yet, defer the decrypt and deliver the result
-    // asynchronously via editAccountReady once the user enters it.
+    // No password yet -- defer the decrypt; deliver via editAccountReady
+    // once the user supplies one.
     if (!m_PasswordSet)
     {
         m_PendingAction = [this, index]()
@@ -749,8 +873,8 @@ QVariantMap Backend::decryptAccountForEdit(int index)
                 data["editIndex"] = index;
                 cred.cleanse();
                 emit editAccountReady(data);
-                // Null-fill the QStrings so plaintext doesn't linger in
-                // Qt's Copy-On-Write heap after the signal delivers copies to QML.
+                // Null-fill so plaintext doesn't linger in Qt's COW heap
+                // once QML has received its copies.
                 data["username"] = QString();
                 data["password"] = QString();
             }
@@ -772,7 +896,7 @@ QVariantMap Backend::decryptAccountForEdit(int index)
 
     try
     {
-        // On-demand decrypt - credential blob stays encrypted at rest.
+        // On-demand decrypt; the blob stays encrypted at rest.
         const seal::VaultRecord& record = m_Records[index];
         ScopedDpapiUnprotect dpapiScope(m_DPAPIGuard);
         seal::DecryptedCredential cred = seal::decryptCredentialOnDemand(record, m_Password);
@@ -795,20 +919,17 @@ QVariantMap Backend::decryptAccountForEdit(int index)
              seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what()))}));
         emit errorOccurred("Error", QString("Failed to decrypt credential: %1").arg(e.what()));
     }
-    // Caller (Main.qml) copies username/password into dialog properties,
-    // not wipeable, but short-lived. The dialog's onClosed handler
-    // clears its own copies (see AccountDialog.qml).
+    // Main.qml copies these into dialog properties (not wipeable, but
+    // short-lived); AccountDialog.qml clears its copies in onClosed.
     return result;
 }
 
-// Delays used in doTypeLogin to give the target application time to process
-// input between the username keystrokes, the Tab key, and the password.
+// Settle delays between username keystrokes, Tab, and password keystrokes.
 constexpr DWORD kFieldSettleDelayMs = 200;   // Wait for target field to process username
 constexpr DWORD kTabKeySettleDelayMs = 100;  // Wait for Tab to advance focus
 
-// Types username + tab + password into the currently focused window.
-// Takes a snapshot of the record and password so the worker thread
-// never touches Backend's shared state.
+// Types username + Tab + password into the focused window. Works on
+// snapshots so the worker never touches Backend's shared state.
 static bool doTypeLogin(
     const seal::VaultRecord& record,
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPw)
@@ -842,13 +963,11 @@ static bool doTypeLogin(
         return false;
     }
 
-    // Brief pause so the target field registers the username keystrokes
-    // before we send Tab to advance to the password field.
+    // Let the target field register the username before Tab.
     Sleep(kFieldSettleDelayMs);
 
-    // Synthesize a Tab key-down + key-up via SendInput to move focus to
-    // the password field. SendInput injects hardware-level events into the
-    // input stream, which works even when the target app ignores WM_CHAR.
+    // Tab down + up via SendInput; injects hardware-level events that work
+    // even on apps that ignore WM_CHAR.
     INPUT tabInput[2] = {};
     tabInput[0].type = INPUT_KEYBOARD;
     tabInput[0].ki.wVk = VK_TAB;
@@ -863,9 +982,8 @@ static bool doTypeLogin(
     return success2;
 }
 
-// Types only the password into the currently focused window.
-// Takes a snapshot of the record and password so the worker thread
-// never touches Backend's shared state.
+// Types only the password into the focused window. Same snapshot
+// discipline as doTypeLogin so the worker stays off Backend's state.
 static bool doTypePassword(
     const seal::VaultRecord& record,
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPw)
@@ -930,8 +1048,8 @@ void Backend::typePassword(int index)
 
 void Backend::scheduleTypingAction(int index, TypingMode mode, const QString& label)
 {
-    // Callers (typeLogin, typePassword) guard with `if (m_Busy) return;`
-    // before reaching this point, so overlapping timers cannot occur.
+    // Callers (typeLogin, typePassword) early-return on m_Busy; no
+    // overlapping timers can reach this point.
     Q_ASSERT(!m_Busy);
     m_Busy = true;
     emit busyChanged();
@@ -948,8 +1066,8 @@ void Backend::scheduleTypingAction(int index, TypingMode mode, const QString& la
                                 seal::diag::kv("index", index),
                                 "countdown_s=3"}));
 
-    // 3-second countdown gives the user time to focus the target field
-    // in the external application before keystrokes start arriving.
+    // 3 s countdown lets the user focus the target field before
+    // keystrokes start arriving.
     int remaining = 3;
     m_CountdownText = QString("Typing in %1...").arg(remaining);
     emit countdownTextChanged();
@@ -996,14 +1114,11 @@ void Backend::scheduleTypingAction(int index, TypingMode mode, const QString& la
 
                 QString service = QString::fromUtf8(m_Records[index].platform.c_str());
 
-                // Run the blocking typing sequence on a worker thread so
-                // the GUI event loop stays responsive during Sleep() calls
-                // between username, Tab, and password keystrokes.
-                //
-                // Snapshot the record and password into the worker's captures
-                // so the thread never touches m_Records or m_Password directly.
-                // The GUI thread could process events that mutate those members
-                // while the worker is running.
+                // Run the typing sequence on a worker so the GUI loop stays
+                // responsive across the Sleep() calls between keystrokes.
+                // Snapshot record and password into the worker's captures
+                // because the GUI thread may mutate m_Records / m_Password
+                // while we run.
                 m_DPAPIGuard.unprotect();
                 try
                 {
@@ -1137,8 +1252,7 @@ void Backend::autoLoadVault()
     if (!m_CurrentVaultPath.isEmpty())
         return;
 
-    // Search for a .seal vault file in well-known locations, in priority order:
-    // 1. Next to the executable   2. Current working directory   3. Home directory
+    // Search for a .seal file: exe dir, then cwd, then home (priority order).
     QStringList searchPaths;
     searchPaths << QCoreApplication::applicationDirPath() << QDir::currentPath()
                 << QDir::homePath();
@@ -1172,8 +1286,7 @@ void Backend::autoLoadVault()
                                 seal::diag::pathSummary(foundVaultPath.toUtf8().toStdString())}));
     if (!m_PasswordSet)
     {
-        // Capture the discovered path so the deferred action can load it
-        // after the user supplies the master password.
+        // Capture the discovered path for the deferred load.
         m_PendingAction = [this, foundVaultPath]() { loadVaultFromPath(foundVaultPath, true); };
         ensurePassword();
         return;
@@ -1210,8 +1323,8 @@ void Backend::armFill(int index)
     }
     if (!armed)
     {
-        // If hook install failed, don't apply "armed" UI state/minimize behavior.
-        // fillError may already have reprotected, but this is harmless if unchanged.
+        // Hook install failed -- skip the armed UI / minimize. fillError
+        // may already have reprotected; calling again is harmless.
         m_DPAPIGuard.reprotect();
         qCWarning(logBackend).noquote()
             << QString::fromStdString(seal::diag::joinFields({"event=fill.arm.finish",
@@ -1227,11 +1340,10 @@ void Backend::armFill(int index)
                                 seal::diag::kv("generation", m_RecordsGeneration)}));
     setStatus("Fill armed - Ctrl+Click target field");
 
-    // Safety net: reprotect the DPAPI guard after a generous window even if
-    // the fill completion signals are somehow never delivered. The fill
-    // controller's 30s timeout should always fire cancel -> fillCancelled ->
-    // reprotect(), but this ensures the password isn't left unprotected
-    // indefinitely in case signal dispatch fails.
+    // Safety net: reprotect the DPAPI guard even if fill completion signals
+    // never arrive. FillController's 30 s timeout normally triggers cancel
+    // -> fillCancelled -> reprotect(); this guards against signal-dispatch
+    // failure leaving the password unprotected.
     static constexpr int DPAPI_SAFETY_NET_MS = 60000;  // 60 seconds
     QTimer::singleShot(DPAPI_SAFETY_NET_MS,
                        this,
@@ -1243,8 +1355,8 @@ void Backend::armFill(int index)
                            }
                        });
 
-    // Minimize so the user can see and click the target application.
-    // Stays minimized after fill completes or is cancelled; only restored on error.
+    // Minimize so the target app is visible/clickable. Stays minimized
+    // after complete/cancel; restored only on error.
     for (QWindow* w : QGuiApplication::topLevelWindows())
     {
         if (w->isVisible())
@@ -1267,9 +1379,8 @@ void Backend::cleanup()
     qCInfo(logBackend).noquote() << QString::fromStdString(
         seal::diag::joinFields({"event=app.cleanup.begin", "result=start"}));
 
-    // Wait for any active QR capture thread to finish before destroying
-    // members it may reference. Without this, the thread could call
-    // QMetaObject::invokeMethod(this, ...) on a dangling pointer.
+    // Wait for any active QR thread to finish before destroying members
+    // it references; otherwise its invokeMethod hits a dangling pointer.
     if (m_QrThread && m_QrThread->isRunning())
     {
         qCInfo(logBackend).noquote() << QString::fromStdString(
@@ -1286,8 +1397,7 @@ void Backend::cleanup()
 
     m_FillController->cancel();
 
-    // If the user configured an auto-encrypt directory, encrypt it now
-    // before we wipe the master password.
+    // Auto-encrypt the configured directory before wiping the password.
     if (!m_AutoEncryptDirectory.isEmpty() && m_PasswordSet)
     {
         try
@@ -1311,8 +1421,7 @@ void Backend::cleanup()
         }
     }
 
-    // Wipe the master password from locked memory so it doesn't persist
-    // after the application exits.
+    // Wipe the master password from locked memory before exit.
     if (m_PasswordSet)
     {
         m_DPAPIGuard = {};
@@ -1530,7 +1639,7 @@ void Backend::handleQrResultForCli(const QString& text)
                                 seal::diag::kv("payload_len", text.size()),
                                 "copied=true"}));
     seal::Cryptography::cleanseString(narrow);
-    // Mask the QR text in CLI output - value is on the clipboard (TTL-scrubbed).
+    // Mask QR text in the CLI -- value lands on the clipboard (TTL-scrubbed).
     emit cliOutputReady(
         QString("(QR captured) %1  [copied]").arg(QString(text.size(), QChar('*'))));
 }
