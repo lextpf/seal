@@ -103,9 +103,13 @@ struct LogSegments
  * `[timestamp] [level] [category] [tid=threadId] message\n`
  *
  * Timestamp and thread-id brackets are dimmed; the category is tinted
- * magenta; the level bracket uses @p levelTone. For Warning and Error
- * tones the message body is also tinted so the full line reads as a
- * single alert; other tones leave the message in the default colour.
+ * with a per-category colour (so e.g. `[vault]` and `[bridge]` are
+ * visually distinguishable at a glance even though they sit in the
+ * same position on every line); the level bracket uses @p levelTone.
+ * For Warning and Error tones the message body is also tinted so the
+ * full line reads as a single alert; other tones leave the message in
+ * the default colour. Unrecognised categories fall back to bright
+ * magenta.
  *
  * @param os        Destination stream (typically `std::cerr`).
  * @param levelTone Colour for the `[level]` bracket and warn/error messages.

@@ -31,18 +31,24 @@ StreamState& stateFor(std::ostream& os)
                    });
 
     if (&os == &std::cout)
+    {
         return stdoutState;
+    }
     return stderrState;
 }
 
 void initialize(StreamState& state)
 {
     if (state.handle == INVALID_HANDLE_VALUE || state.handle == nullptr)
+    {
         return;
+    }
 
     DWORD mode = 0;
     if (!GetConsoleMode(state.handle, &mode))
+    {
         return;
+    }
 
     if (!(mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING))
     {
@@ -80,6 +86,50 @@ const char* codeFor(seal::console::Tone tone)
     }
 }
 
+// Per-category ANSI foreground colour so 9 subsystems are distinguishable
+// at a glance in a tail. Unknown categories fall back to bright magenta
+// (the pre-change default), preserving behaviour for non-seal callers.
+const char* categoryColor(std::string_view cat)
+{
+    if (cat == "backend")
+    {
+        return "\x1b[95m";  // bright magenta -- QML bridge / central event hub
+    }
+    if (cat == "vault")
+    {
+        return "\x1b[93m";  // bright yellow -- vault data
+    }
+    if (cat == "crypto")
+    {
+        return "\x1b[92m";  // bright green -- security primitives
+    }
+    if (cat == "fill")
+    {
+        return "\x1b[94m";  // bright blue -- autofill action
+    }
+    if (cat == "bridge")
+    {
+        return "\x1b[33m";  // dark yellow -- browser bridge (distinct from vault)
+    }
+    if (cat == "file")
+    {
+        return "\x1b[36m";  // cyan -- file I/O
+    }
+    if (cat == "app")
+    {
+        return "\x1b[97m";  // bright white -- application lifecycle (distinct from INF cyan)
+    }
+    if (cat == "camera")
+    {
+        return "\x1b[91m";  // bright red -- camera enumeration
+    }
+    if (cat == "qr")
+    {
+        return "\x1b[35m";  // dark magenta -- QR capture
+    }
+    return "\x1b[95m";  // default: bright magenta (pre-change behaviour)
+}
+
 }  // namespace
 
 namespace seal::console
@@ -115,7 +165,9 @@ void writeTagged(std::ostream& os, Tone tone, std::string_view tag, std::string_
     }
 
     if (!text.empty())
+    {
         os << ' ' << text;
+    }
     os << '\n';
 }
 
@@ -126,7 +178,8 @@ void writeLogLine(std::ostream& os, Tone levelTone, const LogSegments& segs)
 
     const bool color = state.colorEnabled;
     const char* dim = color ? "\x1b[90m" : "";
-    const char* accent = color ? "\x1b[95m" : "";
+    // Per-category accent colour; unknown categories -> bright magenta.
+    const char* accent = color ? categoryColor(segs.category) : "";
     const char* lvl = color ? codeFor(levelTone) : "";
     const char* reset = color ? "\x1b[0m" : "";
     const bool tintMsg = color && (levelTone == Tone::Warning || levelTone == Tone::Error);
@@ -135,10 +188,14 @@ void writeLogLine(std::ostream& os, Tone levelTone, const LogSegments& segs)
        << reset << ' ' << accent << '[' << segs.category << ']' << reset << ' ' << dim
        << "[tid=" << segs.threadId << ']' << reset << ' ';
     if (tintMsg)
+    {
         os << lvl;
+    }
     os << segs.message;
     if (tintMsg)
+    {
         os << reset;
+    }
     os << '\n';
 }
 
