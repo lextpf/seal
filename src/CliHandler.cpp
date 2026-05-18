@@ -156,7 +156,7 @@ bool HandleCliBuiltin(const QString& command, const CliCallbacks& cb)
         return true;
     }
 
-    // Command not handled - requires master password (crypto dispatch).
+    // Unhandled -- requires master password (crypto dispatch).
     return false;
 }
 
