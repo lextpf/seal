@@ -26,10 +26,9 @@ bool TitleBarFilter::nativeEventFilter(const QByteArray& eventType, void* messag
     {
         case WM_NCCALCSIZE:
         {
-            // Claim the entire window as client area on both NCCALCSIZE paths.
-            // Some frame recalculations arrive with wParam == FALSE; letting
-            // DefWindowProc handle those leaves a 1px visible frame around the
-            // custom chrome.
+            // Claim the entire window as client area on both NCCALCSIZE
+            // paths. The wParam==FALSE branch matters: letting DefWindowProc
+            // handle it leaves a 1px visible frame around the chrome.
             if (IsZoomed(msg->hwnd))
             {
                 HMONITOR mon = MonitorFromWindow(msg->hwnd, MONITOR_DEFAULTTONEAREST);
@@ -54,23 +53,19 @@ bool TitleBarFilter::nativeEventFilter(const QByteArray& eventType, void* messag
         }
         case WM_NCACTIVATE:
         {
-            // Prevent the default handler from repainting an active/inactive
-            // non-client border over our edge-to-edge client surface.
+            // Suppress the default active/inactive NC border repaint.
             *result = TRUE;
             return true;
         }
         case WM_NCPAINT:
         {
-            // Suppress all non-client painting to eliminate the 1px
-            // DWM border. The client area covers the full window so
-            // there is nothing legitimate to paint in the NC region.
+            // Suppress NC painting -- our client covers the whole window.
             *result = 0;
             return true;
         }
         case WM_NCHITTEST:
         {
-            // Custom title bar: all caption buttons are QML-driven,
-            // so we only handle resize borders here.
+            // QML draws caption buttons; we only handle resize borders.
             POINT pt;
             pt.x = GET_X_LPARAM(msg->lParam);
             pt.y = GET_Y_LPARAM(msg->lParam);
@@ -80,15 +75,10 @@ bool TitleBarFilter::nativeEventFilter(const QByteArray& eventType, void* messag
             // Resize borders (only when not maximized).
             if (!IsZoomed(msg->hwnd))
             {
-                // SM_CXPADDEDBORDERWIDTH (index 92) adds the extra padding
-                // Windows uses around resizable frames. We use the raw
-                // integer 92 because some older SDK headers don't define the
-                // SM_CXPADDEDBORDERWIDTH constant.
+                // Raw 92 == SM_CXPADDEDBORDERWIDTH (some old SDKs miss it).
                 int frame = GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(92);
-                // Walk the edges: check top strip first (corners have
-                // priority), then bottom strip, then left/right. The
-                // returned HT* codes tell Windows which resize cursor to
-                // show and which edge the user is dragging.
+                // Top strip first (corners win), then bottom, then sides.
+                // The returned HT* code drives the resize cursor + edge.
                 if (pt.y < rc.top + frame)
                 {
                     if (pt.x < rc.left + frame)
@@ -131,8 +121,7 @@ bool TitleBarFilter::nativeEventFilter(const QByteArray& eventType, void* messag
                 }
             }
 
-            // Everything else is client area; QML handles window dragging
-            // via startSystemMove() from the header bar.
+            // Everything else is client; QML drags via startSystemMove().
             *result = HTCLIENT;
             return true;
         }
@@ -142,22 +131,21 @@ bool TitleBarFilter::nativeEventFilter(const QByteArray& eventType, void* messag
 
 void InstallWindowChrome(HWND hwnd)
 {
-    // Idempotent: only install once per process lifetime.
+    // Idempotent: once per process lifetime.
     static bool installed = false;
     if (installed)
     {
         return;
     }
 
-    // Remove window icon from title bar
+    // Remove window icon from the title bar.
     SetClassLongPtr(hwnd, GCLP_HICON, 0);
     SetClassLongPtr(hwnd, GCLP_HICONSM, 0);
     SendMessage(hwnd, WM_SETICON, ICON_SMALL, 0);
     SendMessage(hwnd, WM_SETICON, ICON_BIG, 0);
 
-    // Strip the native caption/border styles so Windows stops reserving and
-    // drawing the last visible frame pixel, while keeping the thick frame and
-    // system menu bits needed for resize, snap, minimize/maximize semantics.
+    // Drop native caption/border so Windows stops drawing the last visible
+    // frame pixel; keep WS_THICKFRAME etc. for resize/snap/min/max semantics.
     LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
     style &= ~static_cast<LONG_PTR>(WS_CAPTION);
     style |= static_cast<LONG_PTR>(WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
@@ -168,30 +156,27 @@ void InstallWindowChrome(HWND hwnd)
                                       WS_EX_WINDOWEDGE);
     SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle);
 
-    // Install native event filter for custom title bar
     auto* filter = new TitleBarFilter();
     filter->m_Hwnd = hwnd;
     QCoreApplication::instance()->installNativeEventFilter(filter);
 
-    // Extend the DWM frame into the client area so the system draws its
-    // shadow and caption buttons over our content.
-    // {-1,-1,-1,-1} means "extend to the entire window" - DWM will
-    // render its glass/shadow over the full client surface.
+    // Extend the DWM frame into the client area so shadow + caption
+    // buttons paint over our content. {-1,-1,-1,-1} = whole window.
     MARGINS margins{-1, -1, -1, -1};
     DwmExtendFrameIntoClientArea(hwnd, &margins);
 
-    // Disable the system backdrop so no accent/glass color bleeds through
-    // the rounded corner pixels where DWM clips the client area.
+    // No system backdrop -- prevents accent/glass bleeding through the
+    // rounded-corner clip region.
     static constexpr DWORD DWMWA_SYSTEMBACKDROP_TYPE = 38;
     DWORD backdropNone = 1;  // DWMSBT_NONE
     DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdropNone, sizeof(backdropNone));
 
-    // Request rounded window corners from the DWM compositor.
+    // Request DWM rounded corners.
     static constexpr DWORD DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     DWORD cornerPref = 2;  // DWMWCP_ROUND
     DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &cornerPref, sizeof(cornerPref));
 
-    // Force a frame recalculation so WM_NCCALCSIZE runs with our handler.
+    // Force a frame recalc so WM_NCCALCSIZE runs with our handler.
     SetWindowPos(
         hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
@@ -200,9 +185,8 @@ void InstallWindowChrome(HWND hwnd)
 
 void ApplyWindowTheme(HWND hwnd, bool dark)
 {
-    // These DWM attribute IDs were introduced in Windows 10/11 but aren't
-    // always in the SDK headers. Defining them as constants lets us build
-    // with older SDKs while still using the newer personalization APIs.
+    // Win10/11 DWM attribute IDs not always present in older SDK headers;
+    // declared here so we can build against older SDKs.
     static constexpr DWORD DWMWA_USE_IMMERSIVE_DARK_MODE = 20;  // Win10 1903+
     static constexpr DWORD DWMWA_CAPTION_COLOR = 34;            // Win11 22000+
     static constexpr DWORD DWMWA_BORDER_COLOR = 35;             // Win11 22000+
@@ -211,15 +195,13 @@ void ApplyWindowTheme(HWND hwnd, bool dark)
     BOOL darkMode = dark ? TRUE : FALSE;
     DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &darkMode, sizeof(darkMode));
 
-    // Suppress the 1px DWM accent stroke so client-area content (e.g. caption
-    // button hover highlights) paints flush to the window edge. The window
-    // shadow and rounded corners remain intact -- they are separate DWM
-    // attributes. The sentinel 0xFFFFFFFE is DWMWA_COLOR_NONE.
+    // Suppress the 1px DWM accent stroke so client content paints flush to
+    // the edge; shadow + rounded corners are separate attributes.
+    // 0xFFFFFFFE = DWMWA_COLOR_NONE.
     COLORREF borderNone = 0xFFFFFFFE;
     DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &borderNone, sizeof(borderNone));
 
-    // Caption color still feeds the taskbar thumbnail and alt-tab preview
-    // even though our client area covers the whole window.
+    // Caption color still feeds taskbar thumbnails and alt-tab previews.
     COLORREF captionColor = dark ? RGB(7, 8, 16) : RGB(248, 246, 242);
     DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &captionColor, sizeof(captionColor));
 
