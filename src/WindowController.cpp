@@ -79,8 +79,7 @@ void WindowController::toggleCompact()
 
     if (m_Compact)
     {
-        // Save the current dimensions so we can restore them when leaving
-        // compact mode, preserving whatever size the user had chosen.
+        // Save dimensions so we can restore the user's size on exit.
         m_NormalWidth = win->width();
         m_NormalHeight = win->height();
         win->setMinimumHeight(272);
@@ -88,8 +87,7 @@ void WindowController::toggleCompact()
     }
     else
     {
-        // Restore saved dimensions, falling back to default size if none
-        // were captured (e.g. app launched directly into compact mode).
+        // Restore saved dimensions; default if launched directly compact.
         win->setMinimumHeight(540);
         win->resize(m_NormalWidth > 0 ? m_NormalWidth : 1420,
                     m_NormalHeight > 0 ? m_NormalHeight : 690);
