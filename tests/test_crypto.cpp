@@ -9,19 +9,8 @@
 
 using namespace std::string_literals;
 
-// Test suite for Cryptography::encryptPacket and Cryptography::decryptPacket
 class CryptoTest : public ::testing::Test
 {
-protected:
-    void SetUp() override
-    {
-        // Setup code if needed
-    }
-
-    void TearDown() override
-    {
-        // Cleanup code if needed
-    }
 };
 
 TEST_F(CryptoTest, BasicRoundtrip)
@@ -31,14 +20,12 @@ TEST_F(CryptoTest, BasicRoundtrip)
 
     std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
 
-    // Encrypt
     auto packet =
         seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
 
     EXPECT_FALSE(packet.empty());
-    EXPECT_GT(packet.size(), plaintext.size());  // Should include salt, IV, tag, etc.
+    EXPECT_GT(packet.size(), plaintext.size());  // Salt + IV + tag overhead.
 
-    // Decrypt
     auto decrypted =
         seal::Cryptography::decryptPacket(std::span<const unsigned char>(packet), password);
 
@@ -54,14 +41,13 @@ TEST_F(CryptoTest, DifferentPlaintextsProduceDifferentCiphertexts)
 
     std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
 
-    // Encrypt twice
     auto packet1 =
         seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
 
     auto packet2 =
         seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
 
-    // Should produce different ciphertexts (due to random salt/IV)
+    // Random salt/IV must produce different ciphertexts.
     EXPECT_NE(packet1, packet2);
 }
 
@@ -73,11 +59,9 @@ TEST_F(CryptoTest, WrongPasswordFailsAuthentication)
 
     std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
 
-    // Encrypt with correct password
     auto packet = seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes),
                                                     correctPassword);
 
-    // Try to decrypt with wrong password
     EXPECT_THROW(
         seal::Cryptography::decryptPacket(std::span<const unsigned char>(packet), wrongPassword),
         std::runtime_error);
@@ -90,15 +74,12 @@ TEST_F(CryptoTest, CorruptedPacketFailsAuthentication)
 
     std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
 
-    // Encrypt
     auto packet =
         seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
 
-    // Corrupt the packet (modify a byte)
     std::vector<unsigned char> corrupted = packet;
     corrupted[corrupted.size() / 2] ^= 0xFF;
 
-    // Should fail authentication
     EXPECT_THROW(
         seal::Cryptography::decryptPacket(std::span<const unsigned char>(corrupted), password),
         std::runtime_error);
@@ -152,7 +133,7 @@ TEST_F(CryptoTest, VerifyPacketRejectsCorruptedPacket)
 TEST_F(CryptoTest, TooShortPacketThrows)
 {
     auto password = make_secure_string("test_password");
-    std::vector<unsigned char> shortPacket(10);  // Too short
+    std::vector<unsigned char> shortPacket(10);  // Below header minimum.
 
     EXPECT_THROW(
         seal::Cryptography::decryptPacket(std::span<const unsigned char>(shortPacket), password),
@@ -164,13 +145,11 @@ TEST_F(CryptoTest, EmptyPlaintext)
     auto password = make_secure_string("test_password");
     std::vector<unsigned char> empty;
 
-    // Should handle empty input
     auto packet =
         seal::Cryptography::encryptPacket(std::span<const unsigned char>(empty), password);
 
-    EXPECT_FALSE(packet.empty());  // Should still produce a packet
+    EXPECT_FALSE(packet.empty());  // Header still present.
 
-    // Should decrypt to empty
     auto decrypted =
         seal::Cryptography::decryptPacket(std::span<const unsigned char>(packet), password);
 
@@ -180,15 +159,13 @@ TEST_F(CryptoTest, EmptyPlaintext)
 TEST_F(CryptoTest, LargePlaintext)
 {
     auto password = make_secure_string("test_password");
-    std::vector<unsigned char> largePlaintext(10000, 0x42);  // 10KB of 0x42
+    std::vector<unsigned char> largePlaintext(10000, 0x42);  // 10 KB of 0x42
 
-    // Encrypt
     auto packet =
         seal::Cryptography::encryptPacket(std::span<const unsigned char>(largePlaintext), password);
 
     EXPECT_FALSE(packet.empty());
 
-    // Decrypt
     auto decrypted =
         seal::Cryptography::decryptPacket(std::span<const unsigned char>(packet), password);
 
@@ -200,11 +177,9 @@ TEST_F(CryptoTest, BinaryData)
     auto password = make_secure_string("test_password");
     std::vector<unsigned char> binaryData = {0x00, 0xFF, 0x80, 0x7F, 0x01, 0xFE};
 
-    // Encrypt
     auto packet =
         seal::Cryptography::encryptPacket(std::span<const unsigned char>(binaryData), password);
 
-    // Decrypt
     auto decrypted =
         seal::Cryptography::decryptPacket(std::span<const unsigned char>(packet), password);
 
@@ -218,11 +193,9 @@ TEST_F(CryptoTest, UnicodeText)
 
     std::vector<unsigned char> plainBytes(unicodeText.begin(), unicodeText.end());
 
-    // Encrypt
     auto packet =
         seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
 
-    // Decrypt
     auto decrypted =
         seal::Cryptography::decryptPacket(std::span<const unsigned char>(packet), password);
 
