@@ -68,15 +68,13 @@ std::vector<std::string> extractHexTokens(const std::string& raw)
     if (!cur.empty())
         tokens.push_back(cur);
 
-    // Minimum hex length: a valid ciphertext blob must contain at least
-    // salt + IV + GCM tag (all hex-encoded, so *2). Anything shorter cannot
-    // be a real AES-256-GCM ciphertext and is filtered out to avoid false matches.
+    // Minimum hex length: salt + IV + GCM tag (each *2 for hex). Shorter
+    // tokens cannot be real ciphertext; filter to avoid false matches.
     constexpr size_t min_hex_chars = (cfg::SALT_LEN + cfg::IV_LEN + cfg::TAG_LEN) * 2;
     std::vector<std::string> good;
     for (auto& t : tokens)
     {
-        // Must be even length (each byte = 2 hex chars) and at least as long
-        // as the mandatory header fields, and consist entirely of hex digits.
+        // Even length, >= header minimum, all xdigit.
         if ((t.size() % 2) == 0 && t.size() >= min_hex_chars)
         {
             bool allhex = std::all_of(
@@ -125,42 +123,32 @@ std::string joinPath(const std::string& dir, const char* name)
     return r;
 }
 
-// Convert a UTF-8 std::string to a VirtualLock'd secure wchar_t string.
-// Uses the standard Win32 "size query then convert" pattern:
-//   1. Call MultiByteToWideChar with nullptr output to get the required wchar_t count.
-//   2. Resize the locked-page buffer to that count.
-//   3. Call again to perform the actual conversion into the secure buffer.
+// UTF-8 -> VirtualLock'd wchar_t string (Win32 size-then-convert pattern).
 seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> utf8ToSecureWide(
     const std::string& utf8)
 {
     seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> result;
     if (utf8.empty())
         return result;
-    // First call: query output size (lpWideCharStr=nullptr, cchWideChar=0)
     int need = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), nullptr, 0);
     if (need > 0)
     {
         result.s.resize(need);
-        // Second call: perform the conversion into the locked buffer
         MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), result.s.data(), need);
     }
     return result;
 }
 
-// Convert a secure wchar_t string back to a UTF-8 std::string.
-// Same "size query then convert" pattern as utf8ToSecureWide, but in reverse
-// via WideCharToMultiByte. The returned std::string is NOT in locked memory,
-// so the caller should cleanse it promptly after use.
+// Inverse of utf8ToSecureWide; output is NOT locked memory -- caller
+// must cleanse promptly after use.
 std::string secureWideToUtf8(
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& wide)
 {
     if (wide.s.empty())
         return {};
-    // First call: query required byte count (lpMultiByteStr=nullptr, cbMultiByte=0)
     int need = WideCharToMultiByte(
         CP_UTF8, 0, wide.s.data(), (int)wide.s.size(), nullptr, 0, nullptr, nullptr);
     std::string out(need, '\0');
-    // Second call: perform the conversion
     WideCharToMultiByte(
         CP_UTF8, 0, wide.s.data(), (int)wide.s.size(), out.data(), need, nullptr, nullptr);
     return out;
@@ -170,7 +158,7 @@ std::string toBase64(std::span<const unsigned char> data)
 {
     if (data.empty())
         return {};
-    // EVP_EncodeBlock output size: 4 * ceil(n/3) + 1 (null terminator)
+    // 4 * ceil(n/3) + 1 (NUL).
     size_t outLen = 4 * ((data.size() + 2) / 3) + 1;
     std::string out(outLen, '\0');
     int written = EVP_EncodeBlock(
@@ -183,7 +171,7 @@ std::vector<unsigned char> fromBase64(const std::string& b64)
 {
     if (b64.empty())
         return {};
-    // EVP_DecodeBlock output size: 3 * ceil(n/4)
+    // 3 * ceil(n/4).
     size_t maxOut = 3 * ((b64.size() + 3) / 4);
     std::vector<unsigned char> out(maxOut);
     int written = EVP_DecodeBlock(out.data(),
@@ -191,7 +179,7 @@ std::vector<unsigned char> fromBase64(const std::string& b64)
                                   static_cast<int>(b64.size()));
     if (written < 0)
         return {};
-    // EVP_DecodeBlock doesn't account for padding - trim trailing zeros from '=' padding
+    // Trim padding '=' (EVP_DecodeBlock doesn't account for it).
     size_t pad = 0;
     if (b64.size() >= 2 && b64[b64.size() - 1] == '=')
         ++pad;
@@ -207,15 +195,14 @@ bool isBase64(const std::string& s)
     {
         return false;
     }
-    // Base64 encoded output is always a multiple of 4.
+    // Base64 output is always a multiple of 4.
     if (s.size() % 4 != 0)
     {
         return false;
     }
-    // Require at least one character that distinguishes Base64 from hex
-    // (uppercase G-Z, lowercase g-z, '+', '/', or '='). Without this, a
-    // pure hex string passes the alphabet check and causes the auto-detect
-    // in handleStringMode to misroute hex ciphertext through Base64 decode.
+    // Require >=1 character that distinguishes Base64 from hex (G-Z, g-z,
+    // '+', '/', '='). Otherwise pure hex would pass the alphabet check and
+    // get misrouted through Base64 decode in handleStringMode.
     bool hasNonHex = false;
     for (char c : s)
     {
