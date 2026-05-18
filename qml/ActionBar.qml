@@ -110,7 +110,7 @@ RowLayout {
             spacing: 6
             anchors.centerIn: parent
             SvgIcon {
-                source: root.isFillArmed ? Theme.iconXmark : Theme.iconCrosshairs
+                source: root.isFillArmed ? Theme.iconBan : Theme.iconCrosshairs
                 width: Theme.iconSizeMedium
                 height: Theme.iconSizeMedium
                 color: !fillBtn.enabled ? fillBtn._disText
