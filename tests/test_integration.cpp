@@ -10,7 +10,6 @@
 
 using namespace std::string_literals;
 
-// Test suite for encryptLine/decryptLine
 class EncryptDecryptLineTest : public ::testing::Test
 {
 };
@@ -24,9 +23,8 @@ TEST_F(EncryptDecryptLineTest, BasicRoundtrip)
     std::string hexOutput = seal::FileOperations::encryptLine(plaintext, password);
 
     EXPECT_FALSE(hexOutput.empty());
-    EXPECT_EQ(hexOutput.size() % 2, 0u);  // Hex should be even length
+    EXPECT_EQ(hexOutput.size() % 2, 0u);
 
-    // Decrypt
     auto decrypted = seal::FileOperations::decryptLine(hexOutput, password);
     std::string decryptedStr(decrypted.data(), decrypted.size());
 
@@ -40,9 +38,8 @@ TEST_F(EncryptDecryptLineTest, EmptyString)
 
     std::string hexOutput = seal::FileOperations::encryptLine(plaintext, password);
 
-    EXPECT_FALSE(hexOutput.empty());  // Should still produce hex output
+    EXPECT_FALSE(hexOutput.empty());
 
-    // Should decrypt to empty
     auto decrypted = seal::FileOperations::decryptLine(hexOutput, password);
     EXPECT_TRUE(decrypted.empty());
 }
@@ -60,10 +57,9 @@ TEST_F(EncryptDecryptLineTest, HexWithSpaces)
     auto password = make_secure_string("test_password");
     std::string plaintext = "Test message";
 
-    // Encrypt
     std::string hexOutput = seal::FileOperations::encryptLine(plaintext, password);
 
-    // Add spaces to hex
+    // Re-format with a space between every byte.
     std::string hexWithSpaces;
     for (size_t i = 0; i < hexOutput.size(); i += 2)
     {
@@ -72,7 +68,6 @@ TEST_F(EncryptDecryptLineTest, HexWithSpaces)
         hexWithSpaces += hexOutput.substr(i, 2);
     }
 
-    // Should handle spaces correctly
     auto decrypted = seal::FileOperations::decryptLine(hexWithSpaces, password);
     std::string decryptedStr(decrypted.data(), decrypted.size());
 
@@ -85,10 +80,8 @@ TEST_F(EncryptDecryptLineTest, WrongPasswordThrows)
     auto wrongPassword = make_secure_string("wrong_password");
     std::string plaintext = "Secret message";
 
-    // Encrypt with correct password
     std::string hexOutput = seal::FileOperations::encryptLine(plaintext, correctPassword);
 
-    // Try to decrypt with wrong password
     EXPECT_THROW(seal::FileOperations::decryptLine(hexOutput, wrongPassword), std::runtime_error);
 }
 
@@ -118,20 +111,17 @@ TEST_F(EncryptDecryptLineTest, LongText)
     EXPECT_EQ(decryptedStr, longText);
 }
 
-// Test suite for file operations
 class FileOperationsTest : public ::testing::Test
 {
 protected:
     void SetUp() override
     {
-        // Create temporary directory for test files
         m_TestDir = std::filesystem::temp_directory_path() / "lockr_tests";
         std::filesystem::create_directories(m_TestDir);
     }
 
     void TearDown() override
     {
-        // Clean up test files
         if (std::filesystem::exists(m_TestDir))
         {
             std::filesystem::remove_all(m_TestDir);
@@ -145,10 +135,8 @@ protected:
 
 TEST_F(FileOperationsTest, EncryptDecryptFileRoundtrip)
 {
-    // Create temporary file
     auto tempFile = GetTestFile("test_roundtrip.tmp");
 
-    // Write test data
     std::string originalContent = "This is test file content\nLine 2\nLine 3";
     {
         std::ofstream out(tempFile, std::ios::binary);
@@ -158,12 +146,11 @@ TEST_F(FileOperationsTest, EncryptDecryptFileRoundtrip)
     auto password = make_secure_string("test_password");
     auto encFile = GetTestFile("test_roundtrip.tmp.seal");
 
-    // Encrypt file to a separate destination
     bool encryptSuccess =
         seal::FileOperations::encryptFileTo(tempFile.string(), encFile.string(), password);
     EXPECT_TRUE(encryptSuccess);
 
-    // Verify encrypted file exists and content differs from original
+    // Encrypted bytes differ from the plaintext.
     std::ifstream in(encFile, std::ios::binary);
     std::vector<unsigned char> encryptedData((std::istreambuf_iterator<char>(in)),
                                              std::istreambuf_iterator<char>());
@@ -173,13 +160,11 @@ TEST_F(FileOperationsTest, EncryptDecryptFileRoundtrip)
     std::string encryptedStr(encryptedData.begin(), encryptedData.end());
     EXPECT_NE(encryptedStr, originalContent);
 
-    // Decrypt to yet another destination
     auto decFile = GetTestFile("test_roundtrip_dec.tmp");
     bool decryptSuccess =
         seal::FileOperations::decryptFileTo(encFile.string(), decFile.string(), password);
     EXPECT_TRUE(decryptSuccess);
 
-    // Verify file was decrypted correctly
     std::ifstream in2(decFile, std::ios::binary);
     std::string decryptedContent((std::istreambuf_iterator<char>(in2)),
                                  std::istreambuf_iterator<char>());
@@ -201,7 +186,6 @@ TEST_F(FileOperationsTest, EncryptNonExistentFileFails)
 
 TEST_F(FileOperationsTest, DecryptWrongPasswordFails)
 {
-    // Create temporary file
     auto tempFile = GetTestFile("test_wrong_pwd.tmp");
 
     std::string originalContent = "Test content";
@@ -215,12 +199,10 @@ TEST_F(FileOperationsTest, DecryptWrongPasswordFails)
     auto encFile = GetTestFile("test_wrong_pwd.tmp.seal");
     auto decFile = GetTestFile("test_wrong_pwd_dec.tmp");
 
-    // Encrypt with correct password
     bool encryptSuccess =
         seal::FileOperations::encryptFileTo(tempFile.string(), encFile.string(), correctPassword);
     EXPECT_TRUE(encryptSuccess);
 
-    // Try to decrypt with wrong password
     bool decryptSuccess =
         seal::FileOperations::decryptFileTo(encFile.string(), decFile.string(), wrongPassword);
     EXPECT_FALSE(decryptSuccess);
@@ -228,29 +210,24 @@ TEST_F(FileOperationsTest, DecryptWrongPasswordFails)
 
 TEST_F(FileOperationsTest, EncryptEmptyFile)
 {
-    // Create temporary empty file
     auto tempFile = GetTestFile("test_empty.tmp");
 
     {
-        std::ofstream out(tempFile);
-        // File is empty
+        std::ofstream out(tempFile);  // empty
     }
 
     auto password = make_secure_string("test_password");
     auto encFile = GetTestFile("test_empty.tmp.seal");
     auto decFile = GetTestFile("test_empty_dec.tmp");
 
-    // Encrypt empty file
     bool encryptSuccess =
         seal::FileOperations::encryptFileTo(tempFile.string(), encFile.string(), password);
     EXPECT_TRUE(encryptSuccess);
 
-    // Decrypt
     bool decryptSuccess =
         seal::FileOperations::decryptFileTo(encFile.string(), decFile.string(), password);
     EXPECT_TRUE(decryptSuccess);
 
-    // Verify file is still empty
     std::ifstream in(decFile, std::ios::binary);
     std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     in.close();
@@ -260,7 +237,6 @@ TEST_F(FileOperationsTest, EncryptEmptyFile)
 
 TEST_F(FileOperationsTest, DecryptCorruptedFileFails)
 {
-    // Create temporary file
     auto tempFile = GetTestFile("test_corrupt.tmp");
 
     std::string originalContent = "Test content";
@@ -273,12 +249,11 @@ TEST_F(FileOperationsTest, DecryptCorruptedFileFails)
     auto encFile = GetTestFile("test_corrupt.tmp.seal");
     auto decFile = GetTestFile("test_corrupt_dec.tmp");
 
-    // Encrypt file
     bool encryptSuccess =
         seal::FileOperations::encryptFileTo(tempFile.string(), encFile.string(), password);
     EXPECT_TRUE(encryptSuccess);
 
-    // Corrupt the encrypted file
+    // Flip a single byte at the midpoint of the ciphertext.
     {
         std::fstream file(encFile, std::ios::binary | std::ios::in | std::ios::out);
         file.seekg(0, std::ios::end);
@@ -286,13 +261,12 @@ TEST_F(FileOperationsTest, DecryptCorruptedFileFails)
         file.seekg(size / 2, std::ios::beg);
         char byte = 0;
         file.read(&byte, 1);
-        byte ^= 0xFF;  // Flip bits
+        byte ^= 0xFF;
         file.seekp(size / 2, std::ios::beg);
         file.write(&byte, 1);
         file.close();
     }
 
-    // Try to decrypt corrupted file
     bool decryptSuccess =
         seal::FileOperations::decryptFileTo(encFile.string(), decFile.string(), password);
     EXPECT_FALSE(decryptSuccess);
