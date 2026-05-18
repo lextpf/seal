@@ -12,19 +12,20 @@
 
 #include <iostream>
 
-Q_LOGGING_CATEGORY(logBackend, "seal.backend")
-Q_LOGGING_CATEGORY(logVault, "seal.vault")
-Q_LOGGING_CATEGORY(logCrypto, "seal.crypto")
-Q_LOGGING_CATEGORY(logFill, "seal.fill")
-Q_LOGGING_CATEGORY(logFile, "seal.file")
-Q_LOGGING_CATEGORY(logApp, "seal.app")
-Q_LOGGING_CATEGORY(logCamera, "seal.camera")
-Q_LOGGING_CATEGORY(logQr, "seal.qr")
+// Bare category strings (no "seal." prefix). Filters previously written
+// as "seal.bridge.*" must drop the prefix.
+Q_LOGGING_CATEGORY(logBackend, "backend")
+Q_LOGGING_CATEGORY(logVault, "vault")
+Q_LOGGING_CATEGORY(logCrypto, "crypto")
+Q_LOGGING_CATEGORY(logFill, "fill")
+Q_LOGGING_CATEGORY(logFile, "file")
+Q_LOGGING_CATEGORY(logApp, "app")
+Q_LOGGING_CATEGORY(logCamera, "camera")
+Q_LOGGING_CATEGORY(logQr, "qr")
+Q_LOGGING_CATEGORY(logBridge, "bridge")
 
-// Custom Qt message handler that replaces the default qDebug/qWarning output.
-// Formats every Qt log message as
-// "[HH:mm:ss.zzz] [LVL] [category] [tid=1234] text"
-// and writes to stderr. Fatal messages abort immediately after printing.
+// Qt message handler. Format: "[HH:mm:ss.zzz] [LVL] [cat] [tid=N] text"
+// on stderr; fatal messages abort after printing.
 static void sealMessageHandler(QtMsgType type, const QMessageLogContext& ctx, const QString& msg)
 {
     const char* lvl = "???";

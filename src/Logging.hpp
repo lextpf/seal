@@ -10,8 +10,10 @@
  * @ingroup Logging
  *
  * Provides per-subsystem logging categories so messages can be filtered
- * by component (e.g. `seal.backend`, `seal.vault`). All categories use
- * Qt's `qCDebug` / `qCWarning` / `qCCritical` macros.
+ * by component (e.g. `backend`, `vault`, `bridge`). All categories use
+ * Qt's `qCDebug` / `qCWarning` / `qCCritical` macros. Category strings
+ * are bare (no `seal.` prefix) since every log line in this process is
+ * by definition from seal.
  *
  * Call installSealMessageHandler() once at startup to redirect all
  * `qDebug` / `qWarning` / `qCritical` / `qFatal` output through a
@@ -26,6 +28,7 @@ Q_DECLARE_LOGGING_CATEGORY(logFile)     // File and directory I/O operations.
 Q_DECLARE_LOGGING_CATEGORY(logApp)      // Application lifecycle and general events.
 Q_DECLARE_LOGGING_CATEGORY(logCamera)   // Camera enumeration, probing, and selection.
 Q_DECLARE_LOGGING_CATEGORY(logQr)       // QR capture loop and frame decoding.
+Q_DECLARE_LOGGING_CATEGORY(logBridge)   // BrowserBridge named-pipe server and message validation.
 
 /**
  * @brief Install the seal-specific Qt message handler.
