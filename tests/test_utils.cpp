@@ -9,7 +9,6 @@
 
 using namespace std::string_literals;
 
-// Test suite for hex encoding/decoding
 class HexUtilsTest : public ::testing::Test
 {
 };
@@ -49,7 +48,6 @@ TEST_F(HexUtilsTest, ToHexAllBytes)
     std::string hex = seal::utils::to_hex(data);
     EXPECT_EQ(hex.size(), 512u);  // 256 bytes * 2 hex chars
 
-    // Check first and last
     EXPECT_EQ(hex.substr(0, 2), "00");
     EXPECT_EQ(hex.substr(510, 2), "ff");
 }
@@ -106,15 +104,14 @@ TEST_F(HexUtilsTest, FromHexEmptyString)
 
     bool success = seal::utils::from_hex(hex, result);
 
-    // from_hex returns false for empty strings (they're considered invalid)
-    // This is by design - empty hex strings don't represent valid hex data
+    // Empty input is rejected by design (no valid hex data).
     EXPECT_FALSE(success);
     EXPECT_TRUE(result.empty());
 }
 
 TEST_F(HexUtilsTest, FromHexOddLengthFails)
 {
-    std::string hex = "123";  // Odd length
+    std::string hex = "123";  // odd length
     std::vector<unsigned char> result;
 
     bool success = seal::utils::from_hex(hex, result);
@@ -124,7 +121,7 @@ TEST_F(HexUtilsTest, FromHexOddLengthFails)
 
 TEST_F(HexUtilsTest, FromHexInvalidCharactersFail)
 {
-    std::string hex = "12G5";  // 'G' is invalid
+    std::string hex = "12G5";  // 'G' invalid
     std::vector<unsigned char> result;
 
     bool success = seal::utils::from_hex(hex, result);
@@ -145,7 +142,6 @@ TEST_F(HexUtilsTest, FromHexRoundtripWithToHex)
     EXPECT_EQ(decoded, original);
 }
 
-// Test suite for string manipulation
 class StringUtilsTest : public ::testing::Test
 {
 };
@@ -190,15 +186,13 @@ TEST_F(StringUtilsTest, StripSpacesMixedWhitespace)
     EXPECT_EQ(result, "abcde");
 }
 
-// Test suite for hex token extraction
 class HexTokenExtractionTest : public ::testing::Test
 {
 };
 
 TEST_F(HexTokenExtractionTest, BasicExtraction)
 {
-    // Minimum packet size is (SALT_LEN + IV_LEN + TAG_LEN) * 2 = (16 + 12 + 16) * 2 = 88 hex chars
-    // Create a hex string that's at least 88 characters long
+    // Minimum (SALT_LEN + IV_LEN + TAG_LEN) * 2 = 88 hex chars.
     std::string longHex =
         "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
         "abcdef1234567890abcdef1234567890abcdef";
@@ -211,7 +205,7 @@ TEST_F(HexTokenExtractionTest, BasicExtraction)
 
 TEST_F(HexTokenExtractionTest, MultipleTokens)
 {
-    // Minimum packet size is 88 hex chars - create two valid hex tokens
+    // Two valid hex tokens (each >= 88 chars).
     std::string hex1 =
         "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
         "abcdef1234567890abcdef1234567890abcdef";
@@ -228,7 +222,7 @@ TEST_F(HexTokenExtractionTest, MultipleTokens)
 
 TEST_F(HexTokenExtractionTest, OddLengthHexIgnored)
 {
-    std::string input = "1234567890abcde";  // Odd length
+    std::string input = "1234567890abcde";  // odd length
     auto tokens = seal::utils::extractHexTokens(input);
 
     EXPECT_TRUE(tokens.empty());
@@ -236,8 +230,8 @@ TEST_F(HexTokenExtractionTest, OddLengthHexIgnored)
 
 TEST_F(HexTokenExtractionTest, TooShortHexIgnored)
 {
-    // Minimum packet size is 88 hex chars, so a short hex string should be ignored
-    std::string input = "1234567890abcdef";  // Only 16 hex chars, way too short
+    // Below the 88-hex-char minimum.
+    std::string input = "1234567890abcdef";
     auto tokens = seal::utils::extractHexTokens(input);
 
     EXPECT_TRUE(tokens.empty());
@@ -245,7 +239,7 @@ TEST_F(HexTokenExtractionTest, TooShortHexIgnored)
 
 TEST_F(HexTokenExtractionTest, InvalidHexCharactersIgnored)
 {
-    std::string input = "1234567890abcdefg";  // Contains 'g'
+    std::string input = "1234567890abcdefg";  // contains 'g'
     auto tokens = seal::utils::extractHexTokens(input);
 
     EXPECT_TRUE(tokens.empty());
@@ -267,7 +261,6 @@ TEST_F(HexTokenExtractionTest, WhitespaceOnly)
     EXPECT_TRUE(tokens.empty());
 }
 
-// Test suite for password generation
 class PasswordGenTest : public ::testing::Test
 {
 };
