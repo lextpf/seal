@@ -12,3 +12,11 @@ __pycache__/
 
 # Application assets
 assets/
+
+# Browser extension / local artifacts
+com.seal.fill*.json
+*.pem
+*.pfx
+*.p12
+*.crx
+*.reg
