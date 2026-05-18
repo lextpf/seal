@@ -27,8 +27,7 @@
 
 namespace
 {
-// Route diagnostics through the Qt logging system so they inherit the
-// unified `[ts] [LVL] [seal.qr] [tid=N]` prefix from sealMessageHandler.
+// Route diagnostics through Qt logging for the unified prefix.
 void writeQrDiag(seal::console::Tone tone, std::initializer_list<std::string> fields)
 {
     const QString line = QString::fromStdString(seal::diag::joinFields(fields));
@@ -67,16 +66,14 @@ constexpr size_t kMaxQrDataBytes = 4096;
 // 1 GiB process memory cap to block heap-spray / decompression bombs.
 constexpr SIZE_T kCaptureMemoryLimitBytes = 1ULL << 30;
 
-// Ensures at most one CaptureJobGuard is active process-wide. Without this,
-// a second guard's destructor would clear the memory limit while the first
-// capture is still running, silently disabling the sandbox.
+// At most one CaptureJobGuard active process-wide; otherwise a second
+// destructor would clear the cap mid-capture and disable the sandbox.
 std::atomic<bool> g_CaptureJobActive{false};
 
-// RAII Job Object that caps process memory at a fixed limit while OpenCV is active.
-// OpenCV may decode arbitrary camera frames; a malicious virtual-camera driver or
-// a decompression bomb could trigger unbounded allocations. The Job Object enforces
-// a hard 1 GiB ceiling. The destructor clears the limit so the rest of the process
-// (UI, vault ops) runs unconstrained.
+// RAII Job Object that caps process memory while OpenCV decodes frames.
+// A malicious virtual-camera driver or decompression bomb could trigger
+// unbounded allocation; the 1 GiB ceiling fail-fasts. Destructor clears
+// the limit so the rest of seal runs unconstrained.
 struct CaptureJobGuard
 {
     HANDLE hJob = nullptr;
@@ -84,7 +81,7 @@ struct CaptureJobGuard
 
     explicit CaptureJobGuard(SIZE_T memoryLimitBytes)
     {
-        // Enforce single-instance: if another guard is active, skip setup.
+        // Single-instance: skip setup if another guard is active.
         bool expected = false;
         if (!g_CaptureJobActive.compare_exchange_strong(expected, true))
             return;
@@ -137,12 +134,11 @@ seal::secure_string<> seal::captureQrFromWebcam()
 {
     seal::secure_string<> result;
 
-    // Constrain process memory while OpenCV is active.
+    // Memory cap while OpenCV is active.
     CaptureJobGuard jobGuard(kCaptureMemoryLimitBytes);
 
-    // OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS is set once during
-    // process init (main.cpp) to avoid a data race between this
-    // worker thread's getenv calls and the GUI thread.
+    // OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS is set in main.cpp before
+    // workers spawn to avoid a getenv race.
 
     cv::VideoCapture cap;
     cv::Mat frame;
@@ -152,9 +148,8 @@ seal::secure_string<> seal::captureQrFromWebcam()
         return result;
     }
 
-    // Camera warmup: display live video for a short period so the sensor's
-    // auto-exposure and auto-white-balance converge. Without this, the first
-    // frames are often too dark or washed out for reliable QR detection.
+    // Warmup: live preview lets the sensor's AE/AWB converge before the
+    // first detection -- otherwise early frames are too dark/washed out.
     const int cameraWarmupMs = seal::EnvIntOrDefault("SEAL_CAMERA_WARMUP_MS", 250, 0, 5000);
     if (cameraWarmupMs > 0)
     {
@@ -174,7 +169,7 @@ seal::secure_string<> seal::captureQrFromWebcam()
         }
     }
 
-    // Auto-focus the webcam window so the user can press ESC immediately.
+    // Focus the webcam window so ESC works immediately.
     {
         HWND hwnd = FindWindowA(nullptr, "webcam");
         if (hwnd)
@@ -208,9 +203,8 @@ seal::secure_string<> seal::captureQrFromWebcam()
             }
         }
 
-        // Flush 2 stale frames from the driver's internal queue. VideoCapture
-        // buffers frames; without this, cap.read() returns an old frame and QR
-        // detection lags behind the live camera view by several hundred ms.
+        // Drop 2 buffered frames so detection isn't a few hundred ms behind
+        // the live view.
         for (int i = 0; i < 2; ++i)
             cap.grab();
         if (!cap.read(frame) || frame.empty())
@@ -229,18 +223,17 @@ seal::secure_string<> seal::captureQrFromWebcam()
             continue;
         }
 
-        // Convert to grayscale and downscale to 480px wide for fast QR detection.
-        // QR finder patterns are high-contrast; colour info adds no value but doubles
-        // the pixel count. Downscaling further cuts detection time ~4x on 1080p frames.
+        // Grayscale + downscale to 480 px wide. Finder patterns are
+        // high-contrast (no value in colour) and downscaling cuts detection
+        // time ~4x at 1080p.
         cv::Mat gray;
         cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
         const double scale = std::min(1.0, 480.0 / gray.cols);
         if (scale < 1.0)
             cv::resize(gray, gray, cv::Size(), scale, scale, cv::INTER_AREA);
 
-        // Try standard (dark-on-light) QR first, then invert and retry.
-        // Inverted QR codes (white modules on black background) are used by
-        // some generators; bitwise_not flips them to the standard polarity.
+        // Try standard polarity first, then invert and retry -- some
+        // generators output white-on-black.
         std::vector<cv::Point> points;
         std::string data = qrDetector.detectAndDecode(gray, points);
         if (data.empty())
@@ -250,12 +243,11 @@ seal::secure_string<> seal::captureQrFromWebcam()
             data = qrDetector.detectAndDecode(gray, points);
         }
 
-        // Move decoded text into locked secure memory, then wipe the pageable
-        // std::string so the credential doesn't linger on a swappable heap page.
+        // Move into locked secure memory and wipe the pageable copy so the
+        // credential doesn't linger on a swappable heap page.
         if (!data.empty())
         {
-            // Reject anomalously large payloads. QR v40 max is ~4296 bytes;
-            // anything bigger likely comes from a crafted virtual-camera frame.
+            // QR v40 max ~4296 bytes; anything larger is anomalous.
             if (data.size() > kMaxQrDataBytes)
             {
                 writeQrDiag(seal::console::Tone::Warning,
