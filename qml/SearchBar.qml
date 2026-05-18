@@ -28,7 +28,12 @@ TextField {
     onVaultLoadedChanged: if (!vaultLoaded && text.length > 0) text = ""
 
     enabled: vaultLoaded
-    placeholderText: vaultLoaded ? "Search services, usernames, or passwords"
+    // Service names are the only field held in plaintext at rest — username
+    // and password blobs stay AES-GCM-encrypted in memory and only decrypt
+    // on demand (typeLogin / edit). The model's setFilter() reflects that:
+    // VaultModel.cpp filters strictly on rec.platform. Don't widen this
+    // placeholder to suggest the search also covers credentials.
+    placeholderText: vaultLoaded ? "Search service names"
                                  : "Load a vault or add an account to enable search"
     placeholderTextColor: Theme.textPlaceholder
     color: Theme.textPrimary
