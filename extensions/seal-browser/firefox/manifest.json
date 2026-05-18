@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "seal companion",
+  "version": "0.1.0",
+  "description": "Reports the type of input field under Ctrl+Click to the seal credential manager.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "seal-companion@seal.local",
+      "strict_min_version": "115.0"
+    }
+  },
+  "permissions": ["nativeMessaging"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "scripts": ["../background.js"],
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["../content.js"],
+      "run_at": "document_end",
+      "all_frames": false,
+      "match_about_blank": false
+    }
+  ],
+  "icons": {
+    "16": "../icons/16.png",
+    "48": "../icons/48.png",
+    "128": "../icons/128.png"
+  }
+}

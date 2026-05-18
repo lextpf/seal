@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "seal companion",
+  "version": "0.1.0",
+  "description": "Reports the type of input field under Ctrl+Click to the seal credential manager.",
+  "minimum_chrome_version": "120",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7Im5KauKFHFc2tp9qHOaHqdVZt24FW+R0XTdA6LTfq3UnUJt4jOTUTrhS0cocQb/573RqNZNyrRlP5sl1yaYCLf30S2QaJcz/ZqE8YqlE6XL/zu6VrrLnOWNyFtPmH+6/7PLJxcSxIPyt6Flcjv8sIXhGgEMD9Z6gNJlGGqApYxVfVndN9QLQrj1yWhSZUwLIHbz5BVPS7m9hkxyQUx9flj7k/feXy/68WpKwd6q4M014mtctz4NtNZcpBG4C73u6pvW26wGI1rbqt9rlR166WfX32NMM8Pny1sVNRsXLRnkQgtLInI/87/egNSHCJ+VgLLsTeZzNFFiAaE5bM7x5QIDAQAB",
+  "permissions": ["nativeMessaging"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_end",
+      "all_frames": false,
+      "match_about_blank": false
+    }
+  ],
+  "icons": {
+    "16": "icons/16.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  }
+}
