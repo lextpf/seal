@@ -14,10 +14,9 @@ namespace seal
 
 bool Cryptography::ctEqualRaw(const unsigned char* a, const unsigned char* b, size_t n)
 {
-    // Constant-time comparison: XOR each byte pair and OR-accumulate into v.
-    // If any byte differs, at least one bit in v will be set. Because every
-    // iteration executes the same operations regardless of match/mismatch,
-    // the CPU timing is data-independent.
+    // Constant-time comparison: XOR each byte, OR-accumulate into v.
+    // Any difference sets a bit in v; every iteration runs identical work
+    // so timing is data-independent.
     unsigned char v = 0;
     for (size_t i = 0; i < n; ++i)
         v |= static_cast<unsigned char>(a[i] ^ b[i]);
@@ -31,20 +30,20 @@ void Cryptography::hardenHeap()
 
 void Cryptography::hardenProcessAccess()
 {
-    // Build a DACL that denies dangerous process access rights to Everyone,
-    // while granting SYSTEM full control so the OS can still manage us.
-    // This blocks procdump, Process Hacker, and malware memory reads.
+    // Build a DACL that denies dangerous process-access rights to Everyone
+    // while leaving SYSTEM/Administrators full control. Blocks procdump,
+    // Process Hacker, and malware memory reads.
 
     PSECURITY_DESCRIPTOR pSD = nullptr;
     PACL pDacl = nullptr;
 
-    // SDDL string:
-    //  D:  = DACL
-    //  (D;;0x147A;;;WD) = Deny Everyone: PROCESS_VM_READ (0x10) | PROCESS_VM_WRITE (0x20) |
-    //                      PROCESS_VM_OPERATION (0x8) | PROCESS_DUP_HANDLE (0x40) |
-    //                      PROCESS_QUERY_INFORMATION (0x400) | PROCESS_CREATE_THREAD (0x2) = 0x147A
-    //  (A;;GA;;;SY)     = Allow SYSTEM: GENERIC_ALL
-    //  (A;;GA;;;BA)     = Allow Administrators: GENERIC_ALL (so we don't lock out admin tasks)
+    // SDDL:
+    //   D:                = DACL
+    //   (D;;0x147A;;;WD)  = Deny Everyone:
+    //                       VM_READ|VM_WRITE|VM_OPERATION|DUP_HANDLE|
+    //                       QUERY_INFORMATION|CREATE_THREAD
+    //   (A;;GA;;;SY)      = Allow SYSTEM: GENERIC_ALL
+    //   (A;;GA;;;BA)      = Allow Administrators: GENERIC_ALL
     BOOL ok = ConvertStringSecurityDescriptorToSecurityDescriptorA(
         "D:(D;;0x147A;;;WD)(A;;GA;;;SY)(A;;GA;;;BA)", SDDL_REVISION_1, &pSD, nullptr);
 
@@ -72,12 +71,11 @@ void Cryptography::hardenProcessAccess()
 
 void Cryptography::disableCrashDumps()
 {
-    // Suppress WER crash dialogs that might create minidumps containing secrets.
+    // Suppress WER -- minidumps could contain secrets.
     SetErrorMode(SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS);
 
-    // Install a custom unhandled exception filter that wipes sensitive memory
-    // then terminates immediately, preventing the default handler from
-    // writing a crash dump.
+    // Unhandled-exception filter: terminate before the default handler can
+    // write a crash dump.
     SetUnhandledExceptionFilter(
         [](PEXCEPTION_POINTERS) -> LONG
         {
@@ -93,7 +91,7 @@ void Cryptography::disableCrashDumps()
 
 void Cryptography::detectDebugger()
 {
-    // Check 1: IsDebuggerPresent (user-mode debugger)
+    // Check 1: user-mode debugger.
     if (IsDebuggerPresent())
     {
 #ifdef USE_QT_UI
@@ -105,16 +103,16 @@ void Cryptography::detectDebugger()
 #else
         OutputDebugStringA("[seal] FATAL: debugger detected\n");
 #endif
-        // 0xDEAD is our recognizable "security kill" exit code, making it
-        // easy to identify anti-debug terminations in logs and crash reports.
+        // 0xDEAD is the seal "security kill" exit code -- recognizable in
+        // logs and crash reports as an anti-debug termination.
         TerminateProcess(GetCurrentProcess(), 0xDEAD);
-        // __fastfail(7) == FAST_FAIL_FATAL_APP_EXIT: triggers an immediate
-        // kernel-level process termination that cannot be caught or handled.
+        // __fastfail(7) = FAST_FAIL_FATAL_APP_EXIT: immediate kernel-level
+        // termination that cannot be caught.
         __fastfail(7);
         return;
     }
 
-    // Check 2: CheckRemoteDebuggerPresent (remote/kernel debugger)
+    // Check 2: remote/kernel debugger.
     BOOL remoteDebugger = FALSE;
     if (CheckRemoteDebuggerPresent(GetCurrentProcess(), &remoteDebugger) && remoteDebugger)
     {
@@ -132,8 +130,8 @@ void Cryptography::detectDebugger()
         return;
     }
 
-    // Check 3: NtQueryInformationProcess(ProcessDebugPort)
-    // Dynamically resolve to avoid a hard dependency on ntdll.
+    // Check 3: NtQueryInformationProcess(ProcessDebugPort).
+    // Resolve dynamically to avoid a hard ntdll dependency.
     using PFN_NtQueryInformationProcess = LONG(WINAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
     HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
     if (hNtdll)
@@ -174,8 +172,8 @@ void Cryptography::detectDebugger()
 
 void Cryptography::trimWorkingSet()
 {
-    // Force pages out of the working set so plaintext doesn't linger
-    // in physical RAM after sensitive operations complete.
+    // Force pages out so plaintext doesn't linger in physical RAM
+    // after sensitive operations.
     EmptyWorkingSet(GetCurrentProcess());
 }
 
@@ -183,8 +181,7 @@ using PFN_SetProcessMitigationPolicy = BOOL(WINAPI*)(PROCESS_MITIGATION_POLICY, 
 
 BOOL Cryptography::setSecureProcessMitigations(bool allowDynamicCode)
 {
-    // Dynamically resolve SetProcessMitigationPolicy instead of linking directly.
-    // This API only exists on Windows 8+.
+    // Resolve dynamically (Windows 8+ only).
     HMODULE hK32 = GetModuleHandleW(L"kernel32.dll");
     if (!hK32)
         return FALSE;
@@ -195,8 +192,8 @@ BOOL Cryptography::setSecureProcessMitigations(bool allowDynamicCode)
 
     BOOL allSuccess = TRUE;
 
-    // 1. Disable dynamic code generation (prevents JIT injection attacks)
-    // Skip for QML UI mode: Qt Quick relies on JIT-generated code.
+    // 1. Block dynamic code generation (JIT-injection mitigation).
+    // Skipped in QML UI mode because Qt Quick's V4 needs JIT.
     if (!allowDynamicCode)
     {
         PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynCodePolicy = {};
@@ -204,28 +201,21 @@ BOOL Cryptography::setSecureProcessMitigations(bool allowDynamicCode)
         allSuccess &= pSet(ProcessDynamicCodePolicy, &dynCodePolicy, sizeof(dynCodePolicy));
     }
 
-    // 2. Require signed images only (prevents unsigned DLL injection)
+    // 2. Require signed images (block unsigned DLL injection).
     PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY sigPolicy = {};
     sigPolicy.MitigationOptIn = 1;
     sigPolicy.MicrosoftSignedOnly = 0;
     sigPolicy.AuditMicrosoftSignedOnly = 0;
     allSuccess &= pSet(ProcessSignaturePolicy, &sigPolicy, sizeof(sigPolicy));
 
-    // @author Codex (https://github.com/codex)
-    // 3. Side-channel isolation against transient-execution attacks. Each flag
-    // closes a different micro-architectural leak path that could disclose a
-    // secret residing in another logical core's caches or in our own pipeline:
-    //   - SmtBranchTargetIsolation: prevent Spectre-BTI cross-thread BTB poisoning
-    //   - IsolateSecurityDomain: tag this process as security-sensitive so the
-    //     scheduler avoids co-scheduling foreign work on sibling SMT threads
-    //   - DisablePageCombine: opt out of memory dedup so an attacker cannot
-    //     fingerprint vault contents via timing of CoW faults on combined pages
-    //   - SpeculativeStoreBypassDisable: block SSB (CVE-2018-3639) speculative
-    //     reads of older store buffer entries
-    //   - RestrictCoreSharing: forbid scheduling on the same physical core as
-    //     an untrusted (typically non-signed) process
-    // All five mitigations are best-effort - the kernel ignores unknown bits
-    // on older Windows builds and the call returns TRUE either way.
+    // 3. Side-channel isolation against transient-execution attacks:
+    //   - SmtBranchTargetIsolation:   Spectre-BTI cross-thread BTB poisoning.
+    //   - IsolateSecurityDomain:      keep foreign work off sibling SMT.
+    //   - DisablePageCombine:         no dedup fingerprinting via CoW timing.
+    //   - SpeculativeStoreBypassDisable: SSB (CVE-2018-3639).
+    //   - RestrictCoreSharing:        no untrusted process on the same core.
+    // All best-effort -- the kernel ignores unknown bits on older builds
+    // and the call still returns TRUE.
     PROCESS_MITIGATION_SIDE_CHANNEL_ISOLATION_POLICY sc{};
     sc.SmtBranchTargetIsolation = 1;
     sc.IsolateSecurityDomain = 1;
@@ -234,18 +224,18 @@ BOOL Cryptography::setSecureProcessMitigations(bool allowDynamicCode)
     sc.RestrictCoreSharing = 1;
     allSuccess &= pSet(ProcessSideChannelIsolationPolicy, &sc, sizeof(sc));
 
-    // 4. Enable strict handle checks
+    // 4. Strict handle checks.
     PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY handlePolicy = {};
     handlePolicy.RaiseExceptionOnInvalidHandleReference = 1;
     handlePolicy.HandleExceptionsPermanentlyEnabled = 1;
     allSuccess &= pSet(ProcessStrictHandleCheckPolicy, &handlePolicy, sizeof(handlePolicy));
 
-    // 5. Disable extension points (prevents third-party code injection)
+    // 5. Disable extension points (third-party injection mitigation).
     PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY extPolicy = {};
     extPolicy.DisableExtensionPoints = 1;
     allSuccess &= pSet(ProcessExtensionPointDisablePolicy, &extPolicy, sizeof(extPolicy));
 
-    // 6. Enable image load policy (restrict DLL loading locations)
+    // 6. Image-load policy: restrict DLL load locations.
     PROCESS_MITIGATION_IMAGE_LOAD_POLICY imgPolicy = {};
     imgPolicy.NoRemoteImages = 1;
     imgPolicy.NoLowMandatoryLabelImages = 1;
@@ -288,10 +278,9 @@ BOOL Cryptography::tryEnableLockPrivilege()
         return FALSE;
     }
 
-    // CRITICAL: AdjustTokenPrivileges has a well-known quirk -- it returns TRUE
-    // even when it only partially succeeds (e.g., the privilege doesn't exist in
-    // the token). The only reliable way to confirm the privilege was actually
-    // enabled is to check GetLastError() for ERROR_SUCCESS immediately after.
+    // CRITICAL: AdjustTokenPrivileges returns TRUE on partial success (e.g.
+    // privilege absent from token). Must check GetLastError() for
+    // ERROR_SUCCESS to confirm the privilege was actually enabled.
     DWORD gle = GetLastError();
     CloseHandle(hToken);
 
@@ -338,19 +327,13 @@ Cryptography::LockedKeyBuffer Cryptography::deriveKey(const SecurePwd& pwd,
                                                       std::span<const unsigned char> salt)
 {
     using CharT = std::remove_pointer_t<decltype(pwd.s.data())>;
-    // The key material lives in guard-paged, VirtualLock'd memory so it
-    // cannot be swapped to disk between derivation and first use.
+    // Key material lives in guard-paged, VirtualLock'd memory; never swaps.
     LockedKeyBuffer key(seal::cfg::KEY_LEN);
 
-    // @author Claude (https://github.com/claude)
-    // The master password lives in a locked_allocator-backed buffer whose
-    // pages spend most of their lifetime as PAGE_NOACCESS so a stray read
-    // anywhere else in the process traps instead of leaking. scrypt needs
-    // raw byte access during this call, so RWGuard does a scoped flip to
-    // PAGE_READWRITE for exactly the span we touch, and its destructor
-    // restores PAGE_NOACCESS on every exit path - including exceptions
-    // thrown from opensslCheck() below. This RAII shape is what keeps the
-    // plaintext-readable window minimal and exception-safe.
+    // Master password pages are PAGE_NOACCESS most of the time so stray
+    // reads trap. scrypt needs raw bytes, so RWGuard flips to
+    // PAGE_READWRITE for exactly this span and restores PAGE_NOACCESS on
+    // every exit (including throws from opensslCheck below).
     seal::RWGuard<CharT> guard(pwd.s.data());
 
     const char* pass = nullptr;
@@ -437,12 +420,9 @@ std::vector<unsigned char> Cryptography::encryptPacket(std::span<const unsigned 
     opensslCheck(EVP_CIPHER_CTX_ctrl(ctx.p, EVP_CTRL_GCM_GET_TAG, (int)tag.size(), tag.data()),
                  "GET_TAG failed");
 
-    // Serialize packet into wire format:
-    // [ AAD (optional) | salt | IV | ciphertext | GCM auth tag ]
-    // The receiver uses fixed-size fields (SALT_LEN, IV_LEN, TAG_LEN) to
-    // parse the packet back apart; ciphertext length is inferred from the
-    // remaining bytes. AAD is included unencrypted so the receiver can
-    // verify the header before doing any expensive key derivation.
+    // Wire format: [ AAD (optional) | salt | IV | ciphertext | GCM tag ].
+    // Receiver parses fixed-size fields; ciphertext length = remainder.
+    // AAD stays unencrypted so the header can be verified before scrypt.
     std::vector<unsigned char> out;
     out.reserve(aad.size() + salt.size() + iv.size() + ct.size() + tag.size());
     if (!aad.empty())
@@ -471,9 +451,8 @@ std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned 
     const unsigned char* p = packet.data();
     size_t n = packet.size();
 
-    // Parse the wire format: [ AAD | salt | IV | ciphertext | tag ]
-    // Walk through the packet using known fixed-size field lengths,
-    // with 'off' tracking the current read position past the AAD.
+    // Parse [ AAD | salt | IV | ciphertext | tag ]. 'off' tracks read
+    // position past the AAD; everything else is fixed-size.
     size_t off = 0;
     if (!aad_expected.empty())
     {
@@ -488,8 +467,7 @@ std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned 
     if (n < off + seal::cfg::SALT_LEN + seal::cfg::IV_LEN + seal::cfg::TAG_LEN)
         throw std::runtime_error("Ciphertext too short");
 
-    // Slice out fixed-size fields; ciphertext occupies whatever remains
-    // between IV and the trailing tag.
+    // Slice fixed-size fields; ciphertext = bytes between IV and tag.
     const unsigned char* salt = p + off;
     const unsigned char* iv = p + off + seal::cfg::SALT_LEN;
     const unsigned char* ct = p + off + seal::cfg::SALT_LEN + seal::cfg::IV_LEN;
@@ -528,9 +506,8 @@ std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned 
     opensslCheck(EVP_DecryptUpdate(ctx.p, plain.data(), &outlen, ct, (int)ct_len),
                  "DecryptUpdate(CT) failed");
 
-    // Set tag and finalize (auth check happens here).
-    // We copy the tag into a mutable buffer because EVP_CIPHER_CTX_ctrl's
-    // SET_TAG parameter is typed as void*, not const void*
+    // Set tag and finalize -- this is the auth check. SET_TAG takes void*,
+    // not const void*, so copy into a mutable buffer.
     std::vector<unsigned char> tagCopy(tag, tag + seal::cfg::TAG_LEN);
     opensslCheck(
         EVP_CIPHER_CTX_ctrl(ctx.p, EVP_CTRL_GCM_SET_TAG, (int)seal::cfg::TAG_LEN, tagCopy.data()),
@@ -603,10 +580,9 @@ void Cryptography::verifyPacket(std::span<const unsigned char> packet, const Sec
             "DecryptUpdate(AAD) failed");
     }
 
-    // Process ciphertext in fixed-size chunks, discarding decrypted output.
-    // GCM must see all ciphertext to compute the authentication tag, but the
-    // plaintext itself is not needed for verification. thread_local avoids
-    // consuming 64 KB of stack per call while keeping allocation cost at O(1).
+    // Stream ciphertext through GCM and discard plaintext; only the tag
+    // matters here. thread_local scratch keeps allocation at O(1) without
+    // burning 64 KB of stack per call.
     constexpr size_t VERIFY_CHUNK = 65536;
     thread_local unsigned char scratch[VERIFY_CHUNK];
     int outlen = 0;
@@ -642,8 +618,7 @@ void Cryptography::verifyPacket(std::span<const unsigned char> packet, const Sec
     }
 }
 
-// Explicit template instantiations for both narrow (char/UTF-8) and wide
-// (wchar_t/UTF-16) password types.
+// Explicit instantiations for narrow (UTF-8) and wide (UTF-16) passwords.
 template Cryptography::LockedKeyBuffer Cryptography::deriveKey(const secure_string<>&,
                                                                std::span<const unsigned char>);
 template Cryptography::LockedKeyBuffer Cryptography::deriveKey(const basic_secure_string<wchar_t>&,
