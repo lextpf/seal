@@ -16,12 +16,10 @@
 
 #include <algorithm>
 
-// Compute a DPI-aware text scale factor.
-// Baseline: 1920 physical pixels = 1.0 (no scaling).
-// Above 1920px the raw ratio (e.g. 3840/1920 = 2.0 on 4K) would double every
-// dimension. Instead, only a fraction of the excess is applied (text-only
-// boost) so text stays readable without blowing up buttons and layout.
-// Clamped to [kMinScale, kMaxScale] to avoid under-/over-scaling on extreme displays.
+// DPI-aware text scale factor. Baseline 1920 px = 1.0. Above 1920 px we
+// apply only a fraction of the excess (text-only boost), so buttons +
+// layout don't double on a 4K display. Clamped to [kMinScale, kMaxScale]
+// for extreme displays.
 static qreal computeUiScale()
 {
     static constexpr qreal kBaselineWidth = 1920.0;
@@ -45,8 +43,8 @@ static qreal computeUiScale()
 
 int RunQMLMode(int argc, char* argv[])
 {
-    // "Basic" is a non-native Qt Quick Controls style with no platform look-and-feel.
-    // This ensures our custom Theme.qml palette/colors take full effect on all OSes.
+    // "Basic" is the non-native Quick Controls style; lets Theme.qml's
+    // palette take full effect regardless of OS look-and-feel.
     QQuickStyle::setStyle("Basic");
 
     QGuiApplication app(argc, argv);
@@ -66,9 +64,9 @@ int RunQMLMode(int argc, char* argv[])
 
     seal::Backend backend;
     QQmlApplicationEngine engine;
-    // If QML object creation fails (e.g. syntax error in Main.qml), abort
-    // immediately rather than displaying an empty window the user can't interact with.
-    // QueuedConnection ensures the slot runs after the engine finishes its current frame.
+    // Abort on QML construction failure (e.g. Main.qml syntax error)
+    // instead of leaving an empty window. QueuedConnection runs the slot
+    // after the engine finishes its current frame.
     QObject::connect(
         &engine,
         &QQmlApplicationEngine::objectCreationFailed,
