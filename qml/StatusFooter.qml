@@ -47,6 +47,10 @@ Rectangle {
             color: Theme.textSubtle
         }
 
+        // Browser-bridge status chip. Click to toggle (M8 panic mode).
+        // Install/uninstall is CLI-only (seal install-browser-extension).
+        BridgeSettings { }
+
         Item { Layout.fillWidth: true }
 
         // Vault filename
