@@ -1,10 +1,13 @@
-# Build output
-build/
+# Build output (track the empty dir via .gitkeep; ignore its contents)
+build/*
+!build/.gitkeep
 build-*/
 
-# Generated documentation
-docs/
-site/
+# Generated documentation (main.html is the hand-authored mkdocs theme override)
+docs/*
+!docs/main.html
+site/*
+!site/.gitkeep
 
 # Python
 __pycache__/

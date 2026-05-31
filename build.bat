@@ -36,7 +36,7 @@ if "%REPO_ROOT:~-1%"=="\" set "REPO_ROOT=%REPO_ROOT:~0,-1%"
 
 REM --- vcpkg: use env VCPKG_ROOT if set, otherwise fall back ---
 if not defined VCPKG_ROOT set "VCPKG_ROOT=%REPO_ROOT%\..\vcpkg"
-set "REPO_OVERLAY_TRIPLETS=%REPO_ROOT%\triplets"
+set "REPO_OVERLAY_TRIPLETS=%REPO_ROOT%\cmake"
 set "DEFAULT_TRIPLET=x64-windows-release-msvc143"
 set "STATIC_TRIPLET=x64-windows-static-release-msvc143"
 

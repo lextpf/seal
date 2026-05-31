@@ -19,6 +19,15 @@
 namespace seal
 {
 
+namespace signer
+{
+// Defined in SignerUtils.hpp; forward-declared here so the public API can take
+// a browser kind by value without pulling the wintrust-heavy header into every
+// translation unit that includes BrowserBridge.hpp. Callers that pass a kind
+// (e.g. FillController.cpp) include SignerUtils.hpp for the complete type.
+enum class BrowserKind;
+}  // namespace signer
+
 /**
  * @brief A single bridge entry recorded from the WebExtension's mousedown report.
  * @author Alex (https://github.com/lextpf)
@@ -81,7 +90,7 @@ struct BridgeEntry
  *   parent (via `CreateToolhelp32Snapshot`, walking through cmd.exe /
  *   powershell.exe hops) must (a) match a known browser image name and
  *   (b) pass `WinVerifyTrust`. Closes the "puppet a signed host" hole:
- *   same-user malware launching seal-browser-host.exe with attacker-
+ *   same-user malware launching seal-browser.exe with attacker-
  *   controlled stdin still fails because its parent isn't a browser.
  * - **M5: Bridge-alone short-circuit prohibition** -- enforced in
  *   `FusionDecider`, not here. A Tier-1 hit from the bridge probe
@@ -219,9 +228,23 @@ public:
      * yield a bridge match, and by the chip indicator to drive the green/red
      * pulse colour.
      *
-     * @return true when a peer is currently connected.
+     * @return true when a peer of any browser is currently connected.
      */
     bool isPeerConnected() const noexcept;
+
+    /**
+     * @brief Whether a peer launched by a specific browser is connected.
+     *
+     * Concurrent connections are supported (one named-pipe instance per host),
+     * so distinct browsers can be connected simultaneously. The connecting
+     * browser is the @c WinVerifyTrust-validated ancestor resolved during the
+     * accept handshake (never the peer's self-report), so this cannot be
+     * spoofed. Used to drive the per-browser status dots in the footer.
+     *
+     * @param kind The browser to query.
+     * @return true when at least one connected peer was launched by @p kind.
+     */
+    bool isPeerConnected(seal::signer::BrowserKind kind) const noexcept;
 
     /**
      * @brief Current size of the in-memory verdict map.

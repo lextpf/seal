@@ -5,9 +5,16 @@ validation:
     not_found: info
 site_description: AES-256-GCM encryption utility with Qt6 GUI and CLI modes
 
+# main.html is the hand-authored theme override that lives alongside the
+# doxide-generated markdown in docs/. Exclude it from the page collection so it
+# is not copied verbatim into the built site; it is still picked up as the
+# theme's custom_dir template below.
+exclude_docs: |
+  main.html
+
 theme:
   name: material
-  custom_dir: overrides
+  custom_dir: docs
   palette:
     - scheme: slate
       primary: deep purple

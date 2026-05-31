@@ -43,7 +43,7 @@ CMakePresets.json       text eol=lf
 *.xml                   text
 *.txt                   text
 vcpkg.json              text eol=lf
-LICENSE                 text
+LICENSE.md              text diff=markdown
 Doxyfile                text
 Doxyfile.in             text
 .gitattributes          text eol=lf
@@ -72,9 +72,11 @@ docs/**                 linguist-generated=true
 site/**                 linguist-generated=true
 build/**                linguist-generated=true -diff
 
+# The mkdocs theme override under docs/ is hand-authored, not generated.
+docs/main.html          -linguist-generated linguist-documentation=true
+
 # Third-party and assets are not authored here.
 assets/**               linguist-vendored=true
-overrides/**            linguist-documentation=true
 
 # ----------------------------------------------------------------------------
 # Binary

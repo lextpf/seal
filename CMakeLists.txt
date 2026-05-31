@@ -313,9 +313,9 @@ endif()
 # Native-messaging host: tiny standalone exe spawned by the browser to
 # bridge between Chrome's native-messaging stdio protocol and the seal
 # named pipe. Built as a separate target so it can be signed independently.
-option(ENABLE_BROWSER_HOST "Build seal-browser-host.exe alongside seal" ON)
+option(ENABLE_BROWSER_HOST "Build seal-browser.exe alongside seal" ON)
 if(ENABLE_BROWSER_HOST)
-    add_subdirectory(host/seal-browser-host)
+    add_subdirectory(host/seal-browser)
 endif()
 
 # Bundle the WebExtension folder into the install layout so the user can

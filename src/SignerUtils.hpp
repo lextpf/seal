@@ -6,9 +6,9 @@
  * @ingroup Utilities
  *
  * Header-only utilities used by both the in-process BrowserBridge and the
- * standalone seal-browser-host stdio shim. Both sides verify each other's
+ * standalone seal-browser stdio shim. Both sides verify each other's
  * Authenticode signer identity so a same-user attacker cannot impersonate
- * either the pipe server (seal.exe) or the pipe client (seal-browser-host.exe).
+ * either the pipe server (seal.exe) or the pipe client (seal-browser.exe).
  *
  * Signer identity is represented as a SHA-256 thumbprint of the certificate's
  * SubjectPublicKeyInfo (the same form used for HPKP / cert-pinning). This
@@ -32,12 +32,12 @@
  *
  * - **Pipe-name impersonation** -- a same-user process pre-creates a
  *   `\\.\pipe\seal-fill-<bogus-hex>` and accepts the connection from
- *   `seal-browser-host.exe`. Mitigation: the host queries the pipe
+ *   `seal-browser.exe`. Mitigation: the host queries the pipe
  *   server's PID via `GetNamedPipeServerProcessId` and demands that
  *   the server's binary share seal.exe's SPKI thumbprint. The
  *   attacker can't produce a signed seal.exe.
  * - **Signed-host puppeting** -- malware runs the real signed
- *   `seal-browser-host.exe` as a subprocess with attacker-owned
+ *   `seal-browser.exe` as a subprocess with attacker-owned
  *   stdin/stdout, forwarding crafted JSON to the bridge. Mitigation:
  *   the bridge resolves the host's parent process via the chain
  *   walker and demands the immediate (or shell-traversal) ancestor be
@@ -442,6 +442,127 @@ inline bool isKnownBrowserImage(const std::wstring& imagePath)
         }
     }
     return false;
+}
+
+/**
+ * @brief A specific browser recognised by isKnownBrowserImage().
+ * @ingroup Utilities
+ *
+ * Each value names one launcher in the allow-list. The bridge attributes an
+ * accepted connection to a kind so the UI can show a per-browser status dot.
+ * `Unknown` is index 0 and `Count` is the sentinel size (used to dimension a
+ * per-kind array). Keep the set in sync with identifyBrowser() and
+ * isKnownBrowserImage().
+ */
+enum class BrowserKind
+{
+    Unknown = 0,  ///< Not a recognised browser image.
+    Chrome,       ///< chrome.exe
+    Edge,         ///< msedge.exe
+    Brave,        ///< brave.exe
+    Opera,        ///< opera.exe
+    Vivaldi,      ///< vivaldi.exe
+    Thorium,      ///< thorium.exe
+    Chromium,     ///< chromium.exe
+    Firefox,      ///< firefox.exe
+    LibreWolf,    ///< librewolf.exe
+    Waterfox,     ///< waterfox.exe
+    Floorp,       ///< floorp.exe
+    Zen,          ///< zen.exe
+    Count         ///< Sentinel: number of kinds (including Unknown).
+};
+
+/**
+ * @brief Classify an image path as a specific @ref BrowserKind.
+ *
+ * Case-insensitive basename match against the same allow-list as
+ * isKnownBrowserImage(); anything unrecognised maps to @ref
+ * BrowserKind::Unknown.
+ *
+ * @param imagePath Full path or basename of the process image.
+ * @return The matching @ref BrowserKind, or Unknown.
+ */
+inline BrowserKind identifyBrowser(const std::wstring& imagePath)
+{
+    if (imagePath.empty())
+    {
+        return BrowserKind::Unknown;
+    }
+    const auto sep = imagePath.find_last_of(L"\\/");
+    std::wstring basename = (sep == std::wstring::npos) ? imagePath : imagePath.substr(sep + 1);
+    for (auto& c : basename)
+    {
+        c = detail::asciiLower(c);
+    }
+
+    struct KindEntry
+    {
+        std::wstring_view m_Image;
+        BrowserKind m_Kind;
+    };
+    static constexpr std::array<KindEntry, 12> kKinds = {{
+        {L"chrome.exe", BrowserKind::Chrome},
+        {L"msedge.exe", BrowserKind::Edge},
+        {L"brave.exe", BrowserKind::Brave},
+        {L"opera.exe", BrowserKind::Opera},
+        {L"vivaldi.exe", BrowserKind::Vivaldi},
+        {L"thorium.exe", BrowserKind::Thorium},
+        {L"chromium.exe", BrowserKind::Chromium},
+        {L"firefox.exe", BrowserKind::Firefox},
+        {L"librewolf.exe", BrowserKind::LibreWolf},
+        {L"waterfox.exe", BrowserKind::Waterfox},
+        {L"floorp.exe", BrowserKind::Floorp},
+        {L"zen.exe", BrowserKind::Zen},
+    }};
+    for (const auto& entry : kKinds)
+    {
+        if (basename == entry.m_Image)
+        {
+            return entry.m_Kind;
+        }
+    }
+    return BrowserKind::Unknown;
+}
+
+/**
+ * @brief Short logfmt token for a @ref BrowserKind ("chrome", "brave", ...).
+ *
+ * @param kind The browser kind.
+ * @return A stable lowercase token; "unknown" for Unknown/Count.
+ */
+inline std::string_view browserKindToken(BrowserKind kind) noexcept
+{
+    switch (kind)
+    {
+        case BrowserKind::Chrome:
+            return "chrome";
+        case BrowserKind::Edge:
+            return "edge";
+        case BrowserKind::Brave:
+            return "brave";
+        case BrowserKind::Opera:
+            return "opera";
+        case BrowserKind::Vivaldi:
+            return "vivaldi";
+        case BrowserKind::Thorium:
+            return "thorium";
+        case BrowserKind::Chromium:
+            return "chromium";
+        case BrowserKind::Firefox:
+            return "firefox";
+        case BrowserKind::LibreWolf:
+            return "librewolf";
+        case BrowserKind::Waterfox:
+            return "waterfox";
+        case BrowserKind::Floorp:
+            return "floorp";
+        case BrowserKind::Zen:
+            return "zen";
+        case BrowserKind::Unknown:
+        case BrowserKind::Count:
+        default:
+            return "unknown";
+    }
 }
 
 /**

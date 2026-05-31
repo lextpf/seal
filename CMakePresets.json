@@ -22,7 +22,7 @@
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "VCPKG_MANIFEST_MODE": "ON",
         "VCPKG_MANIFEST_INSTALL": "ON",
-        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/cmake",
         "ENABLE_TESTS": "ON"
       },
       "condition": {
@@ -84,7 +84,7 @@
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "x64-windows-release-msvc143",
         "VCPKG_HOST_TRIPLET": "x64-windows-release-msvc143",
-        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/cmake",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed",
         "VCPKG_INSTALL_OPTIONS": "--x-buildtrees-root=$env{VCPKG_BUILDTREES_ROOT}",
         "CMAKE_BUILD_TYPE": "Release",

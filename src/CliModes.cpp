@@ -464,14 +464,21 @@ struct BrowserTarget
     std::wstring_view m_ExtensionsUrl;  ///< URL to open after install for sideloading.
 };
 
-// Chrome only for now. Edge/Brave/Opera (would reuse the manifest+ID) and
-// Firefox (separate manifest + ID) were intentionally dropped; add them
-// back here when multi-browser support returns.
-constexpr std::array<BrowserTarget, 1> kBrowserTargets{{
+// Chrome + Brave. Both are Chromium, so they share the same extension (same
+// RSA "key" -> same extension ID -> same chrome-extension:// origin) and the
+// same Chromium manifest (com.seal.fill.json); only the per-browser registry
+// root differs. Edge/Opera/Vivaldi would slot in the same way. Firefox is a
+// different engine (separate manifest schema + Mozilla registry root) and is
+// intentionally not included here.
+constexpr std::array<BrowserTarget, 2> kBrowserTargets{{
     {L"Chrome",
      L"Software\\Google\\Chrome\\NativeMessagingHosts\\com.seal.fill",
      L"chrome.exe",
      L"chrome://extensions/"},
+    {L"Brave",
+     L"Software\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts\\com.seal.fill",
+     L"brave.exe",
+     L"brave://extensions/"},
 }};
 
 // Resolve a browser via App Paths (HKCU then HKLM); empty if uninstalled.
@@ -733,7 +740,7 @@ int installBrowserExtensionInternal(std::string* outMessage)
         return 1;
     }
 
-    const std::filesystem::path hostExe = exeDir / "seal-browser-host.exe";
+    const std::filesystem::path hostExe = exeDir / "seal-browser.exe";
     if (!std::filesystem::exists(hostExe))
     {
         writeCliDiag(seal::console::Tone::Error,
@@ -743,7 +750,7 @@ int installBrowserExtensionInternal(std::string* outMessage)
                       seal::diag::pathSummary(hostExe.string(), "host")});
         if (outMessage != nullptr)
         {
-            *outMessage = "seal-browser-host.exe not found beside seal.exe.";
+            *outMessage = "seal-browser.exe not found beside seal.exe.";
         }
         return 1;
     }
@@ -845,8 +852,9 @@ int installBrowserExtensionInternal(std::string* outMessage)
                 std::cout << "  - " << toUtf8(name) << "\n";
             }
         }
-        std::cout << "\nFinish the sideload in Chrome:\n"
-                     "  1) Toggle 'Developer mode' (top-right of chrome://extensions/).\n"
+        std::cout << "\nFinish the sideload (Chrome or Brave):\n"
+                     "  1) Toggle 'Developer mode' (top-right of chrome://extensions/\n"
+                     "     or brave://extensions/).\n"
                      "  2) Click 'Load unpacked' and paste the path above.\n"
                      "\nThe extension ID is pre-registered in the manifest, so no further\n"
                      "configuration is required after the unpacked load.\n";

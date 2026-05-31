@@ -53,7 +53,7 @@ int HandleFileDecrypt(const std::string& inputPath, const std::string& outputPat
 /// @return 0 on success, 1 on error.
 int HandleStringMode(bool encryptMode, const std::string& inlineData);
 
-/// @brief Register the seal-browser-host native-messaging manifest in HKCU.
+/// @brief Register the seal-browser native-messaging manifest in HKCU.
 /// @ingroup CLI
 ///
 /// Writes Chrome/Edge/Brave/Firefox NativeMessagingHosts registry entries
@@ -61,10 +61,10 @@ int HandleStringMode(bool encryptMode, const std::string& inlineData);
 /// alongside seal.exe. Prints the extension folder path so the user can
 /// load it into chrome://extensions (developer mode) or about:debugging.
 ///
-/// @return 0 on success, 1 if seal-browser-host.exe could not be located.
+/// @return 0 on success, 1 if seal-browser.exe could not be located.
 int HandleInstallBrowserExtensionMode();
 
-/// @brief Remove the seal-browser-host native-messaging manifest from HKCU.
+/// @brief Remove the seal-browser native-messaging manifest from HKCU.
 /// @ingroup CLI
 ///
 /// Deletes only the named registry values; the parent NativeMessagingHosts
@@ -81,7 +81,7 @@ int HandleUninstallBrowserExtensionMode();
 /// two surfaces stay in lockstep.
 ///
 /// @param outMessage Optional human-readable status string for the GUI caller.
-/// @return 0 on success, 1 if seal-browser-host.exe could not be located.
+/// @return 0 on success, 1 if seal-browser.exe could not be located.
 int installBrowserExtensionInternal(std::string* outMessage);
 
 /// @brief Shared implementation of the uninstall flow. See installBrowserExtensionInternal.

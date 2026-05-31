@@ -1,4 +1,4 @@
-// seal-browser-host - native-messaging stdio <-> named-pipe bridge.
+// seal-browser - native-messaging stdio <-> named-pipe bridge.
 //
 // Spawned by the browser when the WebExtension calls connectNative().
 // Reads Chrome native-messaging messages from stdin and forwards.
@@ -598,7 +598,7 @@ void writeExitLog(int code, const char* reason)
 // the operator actually reads.
 void emitExitDiag(int code, const char* reason)
 {
-    std::fprintf(stderr, "[seal-browser-host] exit=%d reason=%s\n", code, reason);
+    std::fprintf(stderr, "[seal-browser] exit=%d reason=%s\n", code, reason);
     std::fflush(stderr);
     writeExitLog(code, reason);
 }

@@ -94,7 +94,7 @@ const char* bridgeParseErrorToken(BridgeParseError error);
  * @c BrowserBridge documentation for the schema).
  *
  * The originating browser is identified out-of-band: the bridge accepts
- * connections only from a signed @c seal-browser-host whose parent is a
+ * connections only from a signed @c seal-browser whose parent is a
  * known browser, and keys its in-memory map by the parent (browser) PID.
  * Including a @c browser_pid claim in the payload would only add an
  * attacker-controllable string that has to match the OS-derived PID, so
