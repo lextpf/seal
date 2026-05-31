@@ -350,6 +350,7 @@ if(ENABLE_TESTS)
         tests/test_win32_style_probe.cpp
         tests/test_bridge_fuzz.cpp
         tests/test_bridge_security.cpp
+        tests/test_signer_family.cpp
         tests/test_brand_icon_resolver.cpp
         tests/test_url_binding.cpp
         src/Cryptography.cpp
