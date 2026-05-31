@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+
+{% block extrahead %}
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@400;700&display=swap');
+
+    /* Default 200% zoom */
+    body { zoom: 2; }
+    .mermaid, .mermaid *
+    {
+      font-family: 'Caveat', cursive !important;
+    }
+
+    /* zoom: 2 halves the effective viewport, triggering Material's mobile
+       sidebar layout (position: fixed, overflow: hidden). Force both
+       sidebars back to desktop-style sticky positioning so the nav
+       stays inside the document flow and scrolls independently. */
+    .md-sidebar
+    {
+      position: sticky !important;
+      top: 0 !important;
+      height: 100vh !important;
+      max-height: 100vh !important;
+      transform: none !important;
+      z-index: 3 !important;
+    }
+    .md-sidebar .md-sidebar__scrollwrap
+    {
+      position: relative !important;
+      overflow-x: hidden !important;
+      overflow-y: auto !important;
+      max-height: calc(100vh - 1rem) !important;
+      scrollbar-width: thin;
+    }
+    .md-sidebar .md-sidebar__scrollwrap::-webkit-scrollbar
+    {
+      width: 4px;
+    }
+    .md-sidebar .md-sidebar__scrollwrap::-webkit-scrollbar-thumb
+    {
+      background-color: var(--md-default-fg-color--lighter);
+      border-radius: 2px;
+    }
+    .md-sidebar .md-sidebar__inner
+    {
+      padding-bottom: 3rem;
+    }
+
+    /* !!! function blue */
+    .md-typeset .admonition.function,
+    .md-typeset details.function
+    {
+      border-color: #3b82f6;
+    }
+    .md-typeset .function > .admonition-title,
+    .md-typeset .function > summary
+    {
+      background-color: rgba(59, 130, 246, 0.1);
+      border-color: #3b82f6;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 0.82em;
+    }
+    .md-typeset .function > .admonition-title::before,
+    .md-typeset .function > summary::before
+    {
+      background-color: #3b82f6;
+      -webkit-mask-image: var(--md-admonition-icon--example);
+              mask-image: var(--md-admonition-icon--example);
+    }
+
+    /* !!! variable purple */
+    .md-typeset .admonition.variable,
+    .md-typeset details.variable
+    {
+      border-color: #8b5cf6;
+    }
+    .md-typeset .variable > .admonition-title,
+    .md-typeset .variable > summary
+    {
+      background-color: rgba(139, 92, 246, 0.1);
+      border-color: #8b5cf6;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 0.82em;
+    }
+    .md-typeset .variable > .admonition-title::before,
+    .md-typeset .variable > summary::before
+    {
+      background-color: #8b5cf6;
+      -webkit-mask-image: var(--md-admonition-icon--info);
+              mask-image: var(--md-admonition-icon--info);
+    }
+
+    /* !!! macro amber */
+    .md-typeset .admonition.macro,
+    .md-typeset details.macro
+    {
+      border-color: #f59e0b;
+    }
+    .md-typeset .macro > .admonition-title,
+    .md-typeset .macro > summary
+    {
+      background-color: rgba(245, 158, 11, 0.1);
+      border-color: #f59e0b;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 0.82em;
+    }
+    .md-typeset .macro > .admonition-title::before,
+    .md-typeset .macro > summary::before
+    {
+      background-color: #f59e0b;
+      -webkit-mask-image: var(--md-admonition-icon--quote);
+              mask-image: var(--md-admonition-icon--quote);
+    }
+
+    /* !!! typedef teal */
+    .md-typeset .admonition.typedef,
+    .md-typeset details.typedef
+    {
+      border-color: #14b8a6;
+    }
+    .md-typeset .typedef > .admonition-title,
+    .md-typeset .typedef > summary
+    {
+      background-color: rgba(20, 184, 166, 0.1);
+      border-color: #14b8a6;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 0.82em;
+    }
+    .md-typeset .typedef > .admonition-title::before,
+    .md-typeset .typedef > summary::before
+    {
+      background-color: #14b8a6;
+      -webkit-mask-image: var(--md-admonition-icon--abstract);
+              mask-image: var(--md-admonition-icon--abstract);
+    }
+  </style>
+  <script>
+    window.MathJax =
+    {
+      tex:
+      {
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']],
+        processEscapes: true,
+        processEnvironments: true
+      },
+      options:
+      {
+        ignoreHtmlClass: 'tex2jax_ignore',
+        processHtmlClass: 'tex2jax_process'
+      },
+      output:
+      {
+        font: 'mathjax-fira'
+      },
+      chtml:
+      {
+        displayAlign: 'left',
+        displayIndent: '2em'
+      },
+      svg:
+      {
+        displayAlign: 'left',
+        displayIndent: '2em'
+      }
+    };
+  </script>
+{% endblock %}
+
+{% block scripts %}
+  {{ super() }}
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    import elkLayouts from
+      "https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk@0.2.0/dist/mermaid-layout-elk.esm.min.mjs";
+    mermaid.registerLayoutLoaders(elkLayouts);
+
+    mermaid.initialize(
+    {
+      startOnLoad: false,
+      theme: 'dark',
+      look: 'handDrawn',
+      fontFamily: 'Caveat, cursive',
+      flowchart:
+      {
+        useMaxWidth: true,
+        curve: 'curve',
+        nodeSpacing: 70,
+        rankSpacing: 90,
+      },
+      sequence: { useMaxWidth: true },
+      themeVariables:
+      {
+        mainBkg: '#0b0f14',
+        lineColor: '#94a3b8',
+        clusterBkg: '#0f172a',
+        clusterBorder: '#334155',
+        fontSize: '36px',
+        // Node colors
+        primaryColor: '#3b82f6',
+        primaryTextColor: '#f8fafc',
+        primaryBorderColor: '#60a5fa',
+        secondaryColor: '#8b5cf6',
+        secondaryTextColor: '#f8fafc',
+        secondaryBorderColor: '#a78bfa',
+        tertiaryColor: '#10b981',
+        tertiaryTextColor: '#f8fafc',
+        tertiaryBorderColor: '#34d399',
+        // State diagram
+        labelBackgroundColor: '#1e293b',
+        noteBkgColor: '#1e3a5f',
+        noteTextColor: '#e2e8f0',
+        noteBorderColor: '#3b82f6'
+      }
+    });
+
+    function fixMermaidBlocks()
+    {
+      const pres = document.querySelectorAll('pre.mermaid');
+      const nodes = [];
+      pres.forEach(pre =>
+      {
+        let src = pre.textContent.trim();
+        if (!src) return;
+        const div = document.createElement('div');
+        div.className = 'mermaid';
+        div.textContent = src;
+        pre.replaceWith(div);
+        nodes.push(div);
+      });
+      return nodes;
+    }
+
+    const nodes = fixMermaidBlocks();
+    if (nodes.length)
+    {
+      // Temporarily reset zoom so mermaid measures text correctly
+      document.body.style.zoom = '1';
+      await mermaid.run({ nodes });
+
+      // Widen foreignObject elements so Caveat font text isn't clipped
+      document.querySelectorAll('.mermaid foreignObject').forEach(fo =>
+      {
+        const w = parseFloat(fo.getAttribute('width') || 0);
+        if (w > 0) fo.setAttribute('width', w + 8);
+      });
+
+      document.body.style.zoom = '2';
+    }
+
+    // Inject Material Design Icons into sidebar nav labels
+    // Uses base64-encoded SVGs with CSS mask-image for currentColor inheritance
+    const navIcons =
+    {
+      'Crypto': 'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyLDE3QTIsMiAwIDAsMCAxNCwxNUMxNCwxMy44OSAxMy4xLDEzIDEyLDEzQTIsMiAwIDAsMCAxMCwxNUEyLDIgMCAwLDAgMTIsMTdNMTgsOEEyLDIgMCAwLDEgMjAsMTBWMjBBMiwyIDAgMCwxIDE4LDIwSDZBMiwyIDAgMCwxIDQsMThWMTBDNCw4Ljg5IDQuOSw4IDYsOEg3VjZBNSw1IDAgMCwxIDEyLDFBNSw1IDAgMCwxIDE3LDZWOEgxOE0xMiwzQTMsMyAwIDAsMCA5LDZWOEgxNVY2QTMsMyAwIDAsMCAxMiwzWiIgZmlsbD0iY3VycmVudENvbG9yIi8+PC9zdmc+',
+      'Memory': 'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTE3LDE3SDdWN0gxN00yMSwxMVY5SDE5VjdDMTksNS44OSAxOC4xLDUgMTcsNUgxNVYzSDEzVjVIMTFWM0g5VjVIN0M1Ljg5LDUgNSw1Ljg5IDUsN1Y5SDNWMTFINVYxM0gzVjE1SDVWMTdBMiwyIDAgMCwwIDcsMTlIOVYyMUgxMVYxOUgxM1YyMUgxNVYxOUgxN0EyLDIgMCAwLDAgMTksMTdWMTVIMjFWMTNIMTlWMTFNMTUsMTVIOVY5SDE1VjE1WiIgZmlsbD0iY3VycmVudENvbG9yIi8+PC9zdmc+',
+      'I/O':    'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTE0LDJINkEyLDIgMCAwLDAgNCw0VjIwQTIsMiAwIDAsMCA2LDIySDE4QTIsMiAwIDAsMCAyMCwyMFY4TDE0LDJNMTgsMjBINlY0SDEzVjlIMThWMjBNMTIsMTJBMiwyIDAgMCwwIDEwLDE0VjE1SDlWMTlIMTVWMTVIMTRWMTRBMiwyIDAgMCwwIDEyLDEyWiIgZmlsbD0iY3VycmVudENvbG9yIi8+PC9zdmc+',
+      'Vault':  'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyLDFMMyw1VjExQzMsMTYuNTUgNi44NCwyMS43NCAxMiwyM0MxNy4xNiwyMS43NCAyMSwxNi41NSAyMSwxMVY1TDEyLDFNMTIsMy4xOEwxOSw2LjNWMTFDMTksMTUuNTIgMTYuMDYsMTkuNjkgMTIsMjAuOTNDNy45NCwxOS42OSA1LDE1LjUyIDUsMTFWNi4zTDEyLDMuMThNMTIsNkEyLDIgMCAwLDAgMTAsOFY5SDhWMTVIMTZWOUgxNFY4QTIsMiAwIDAsMCAxMiw2TTEyLDhWOUgxNFY4QTEsMSAwIDAsMCAxMiw4WiIgZmlsbD0iY3VycmVudENvbG9yIi8+PC9zdmc+',
+      'GUI':    'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTIxLDE2SDNWNEgyMU0yMSwySDNDMS44OSwyIDEsMi44OSAxLDRWMTZBMiwyIDAgMCwwIDMsMThIMTBWMjBIOFYyMkgxNlYyMEgxNFYxOEgyMUEyLDIgMCAwLDAgMjMsMTZWNEMyMywyLjg5IDIyLjEsMiAyMSwyWiIgZmlsbD0iY3VycmVudENvbG9yIi8+PC9zdmc+',
+      'CLI':    'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTIwLDE5VjdINFYxOUgyME0yMCwzQTIsMiAwIDAsMSAyMiw1VjE5QTIsMiAwIDAsMSAyMCwyMUg0QTIsMiAwIDAsMSAyLDE5VjVDMiwzLjg5IDIuOSwzIDQsM0gyME0xMywxN1YxNUgxOFYxN0gxM005LjU4LDEzTDUuNTcsOUg4LjRMMTEuNywxMi4zQzEyLjA5LDEyLjY5IDEyLjA5LDEzLjMzIDExLjcsMTMuNzJMOC40MiwxN0g1LjU5TDkuNTgsMTNaIiBmaWxsPSJjdXJyZW50Q29sb3IiLz48L3N2Zz4=',
+      'Utilities': 'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTE4LDE2SDE2VjE1SDhWMTZINlYxNUgyVjIwSDIyVjE1SDE4VjE2TTIwLDhIMTdWNkEyLDIgMCAwLDAgMTUsNEg5QTIsMiAwIDAsMCA3LDZWOEg0QTIsMiAwIDAsMCAyLDEwVjE0SDZWMTJIOFYxNEgxNlYxMkgxOFYxNEgyMlYxMEEyLDIgMCAwLDAgMjAsOE0xNSw4SDlWNkgxNVY4WiIgZmlsbD0iY3VycmVudENvbG9yIi8+PC9zdmc+'
+    };
+
+    function injectNavIcons()
+    {
+      document.querySelectorAll('.md-nav__link').forEach(link =>
+      {
+        const span = link.querySelector('.md-ellipsis') || link;
+        const text = span.textContent.trim();
+        const b64 = navIcons[text];
+        if (!b64) return;
+        if (span.querySelector('.nav-icon')) return;
+
+        const icon = document.createElement('span');
+        icon.className = 'nav-icon';
+        const uri = 'url(data:image/svg+xml;base64,' + b64 + ')';
+        icon.style.cssText = 'display:inline-block;width:1.1em;height:1.1em;vertical-align:-0.15em;margin-right:0.3em;flex-shrink:0;background-color:currentColor;-webkit-mask-image:' + uri + ';mask-image:' + uri + ';-webkit-mask-size:contain;mask-size:contain;';
+        span.prepend(icon);
+      });
+    }
+    injectNavIcons();
+  </script>
+{% endblock %}
