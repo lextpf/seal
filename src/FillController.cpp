@@ -5,6 +5,7 @@
 #include "Diagnostics.hpp"
 #include "FusionDecider.hpp"
 #include "Logging.hpp"
+#include "SignerUtils.hpp"
 #include "UrlBinding.hpp"
 
 #include <QtCore/QThread>
@@ -112,6 +113,16 @@ bool FillController::isBridgeEnabled() const
 bool FillController::isBridgePeerConnected() const
 {
     return m_BrowserBridge.isPeerConnected();
+}
+
+bool FillController::isBridgeChromeConnected() const
+{
+    return m_BrowserBridge.isPeerConnected(seal::signer::BrowserKind::Chrome);
+}
+
+bool FillController::isBridgeBraveConnected() const
+{
+    return m_BrowserBridge.isPeerConnected(seal::signer::BrowserKind::Brave);
 }
 
 bool FillController::isArmed() const

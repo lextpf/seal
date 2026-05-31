@@ -211,11 +211,23 @@ public:
     bool isBridgeEnabled() const;
 
     /**
-     * @brief Whether the browser-companion native messaging host is
-     * currently connected to the bridge (handshake complete, port open).
-     * Used by Backend to drive the chip's "actually working" visual.
+     * @brief Whether any browser-companion native messaging host is currently
+     * connected to the bridge (handshake complete, port open). Used by Backend
+     * to drive the chip's aggregate "actually working" visual.
      */
     bool isBridgePeerConnected() const;
+
+    /**
+     * @brief Whether a Chrome-launched companion host is currently connected.
+     * Drives the per-browser Chrome status dot in the footer.
+     */
+    bool isBridgeChromeConnected() const;
+
+    /**
+     * @brief Whether a Brave-launched companion host is currently connected.
+     * Drives the per-browser Brave status dot in the footer.
+     */
+    bool isBridgeBraveConnected() const;
 
 signals:
     void armedChanged();             ///< Armed state toggled on or off.
