@@ -155,21 +155,36 @@ Backend::Backend(QObject* parent)
         m_FillController->disableBridge();
     }
 
-    // BrowserBridge isn't a QObject, so poll its peer-connected atomic at
-    // 1 Hz and convert level changes into bridgePeerConnectedChanged. The
-    // QML chip lights green only after a real handshake; the underlying
-    // atomic still flips immediately on connect/disconnect.
+    // BrowserBridge isn't a QObject, so poll its per-browser connected state at
+    // 1 Hz and convert level changes into the matching *Changed signals. The
+    // QML dots light green only after a real handshake; the underlying atomics
+    // still flip immediately on connect/disconnect. The aggregate
+    // bridgePeerConnected is kept (chrome || brave) for existing bindings.
     m_LastPeerConnected = m_FillController->isBridgePeerConnected();
+    m_LastChromeConnected = m_FillController->isBridgeChromeConnected();
+    m_LastBraveConnected = m_FillController->isBridgeBraveConnected();
     m_BridgePeerPoll.setInterval(1000);
     connect(&m_BridgePeerPoll,
             &QTimer::timeout,
             this,
             [this]()
             {
-                const bool now = m_FillController->isBridgePeerConnected();
-                if (now != m_LastPeerConnected)
+                const bool chrome = m_FillController->isBridgeChromeConnected();
+                if (chrome != m_LastChromeConnected)
                 {
-                    m_LastPeerConnected = now;
+                    m_LastChromeConnected = chrome;
+                    emit bridgeChromeConnectedChanged();
+                }
+                const bool brave = m_FillController->isBridgeBraveConnected();
+                if (brave != m_LastBraveConnected)
+                {
+                    m_LastBraveConnected = brave;
+                    emit bridgeBraveConnectedChanged();
+                }
+                const bool any = m_FillController->isBridgePeerConnected();
+                if (any != m_LastPeerConnected)
+                {
+                    m_LastPeerConnected = any;
                     emit bridgePeerConnectedChanged();
                 }
             });
@@ -282,6 +297,16 @@ bool Backend::bridgeEnabled() const
 bool Backend::bridgePeerConnected() const
 {
     return m_FillController->isBridgePeerConnected();
+}
+
+bool Backend::bridgeChromeConnected() const
+{
+    return m_FillController->isBridgeChromeConnected();
+}
+
+bool Backend::bridgeBraveConnected() const
+{
+    return m_FillController->isBridgeBraveConnected();
 }
 
 void Backend::setBridgeEnabled(bool enabled)

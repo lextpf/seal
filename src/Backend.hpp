@@ -127,6 +127,10 @@ class Backend : public QObject
     Q_PROPERTY(
         bool bridgeEnabled READ bridgeEnabled WRITE setBridgeEnabled NOTIFY bridgeEnabledChanged)
     Q_PROPERTY(bool bridgePeerConnected READ bridgePeerConnected NOTIFY bridgePeerConnectedChanged)
+    Q_PROPERTY(
+        bool bridgeChromeConnected READ bridgeChromeConnected NOTIFY bridgeChromeConnectedChanged)
+    Q_PROPERTY(
+        bool bridgeBraveConnected READ bridgeBraveConnected NOTIFY bridgeBraveConnectedChanged)
     Q_PROPERTY(QString bridgeStatusText READ bridgeStatusText NOTIFY bridgeStatusTextChanged)
 
 public:
@@ -424,6 +428,14 @@ public:
     /// states must NOT light up green.
     bool bridgePeerConnected() const;
 
+    /// @brief Whether a Chrome-launched companion peer is connected. Drives the
+    /// per-browser Chrome status dot in the footer.
+    bool bridgeChromeConnected() const;
+
+    /// @brief Whether a Brave-launched companion peer is connected. Drives the
+    /// per-browser Brave status dot in the footer.
+    bool bridgeBraveConnected() const;
+
     /// @brief Toggle the browser bridge on/off (M8 panic mode).
     /// @param enabled true to allow extension reports, false to disable.
     Q_INVOKABLE void setBridgeEnabled(bool enabled);
@@ -503,15 +515,17 @@ signals:
     /// @param service The service name that was originally submitted.
     void addAccountRetryRequired(const QString& service);
 
-    void fillArmedChanged();             ///< Auto-fill armed state toggled.
-    void fillStatusTextChanged();        ///< Auto-fill status message updated.
-    void fillCountdownSecondsChanged();  ///< Auto-fill countdown tick.
-    void alwaysOnTopChanged();           ///< Always-on-top toggled.
-    void compactChanged();               ///< Compact mode toggled.
-    void cliModeChanged();               ///< CLI mode toggled.
-    void bridgeEnabledChanged();         ///< Browser bridge enabled/disabled.
-    void bridgePeerConnectedChanged();   ///< Bridge peer connect/disconnect edge.
-    void bridgeStatusTextChanged();      ///< Bridge status text updated.
+    void fillArmedChanged();              ///< Auto-fill armed state toggled.
+    void fillStatusTextChanged();         ///< Auto-fill status message updated.
+    void fillCountdownSecondsChanged();   ///< Auto-fill countdown tick.
+    void alwaysOnTopChanged();            ///< Always-on-top toggled.
+    void compactChanged();                ///< Compact mode toggled.
+    void cliModeChanged();                ///< CLI mode toggled.
+    void bridgeEnabledChanged();          ///< Browser bridge enabled/disabled.
+    void bridgePeerConnectedChanged();    ///< Any-bridge-peer connect/disconnect edge.
+    void bridgeChromeConnectedChanged();  ///< Chrome-peer connect/disconnect edge.
+    void bridgeBraveConnectedChanged();   ///< Brave-peer connect/disconnect edge.
+    void bridgeStatusTextChanged();       ///< Bridge status text updated.
 
     /// @brief Diagnose dry-run finished; @p summary holds the per-probe
     /// breakdown. QML can show it in a dialog or copy it to the
@@ -611,8 +625,10 @@ private:
     VaultListModel* m_Model = nullptr;           ///< Vault list model for QML binding.
     FillController* m_FillController = nullptr;  ///< Auto-fill hook controller.
 
-    QTimer m_BridgePeerPoll;           ///< Polls bridge peer-connected state (1 Hz).
-    bool m_LastPeerConnected = false;  ///< Last observed peer-connected level, for edge detection.
+    QTimer m_BridgePeerPoll;             ///< Polls bridge peer-connected state (1 Hz).
+    bool m_LastPeerConnected = false;    ///< Last observed any-peer level, for edge detection.
+    bool m_LastChromeConnected = false;  ///< Last observed Chrome-peer level, for edge detection.
+    bool m_LastBraveConnected = false;   ///< Last observed Brave-peer level, for edge detection.
     WindowController* m_WindowController = nullptr;  ///< Window chrome controller.
 
     seal::basic_secure_string<wchar_t> m_Password;  ///< Master password in locked memory.
