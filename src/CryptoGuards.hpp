@@ -54,7 +54,7 @@ namespace seal
 template <class SecStr>
 struct DPAPIGuard
 {
-    using char_type = typename decltype(SecStr::s)::value_type;
+    using char_type = std::remove_pointer_t<decltype(std::declval<SecStr>().data())>;
 
     SecStr* m_Str = nullptr;
     bool m_Protected = false;
@@ -109,11 +109,11 @@ struct DPAPIGuard
     {
         if (!m_Str || m_Str->empty() || m_Protected)
             return false;
-        m_OriginalSize = m_Str->s.size();
+        m_OriginalSize = m_Str->size();
         padToBlockSize();
-        seal::protect_readwrite(m_Str->s.data());
-        DWORD cbData = static_cast<DWORD>(m_Str->s.size() * sizeof(char_type));
-        if (CryptProtectMemory(m_Str->s.data(), cbData, CRYPTPROTECTMEMORY_SAME_PROCESS))
+        seal::protect_readwrite(m_Str->data());
+        DWORD cbData = static_cast<DWORD>(m_Str->size() * sizeof(char_type));
+        if (CryptProtectMemory(m_Str->data(), cbData, CRYPTPROTECTMEMORY_SAME_PROCESS))
         {
             m_Protected = true;
             return true;
@@ -126,14 +126,14 @@ struct DPAPIGuard
     {
         if (!m_Str || m_Str->empty() || !m_Protected)
             return false;
-        seal::protect_readwrite(m_Str->s.data());
-        DWORD cbData = static_cast<DWORD>(m_Str->s.size() * sizeof(char_type));
-        if (CryptUnprotectMemory(m_Str->s.data(), cbData, CRYPTPROTECTMEMORY_SAME_PROCESS))
+        seal::protect_readwrite(m_Str->data());
+        DWORD cbData = static_cast<DWORD>(m_Str->size() * sizeof(char_type));
+        if (CryptUnprotectMemory(m_Str->data(), cbData, CRYPTPROTECTMEMORY_SAME_PROCESS))
         {
             m_Protected = false;
             // Restore the original logical size (remove DPAPI block padding).
-            if (m_OriginalSize > 0 && m_OriginalSize < m_Str->s.size())
-                m_Str->s.resize(m_OriginalSize);
+            if (m_OriginalSize > 0 && m_OriginalSize < m_Str->size())
+                m_Str->resize(m_OriginalSize);
             return true;
         }
         return false;
@@ -147,13 +147,13 @@ private:
     {
         if (!m_Str || m_Str->empty())
             return;
-        size_t byteSize = m_Str->s.size() * sizeof(char_type);
+        size_t byteSize = m_Str->size() * sizeof(char_type);
         size_t rem = byteSize % CRYPTPROTECTMEMORY_BLOCK_SIZE;
         if (rem != 0)
         {
             size_t padBytes = CRYPTPROTECTMEMORY_BLOCK_SIZE - rem;
             size_t padChars = (padBytes + sizeof(char_type) - 1) / sizeof(char_type);
-            m_Str->s.resize(m_Str->s.size() + padChars, char_type{});
+            m_Str->resize(m_Str->size() + padChars);
         }
     }
 
