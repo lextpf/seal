@@ -580,10 +580,10 @@ seal::basic_secure_string<wchar_t> readPasswordSecureDesktop(const wchar_t* capt
     // copy avoids std::wstring temporaries.
     size_t passLen = wcsnlen(pass.data, pass.count);
     seal::basic_secure_string<wchar_t> out;
-    out.s.resize(passLen);
+    out.resize(passLen);
     for (size_t i = 0; i < passLen; ++i)
     {
-        out.s[i] = static_cast<wchar_t>(pass.data[i]);
+        out[i] = static_cast<wchar_t>(pass.data[i]);
     }
 
     return out;
@@ -646,8 +646,8 @@ seal::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt)
         int need = MultiByteToWideChar(cp, 0, narrow.data(), (int)narrow.size(), nullptr, 0);
         if (need > 0)
         {
-            result.s.resize(need);
-            MultiByteToWideChar(cp, 0, narrow.data(), (int)narrow.size(), result.s.data(), need);
+            result.resize(need);
+            MultiByteToWideChar(cp, 0, narrow.data(), (int)narrow.size(), result.data(), need);
         }
     }
     // narrow auto-wipes on scope exit
