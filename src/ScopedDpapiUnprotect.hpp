@@ -42,6 +42,13 @@ public:
         }
     }
 
+    /// @brief Whether the construction-time unprotect succeeded (the buffer is
+    ///        now plaintext). False means CryptUnprotectMemory failed (or the
+    ///        buffer was empty/already plaintext) - callers bracketing a
+    ///        protected buffer MUST treat false as "do not read plaintext".
+    /// @return true if unprotect() reported success.
+    bool ok() const noexcept { return m_Changed; }
+
     ScopedDpapiUnprotect(const ScopedDpapiUnprotect&) = delete;
     ScopedDpapiUnprotect& operator=(const ScopedDpapiUnprotect&) = delete;
 
