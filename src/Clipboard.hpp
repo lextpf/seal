@@ -65,22 +65,6 @@ public:
     Clipboard& operator=(const Clipboard&) = delete;
 
     /**
-     * @brief Set UTF-8 text on the Windows clipboard, converting to UTF-16.
-     *
-     * Opens the clipboard, empties it, converts @p text from UTF-8 to
-     * UTF-16 with `MultiByteToWideChar`, and places the result as
-     * `CF_UNICODETEXT`. The clipboard is closed automatically when the
-     * internal RAII guard goes out of scope.
-     *
-     * @param text UTF-8 encoded string to place on the clipboard.
-     * @return `true` if the text was set successfully, `false` on conversion
-     *         failure or if the clipboard could not be opened.
-     *
-     * @pre No other process holds the clipboard open.
-     */
-    [[nodiscard]] static bool setText(const std::string& text);
-
-    /**
      * @brief Copy a byte buffer to the clipboard and auto-scrub after a timeout.
      *
      * Copies @p n bytes of UTF-8 data to the clipboard via setText, then
@@ -177,6 +161,23 @@ public:
      * clipboard API entry points, causing a potential deadlock.
      */
     static void shutdown();
+
+private:
+    /**
+     * @brief Set UTF-8 text on the Windows clipboard, converting to UTF-16.
+     *
+     * Opens the clipboard, empties it, converts @p text from UTF-8 to
+     * UTF-16 with `MultiByteToWideChar`, and places the result as
+     * `CF_UNICODETEXT`. The clipboard is closed automatically when the
+     * internal RAII guard goes out of scope.
+     *
+     * @param text UTF-8 encoded string to place on the clipboard.
+     * @return `true` if the text was set successfully, `false` on conversion
+     *         failure or if the clipboard could not be opened.
+     *
+     * @pre No other process holds the clipboard open.
+     */
+    [[nodiscard]] static bool setText(const std::string& text);
 };
 
 /**

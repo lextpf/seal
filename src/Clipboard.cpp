@@ -110,10 +110,10 @@ bool Clipboard::copyWithTTL(const char* data, size_t n, DWORD ttl_ms)
 {
     // Locked, guard-paged storage so the value can't swap during TTL.
     seal::secure_string<> val;
-    val.s.assign(data, data + n);
+    val.assign(data, data + n);
 
     // setText() needs std::string&; short-lived copy, wiped after the call.
-    std::string tmp(val.s.begin(), val.s.end());
+    std::string tmp(val.begin(), val.end());
     bool ok = setText(tmp);
     seal::Cryptography::cleanseString(tmp);
     if (!ok)
@@ -168,18 +168,18 @@ bool Clipboard::copyWithTTL(const char* data, size_t n, DWORD ttl_ms)
                 seal::secure_string<> cur;
                 if (need > 0)
                 {
-                    cur.s.resize(static_cast<size_t>(need), '\0');
-                    int written = WideCharToMultiByte(
-                        CP_UTF8, 0, w, -1, cur.s.data(), need, nullptr, nullptr);
-                    if (written > 0 && !cur.empty() && cur.s.back() == '\0')
+                    cur.resize(static_cast<size_t>(need));
+                    int written =
+                        WideCharToMultiByte(CP_UTF8, 0, w, -1, cur.data(), need, nullptr, nullptr);
+                    if (written > 0 && !cur.empty() && cur.back() == '\0')
                     {
-                        cur.s.pop_back();
+                        cur.pop_back();
                     }
                 }
                 GlobalUnlock(h);
 
                 // Constant-time compare -- no byte-by-byte timing leak.
-                same = seal::Cryptography::ctEqualAny(cur.s, val.s);
+                same = seal::Cryptography::ctEqual(cur, val);
             }
 
             // Clear only if the clipboard still holds our value.
