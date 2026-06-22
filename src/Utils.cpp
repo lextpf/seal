@@ -133,8 +133,8 @@ seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> utf8ToSecure
     int need = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), nullptr, 0);
     if (need > 0)
     {
-        result.s.resize(need);
-        MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), result.s.data(), need);
+        result.resize(need);
+        MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), result.data(), need);
     }
     return result;
 }
@@ -144,13 +144,13 @@ seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> utf8ToSecure
 std::string secureWideToUtf8(
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& wide)
 {
-    if (wide.s.empty())
+    if (wide.empty())
         return {};
     int need = WideCharToMultiByte(
-        CP_UTF8, 0, wide.s.data(), (int)wide.s.size(), nullptr, 0, nullptr, nullptr);
+        CP_UTF8, 0, wide.data(), (int)wide.size(), nullptr, 0, nullptr, nullptr);
     std::string out(need, '\0');
     WideCharToMultiByte(
-        CP_UTF8, 0, wide.s.data(), (int)wide.s.size(), out.data(), need, nullptr, nullptr);
+        CP_UTF8, 0, wide.data(), (int)wide.size(), out.data(), need, nullptr, nullptr);
     return out;
 }
 
