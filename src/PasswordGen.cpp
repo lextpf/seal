@@ -24,7 +24,7 @@ secure_string<> GeneratePassword(int length)
         static_cast<unsigned char>((256 / charsetLen) * charsetLen);
 
     secure_string<> password;
-    password.s.reserve(static_cast<size_t>(length));
+    password.reserve(static_cast<size_t>(length));
 
     unsigned char rndBuf[128];
     int filled = 0;
