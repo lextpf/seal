@@ -28,8 +28,6 @@ namespace seal
 template <class CharT, class A = locked_allocator<CharT>>
 struct basic_secure_string
 {
-    std::vector<CharT, A> s;
-
     basic_secure_string() = default;
     basic_secure_string(const basic_secure_string&) = delete;
     basic_secure_string& operator=(const basic_secure_string&) = delete;
@@ -133,6 +131,74 @@ struct basic_secure_string
     {
         return std::basic_string<CharT>(s.data(), s.data() + s.size());
     }
+
+    /// @brief Const iterator to the first code unit (read-source for assign / iteration).
+    /// @ingroup Memory
+    auto begin() const noexcept { return s.begin(); }
+    /// @brief Const iterator past the last code unit.
+    /// @ingroup Memory
+    auto end() const noexcept { return s.end(); }
+
+    /**
+     * @brief Replace contents with the range [first, last) - the sanctioned secret-clone path.
+     * @param first Iterator to the first source code unit.
+     * @param last  Iterator past the last source code unit.
+     * @ingroup Memory
+     */
+    template <class InputIt>
+    void assign(InputIt first, InputIt last)
+    {
+        s.assign(first, last);
+    }
+
+    /**
+     * @brief Resize to @p n code units, zeroing the truncated tail on shrink.
+     * @param n New size in code units.
+     * @ingroup Memory
+     */
+    void resize(std::size_t n)
+    {
+        if (n < s.size())
+        {
+            // Wipe the bytes being discarded so the secret does not linger in freed capacity.
+            seal::protect_readwrite(s.data());
+            SecureZeroMemory(s.data() + n, (s.size() - n) * sizeof(CharT));
+        }
+        s.resize(n);
+    }
+
+    /**
+     * @brief Access the last code unit (const + non-const).
+     * @return Reference to the last code unit. UB if empty (as std::vector::back()).
+     * @ingroup Memory
+     */
+    template <class Self>
+    auto&& back(this Self&& self)
+    {
+        return std::forward<Self>(self).s.back();
+    }
+
+    /**
+     * @brief Reserve capacity for at least @p n code units (does not change size()).
+     * @param n Minimum capacity in code units.
+     * @ingroup Memory
+     */
+    void reserve(std::size_t n) { s.reserve(n); }
+
+    /**
+     * @brief Element access by index (const + non-const).
+     * @param i Index into the buffer (no bounds checking; UB if i >= size()).
+     * @return Reference to the code unit at position @p i.
+     * @ingroup Memory
+     */
+    template <class Self>
+    auto&& operator[](this Self&& self, std::size_t i)
+    {
+        return std::forward<Self>(self).s[i];
+    }
+
+private:
+    std::vector<CharT, A> s;
 };
 
 /// @brief Narrow-character secure string; alias for basic_secure_string\<char, A\>.
@@ -267,15 +333,21 @@ struct secure_triplet16
 
     /// @brief Tuple-like access for structured bindings (`auto& [s, u, p] = triplet`).
     template <std::size_t I, class Self>
-    decltype(auto) get(this Self&& self) noexcept
+    auto&& get(this Self&& self) noexcept
     {
         static_assert(I < 3, "secure_triplet index out of range");
         if constexpr (I == 0)
+        {
             return std::forward<Self>(self).primary;
+        }
         else if constexpr (I == 1)
+        {
             return std::forward<Self>(self).secondary;
+        }
         else
+        {
             return std::forward<Self>(self).tertiary;
+        }
     }
 };
 using secure_triplet16_t = secure_triplet16<>;
