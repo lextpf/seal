@@ -13,6 +13,7 @@
 #include <openssl/rand.h>
 
 #include <algorithm>
+#include <array>
 #include <ranges>
 #include <span>
 #include <sstream>
@@ -115,7 +116,7 @@ public:
     static bool ctEqual(const basic_secure_string<CharT, A>& a,
                         const basic_secure_string<CharT, A>& b)
     {
-        return ctEqualAny(a.s, b.s);
+        return ctEqualAny(a, b);
     }
 
     /// @brief Enable heap termination on corruption via `HeapSetInformation`.
@@ -185,9 +186,44 @@ public:
     static bool isRemoteSession() { return GetSystemMetrics(SM_REMOTESESSION) != 0; }
 
     /**
+     * @brief Parsed (or freshly built) packet header.
+     *
+     * `bytes`/`size` hold the exact on-wire header -- these bytes are the
+     * GCM AAD, so encrypt and decrypt must feed them verbatim.
+     */
+    struct PacketHeader
+    {
+        seal::cfg::KdfParams kdf{};            ///< Effective KDF parameters.
+        std::array<unsigned char, 8> bytes{};  ///< Raw header bytes (AAD).
+        size_t size = 0;                       ///< Valid byte count in `bytes` (always 8).
+    };
+
+    /**
+     * @brief Build the on-wire packet header for the given KDF parameters.
+     * @param kdf Parameters to serialize (defaults are the project standard).
+     * @return Header with `bytes`/`size` filled for writing + AAD use.
+     */
+    [[nodiscard]] static PacketHeader makeHeader(
+        const seal::cfg::KdfParams& kdf = seal::cfg::DEFAULT_KDF);
+
+    /**
+     * @brief Parse and validate a packet header.
+     *
+     * Parameters are checked against the acceptance caps **before** any
+     * key derivation, so a hostile header cannot trigger an expensive or
+     * memory-exhausting scrypt call.
+     *
+     * @param data Leading bytes of a packet (>= 8 bytes for the header).
+     * @return Parsed header with effective KDF parameters.
+     * @throw std::runtime_error on short input, unknown magic, or
+     *        out-of-cap parameters.
+     */
+    [[nodiscard]] static PacketHeader parsePacketHeader(std::span<const unsigned char> data);
+
+    /**
      * @brief Encrypt plaintext into a framed AES-256-GCM packet.
      *
-     * Packet format: `AAD(4) | Salt(16) | IV(12) | Ciphertext(n) | Tag(16)`.
+     * Packet format: `AAD(8) | Salt(16) | IV(12) | Ciphertext(n) | Tag(16)`.
      *
      * @tparam SecurePwd Secure password container with `.data()` and `.size()`.
      * @param plaintext Raw bytes to encrypt.
@@ -197,7 +233,9 @@ public:
      */
     template <secure_password SecurePwd>
     [[nodiscard]] static std::vector<unsigned char> encryptPacket(
-        std::span<const unsigned char> plaintext, const SecurePwd& password);
+        std::span<const unsigned char> plaintext,
+        const SecurePwd& password,
+        const seal::cfg::KdfParams& kdf = seal::cfg::DEFAULT_KDF);
 
     /**
      * @brief Decrypt a framed AES-256-GCM packet.
@@ -234,16 +272,14 @@ private:
     /// @brief Check OpenSSL return code.
     static void opensslCheck(int ok, const char* msg);
 
-    /// @brief Get authenticated AAD span.
-    static std::span<const unsigned char> aadSpan() noexcept;
-
     /// @brief Derived key type backed by guard-paged, locked memory.
     using LockedKeyBuffer = std::vector<unsigned char, locked_allocator<unsigned char>>;
 
     /// @brief Derive AES-256 key via scrypt into locked memory.
     template <secure_password SecurePwd>
     [[nodiscard]] static LockedKeyBuffer deriveKey(const SecurePwd& pwd,
-                                                   std::span<const unsigned char> salt);
+                                                   std::span<const unsigned char> salt,
+                                                   const seal::cfg::KdfParams& kdf);
 
     template <class CharT, class Traits, class Alloc>
     static void cleanseOne(std::basic_string<CharT, Traits, Alloc>& s) noexcept
@@ -259,9 +295,9 @@ private:
     template <class CharT, class A>
     static void cleanseOne(seal::basic_secure_string<CharT, A>& s) noexcept
     {
-        if (!s.s.empty())
+        if (!s.empty())
         {
-            CharT* base = s.s.data();
+            CharT* base = s.data();
             if (base)
             {
                 auto* hdr = seal::header_from_payload(base);
@@ -271,8 +307,7 @@ private:
                 (void)VirtualProtect(base, hdr->payloadSpan, oldProt, &dummy);
             }
         }
-        s.s.clear();
-        std::vector<CharT, A>().swap(s.s);
+        s.clear();
     }
 
     template <seal::byte_like T, class Alloc>

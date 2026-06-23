@@ -316,17 +316,50 @@ void Cryptography::opensslCheck(int ok, const char* msg)
     }
 }
 
-std::span<const unsigned char> Cryptography::aadSpan() noexcept
+Cryptography::PacketHeader Cryptography::makeHeader(const seal::cfg::KdfParams& kdf)
 {
-    return {reinterpret_cast<const unsigned char*>(seal::cfg::AAD_HDR),
-            static_cast<std::size_t>(seal::cfg::AAD_LEN)};
+    PacketHeader h;
+    h.kdf = kdf;
+    std::memcpy(h.bytes.data(), seal::cfg::AAD_HDR, seal::cfg::MAGIC_LEN);
+    h.bytes[4] = kdf.alg;
+    h.bytes[5] = kdf.log2N;
+    h.bytes[6] = kdf.r;
+    h.bytes[7] = kdf.p;
+    h.size = seal::cfg::HDR_LEN;
+    return h;
+}
+
+Cryptography::PacketHeader Cryptography::parsePacketHeader(std::span<const unsigned char> data)
+{
+    if (data.size() < seal::cfg::MAGIC_LEN)
+    {
+        throw std::runtime_error("Ciphertext too short (missing AAD)");
+    }
+    if (std::memcmp(data.data(), seal::cfg::AAD_HDR, seal::cfg::MAGIC_LEN) == 0)
+    {
+        if (data.size() < seal::cfg::HDR_LEN)
+        {
+            throw std::runtime_error("Ciphertext too short (truncated header)");
+        }
+        PacketHeader h;
+        h.kdf = seal::cfg::KdfParams{data[4], data[5], data[6], data[7]};
+        if (!seal::cfg::kdfParamsAcceptable(h.kdf))
+        {
+            throw std::runtime_error("Rejected KDF parameters (out of accepted range)");
+        }
+        std::memcpy(h.bytes.data(), data.data(), seal::cfg::HDR_LEN);
+        h.size = seal::cfg::HDR_LEN;
+        return h;
+    }
+    throw std::runtime_error("Bad AAD header");
 }
 
 template <secure_password SecurePwd>
 Cryptography::LockedKeyBuffer Cryptography::deriveKey(const SecurePwd& pwd,
-                                                      std::span<const unsigned char> salt)
+                                                      std::span<const unsigned char> salt,
+                                                      const seal::cfg::KdfParams& kdf)
 {
-    using CharT = std::remove_pointer_t<decltype(pwd.s.data())>;
+    using CharT = std::remove_pointer_t<decltype(pwd.data())>;
     // Key material lives in guard-paged, VirtualLock'd memory; never swaps.
     LockedKeyBuffer key(seal::cfg::KEY_LEN);
 
@@ -334,15 +367,15 @@ Cryptography::LockedKeyBuffer Cryptography::deriveKey(const SecurePwd& pwd,
     // reads trap. scrypt needs raw bytes, so RWGuard flips to
     // PAGE_READWRITE for exactly this span and restores PAGE_NOACCESS on
     // every exit (including throws from opensslCheck below).
-    seal::RWGuard<CharT> guard(pwd.s.data());
+    seal::RWGuard<CharT> guard(pwd.data());
 
     const char* pass = nullptr;
     size_t passlen = 0;
 
-    if (pwd.s.size() != 0)
+    if (pwd.size() != 0)
     {
-        pass = reinterpret_cast<const char*>(pwd.s.data());
-        passlen = pwd.s.size() * sizeof(CharT);
+        pass = reinterpret_cast<const char*>(pwd.data());
+        passlen = pwd.size() * sizeof(CharT);
     }
 
 #ifdef USE_QT_UI
@@ -350,14 +383,18 @@ Cryptography::LockedKeyBuffer Cryptography::deriveKey(const SecurePwd& pwd,
     timer.start();
 #endif
 
+    const uint64_t scryptN = 1ULL << kdf.log2N;
+    const uint64_t scryptMaxMem =
+        std::max<uint64_t>(seal::cfg::SCRYPT_MAXMEM, 2ULL * 128ULL * kdf.r * scryptN);
+
     opensslCheck(EVP_PBE_scrypt(pass,
                                 passlen,
                                 salt.data(),
                                 salt.size(),
-                                seal::cfg::SCRYPT_N,
-                                seal::cfg::SCRYPT_R,
-                                seal::cfg::SCRYPT_P,
-                                seal::cfg::SCRYPT_MAXMEM,
+                                scryptN,
+                                kdf.r,
+                                kdf.p,
+                                scryptMaxMem,
                                 key.data(),
                                 key.size()),
                  "scrypt failed");
@@ -375,14 +412,17 @@ Cryptography::LockedKeyBuffer Cryptography::deriveKey(const SecurePwd& pwd,
 
 template <secure_password SecurePwd>
 std::vector<unsigned char> Cryptography::encryptPacket(std::span<const unsigned char> plaintext,
-                                                       const SecurePwd& password)
+                                                       const SecurePwd& password,
+                                                       const seal::cfg::KdfParams& kdf)
 {
-    std::span<const unsigned char> aad = aadSpan();
+    // Packets carry the self-describing KDF header as AAD.
+    const PacketHeader header = makeHeader(kdf);
+    std::span<const unsigned char> aad(header.bytes.data(), header.size);
 
     // salt and key
     std::vector<unsigned char> salt(seal::cfg::SALT_LEN);
     opensslCheck(RAND_bytes(salt.data(), (int)salt.size()), "RAND_bytes(salt) failed");
-    auto key = deriveKey(password, std::span<const unsigned char>(salt));
+    auto key = deriveKey(password, std::span<const unsigned char>(salt), header.kdf);
 
     // iv
     std::vector<unsigned char> iv(seal::cfg::IV_LEN);
@@ -447,21 +487,13 @@ template <secure_password SecurePwd>
 std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned char> packet,
                                                        const SecurePwd& password)
 {
-    std::span<const unsigned char> aad_expected = aadSpan();
+    // Parse [ header | salt | IV | ciphertext | tag ]. The header doubles
+    // as the AAD and carries cap-validated KDF parameters.
+    const PacketHeader header = parsePacketHeader(packet);
+    std::span<const unsigned char> aad_expected(header.bytes.data(), header.size);
     const unsigned char* p = packet.data();
     size_t n = packet.size();
-
-    // Parse [ AAD | salt | IV | ciphertext | tag ]. 'off' tracks read
-    // position past the AAD; everything else is fixed-size.
-    size_t off = 0;
-    if (!aad_expected.empty())
-    {
-        if (n < aad_expected.size())
-            throw std::runtime_error("Ciphertext too short (missing AAD)");
-        if (std::memcmp(p, aad_expected.data(), aad_expected.size()) != 0)
-            throw std::runtime_error("Bad AAD header");
-        off = aad_expected.size();
-    }
+    size_t off = header.size;
 
     // Structure sizes
     if (n < off + seal::cfg::SALT_LEN + seal::cfg::IV_LEN + seal::cfg::TAG_LEN)
@@ -479,8 +511,9 @@ std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned 
     size_t ct_len = ct_len_with_tag - seal::cfg::TAG_LEN;
     const unsigned char* tag = ct + ct_len;
 
-    // Derive key
-    auto key = deriveKey(password, std::span<const unsigned char>(salt, seal::cfg::SALT_LEN));
+    // Derive key with the header's effective parameters.
+    auto key =
+        deriveKey(password, std::span<const unsigned char>(salt, seal::cfg::SALT_LEN), header.kdf);
 
     seal::EvpCipherCtx ctx;
     opensslCheck(EVP_DecryptInit_ex(ctx.p, EVP_aes_256_gcm(), nullptr, nullptr, nullptr),
@@ -532,20 +565,12 @@ std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned 
 template <secure_password SecurePwd>
 void Cryptography::verifyPacket(std::span<const unsigned char> packet, const SecurePwd& password)
 {
-    std::span<const unsigned char> aad_expected = aadSpan();
+    // Parse the wire format (same layout as decryptPacket).
+    const PacketHeader header = parsePacketHeader(packet);
+    std::span<const unsigned char> aad_expected(header.bytes.data(), header.size);
     const unsigned char* p = packet.data();
     size_t n = packet.size();
-
-    // Parse the wire format (same layout as decryptPacket).
-    size_t off = 0;
-    if (!aad_expected.empty())
-    {
-        if (n < aad_expected.size())
-            throw std::runtime_error("Ciphertext too short (missing AAD)");
-        if (std::memcmp(p, aad_expected.data(), aad_expected.size()) != 0)
-            throw std::runtime_error("Bad AAD header");
-        off = aad_expected.size();
-    }
+    size_t off = header.size;
 
     if (n < off + seal::cfg::SALT_LEN + seal::cfg::IV_LEN + seal::cfg::TAG_LEN)
         throw std::runtime_error("Ciphertext too short");
@@ -561,7 +586,8 @@ void Cryptography::verifyPacket(std::span<const unsigned char> packet, const Sec
     size_t ct_len = ct_len_with_tag - seal::cfg::TAG_LEN;
     const unsigned char* tag = ct + ct_len;
 
-    auto key = deriveKey(password, std::span<const unsigned char>(salt, seal::cfg::SALT_LEN));
+    auto key =
+        deriveKey(password, std::span<const unsigned char>(salt, seal::cfg::SALT_LEN), header.kdf);
 
     seal::EvpCipherCtx ctx;
     opensslCheck(EVP_DecryptInit_ex(ctx.p, EVP_aes_256_gcm(), nullptr, nullptr, nullptr),
@@ -620,14 +646,18 @@ void Cryptography::verifyPacket(std::span<const unsigned char> packet, const Sec
 
 // Explicit instantiations for narrow (UTF-8) and wide (UTF-16) passwords.
 template Cryptography::LockedKeyBuffer Cryptography::deriveKey(const secure_string<>&,
-                                                               std::span<const unsigned char>);
+                                                               std::span<const unsigned char>,
+                                                               const seal::cfg::KdfParams&);
 template Cryptography::LockedKeyBuffer Cryptography::deriveKey(const basic_secure_string<wchar_t>&,
-                                                               std::span<const unsigned char>);
+                                                               std::span<const unsigned char>,
+                                                               const seal::cfg::KdfParams&);
 
 template std::vector<unsigned char> Cryptography::encryptPacket(std::span<const unsigned char>,
-                                                                const secure_string<>&);
-template std::vector<unsigned char> Cryptography::encryptPacket(
-    std::span<const unsigned char>, const basic_secure_string<wchar_t>&);
+                                                                const secure_string<>&,
+                                                                const seal::cfg::KdfParams&);
+template std::vector<unsigned char> Cryptography::encryptPacket(std::span<const unsigned char>,
+                                                                const basic_secure_string<wchar_t>&,
+                                                                const seal::cfg::KdfParams&);
 
 template std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned char>,
                                                                 const secure_string<>&);
