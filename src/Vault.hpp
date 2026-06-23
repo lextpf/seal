@@ -1,83 +1,15 @@
 #pragma once
 
-#ifdef USE_QT_UI
-
-#include <QtCore/QString>
-
-#include <string>
-#include <vector>
-
 #include "Cryptography.hpp"
+#include "VaultRecord.hpp"
+
+#include <filesystem>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace seal
 {
-
-/**
- * @struct VaultRecord
- * @brief One record in the vault index.
- * @author Alex (https://github.com/lextpf)
- * @ingroup Vault
- *
- * Both platform name and credential pair are individually encrypted
- * as separate AES-256-GCM packets.  The cleartext platform is held
- * in memory only (decrypted on load) so the UI can list accounts.
- *
- * Binary format:
- *
- * ```mermaid
- * ---
- * config:
- *   theme: dark
- * ---
- * block-beta
- *   columns 8
- *   magic["magic(4)"]:1
- *   ver["ver(1)"]:1
- *   count["count(4)"]:1
- *   pLen["platLen(4)"]:1
- *   pBlob["platform packet"]:1
- *   cLen["credLen(4)"]:1
- *   cBlob["credential packet"]:1
- *   more["..."]:1
- * ```
- *
- * The binary payload is hex-encoded as a single line when stored on disk;
- * loadVaultIndex() decodes the hex before parsing the binary framing.
- *
- * @see loadVaultIndex, encryptCredential
- */
-struct VaultRecord
-{
-    /// Cleartext platform name (in-memory only, UTF-8; decrypted from encryptedPlatform on load).
-    /// Deliberately std::string (not secure_string): platform names are displayed in the vault
-    /// list view and used for string operations (.find(), .c_str(), fromUtf8). The locked-memory
-    /// discipline is reserved for actual secrets (passwords, usernames, master key).
-    std::string platform;
-    std::vector<unsigned char> encryptedPlatform;  ///< AES-256-GCM packet of platform name
-    std::vector<unsigned char> encryptedBlob;      ///< AES-256-GCM packet of "username\0password"
-    bool dirty = false;                            ///< True if created or modified since last save
-    bool deleted = false;                          ///< Soft-deleted; skipped on save and display
-};
-
-/**
- * @struct DecryptedCredential
- * @brief Temporary holder for a decrypted credential pair.
- * @author Alex (https://github.com/lextpf)
- * @ingroup Vault
- *
- * Both fields live in locked, guarded memory.  Call cleanse() or let the
- * destructor run to wipe them immediately after use.
- *
- * @see decryptCredentialOnDemand
- */
-struct DecryptedCredential
-{
-    seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> username;
-    seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> password;
-
-    /// @brief Securely wipe both fields.
-    void cleanse();
-};
 
 /**
  * @brief Load the vault index.
@@ -92,13 +24,13 @@ struct DecryptedCredential
  * wrong the function throws immediately rather than attempting remaining
  * records, preventing a timing side-channel that would reveal the record count.
  *
- * @param vaultPath Absolute path to the `.seal` vault file.
+ * @param vaultPath Path to the `.seal` vault file.
  * @param password  Master password for key derivation.
  * @return Vector of vault records with decrypted platform names.
  * @throw std::runtime_error on wrong password, corrupt file, or I/O error.
  */
 std::vector<VaultRecord> loadVaultIndex(
-    const QString& vaultPath,
+    const std::filesystem::path& vaultPath,
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password);
 
 /**
@@ -108,15 +40,80 @@ std::vector<VaultRecord> loadVaultIndex(
  * Deleted records are omitted. Untouched records reuse their existing
  * encrypted platform packet (no re-encryption).
  *
- * @param vaultPath Absolute path to the `.seal` vault file.
+ * @param vaultPath Path to the `.seal` vault file.
  * @param records   Records to save (deleted records are skipped).
  * @param password  Master password for key derivation.
+ * @param kdf       KDF parameters for newly-encrypted (dirty) records.
+ *                  Defaults to DEFAULT_KDF; existing callers are unaffected.
  * @return `true` on success, `false` on I/O error.
  */
-bool saveVaultV2(
-    const QString& vaultPath,
-    const std::vector<VaultRecord>& records,
-    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password);
+bool saveVault(const std::filesystem::path& vaultPath,
+               const std::vector<VaultRecord>& records,
+               const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password,
+               const seal::cfg::KdfParams& kdf = seal::cfg::DEFAULT_KDF);
+
+/**
+ * @brief Re-encrypt every record with a new master password, atomically.
+ *
+ * Loads the vault with @p currentPassword (fail-fast on wrong password),
+ * decrypts and re-encrypts every record with @p newPassword (writing
+ * current-format packets), writes the result to `<vault>.rekey.tmp`,
+ * verifies the temp file by reloading it with the new password, then
+ * atomically replaces the original. On any failure the original file is
+ * untouched and the temp file is removed.
+ *
+ * @param vaultPath       Path to the `.seal` vault file.
+ * @param currentPassword Current master password.
+ * @param newPassword     Replacement master password.
+ * @return Number of records re-encrypted.
+ * @throw std::runtime_error on wrong password, I/O failure, or
+ *        verification mismatch.
+ */
+size_t rekeyVault(
+    const std::filesystem::path& vaultPath,
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& currentPassword,
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& newPassword);
+
+/// @brief Outcome of a platform-name lookup.
+enum class MatchOutcome
+{
+    Found,      ///< Exactly one record matched.
+    NotFound,   ///< Nothing matched.
+    Ambiguous,  ///< Multiple prefix candidates; see candidates.
+};
+
+/**
+ * @brief Result of matchPlatform: index into the input list on success.
+ */
+struct PlatformMatch
+{
+    MatchOutcome outcome = MatchOutcome::NotFound;  ///< Lookup outcome.
+    int index = -1;                                 ///< Matched index (Found only).
+    std::vector<std::string> candidates;            ///< Prefix candidates (Ambiguous only).
+};
+
+/**
+ * @brief Resolve a platform query against a list of platform names.
+ *
+ * Case-insensitive exact match wins; otherwise a unique case-insensitive
+ * prefix matches; multiple prefix hits are Ambiguous with candidates.
+ *
+ * @param names Platform names in record order.
+ * @param query User-supplied platform query.
+ * @return Match outcome with index or candidate list.
+ */
+PlatformMatch matchPlatform(const std::vector<std::string>& names, std::string_view query);
+
+/**
+ * @brief Locate the default vault file.
+ *
+ * Priority: `SEAL_VAULT` environment variable (used verbatim when the file
+ * exists) -> first `*.seal` in the executable's directory -> current working
+ * directory -> user home (`USERPROFILE`).
+ *
+ * @return Path to the vault, or an empty path when none is found.
+ */
+std::filesystem::path findDefaultVault();
 
 /**
  * @brief Decrypt a single record on demand.
@@ -142,6 +139,8 @@ DecryptedCredential decryptCredentialOnDemand(
  * @param username       Username in secure wide string.
  * @param password       Password in secure wide string.
  * @param masterPassword Master password for key derivation.
+ * @param kdf            KDF parameters for both encrypted packets.
+ *                       Defaults to DEFAULT_KDF; existing callers are unaffected.
  * @return Newly constructed VaultRecord with encrypted blobs.
  * @throw std::runtime_error on OpenSSL encryption failure.
  */
@@ -149,7 +148,8 @@ VaultRecord encryptCredential(
     const std::string& platform,
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& username,
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password,
-    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPassword);
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPassword,
+    const seal::cfg::KdfParams& kdf = seal::cfg::DEFAULT_KDF);
 
 /**
  * @brief Encrypt a directory recursively (skips .seal, .exe, .dll, and .pdb files).
@@ -165,7 +165,7 @@ VaultRecord encryptCredential(
  *       Only the `.seal` output remains.
  */
 int encryptDirectory(
-    const QString& dirPath,
+    const std::filesystem::path& dirPath,
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password);
 
 /**
@@ -182,9 +182,7 @@ int encryptDirectory(
  *       Only the plaintext output remains.
  */
 int decryptDirectory(
-    const QString& dirPath,
+    const std::filesystem::path& dirPath,
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password);
 
 }  // namespace seal
-
-#endif  // USE_QT_UI
