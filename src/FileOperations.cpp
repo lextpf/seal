@@ -7,6 +7,7 @@
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 
+#include <array>
 #include <bit>
 #include <condition_variable>
 #include <filesystem>
@@ -135,8 +136,10 @@ bool FileOperations::decryptFileTo(const std::string& srcPath,
 {
     // Stream large files (> FILE_CHUNK + framing) so we don't slurp.
     {
+        // Minimum packet framing; the floor for the streaming-vs-in-memory
+        // threshold decision below.
         constexpr size_t kFramingOverhead =
-            seal::cfg::AAD_LEN + seal::cfg::SALT_LEN + seal::cfg::IV_LEN + seal::cfg::TAG_LEN;
+            seal::cfg::HDR_LEN + seal::cfg::SALT_LEN + seal::cfg::IV_LEN + seal::cfg::TAG_LEN;
         std::error_code ec;
         auto fileSize = std::filesystem::file_size(srcPath, ec);
         if (!ec && fileSize > seal::cfg::FILE_CHUNK + kFramingOverhead)
@@ -219,8 +222,8 @@ seal::secure_string<seal::locked_allocator<char>> FileOperations::decryptLine(
     auto bytes = seal::Cryptography::decryptPacket(std::span<const unsigned char>(blob), pwd);
     // Move into a locked-allocator (non-pageable) string.
     seal::secure_string<seal::locked_allocator<char>> out;
-    out.s.assign(reinterpret_cast<const char*>(bytes.data()),
-                 reinterpret_cast<const char*>(bytes.data()) + bytes.size());
+    out.assign(reinterpret_cast<const char*>(bytes.data()),
+               reinterpret_cast<const char*>(bytes.data()) + bytes.size());
     seal::Cryptography::cleanseString(bytes);
     return out;
 }
@@ -266,8 +269,8 @@ bool FileOperations::parseTriples(std::string_view plain,
             int need = MultiByteToWideChar(CP_UTF8, 0, field.data(), (int)field.size(), nullptr, 0);
             if (need > 0)
             {
-                r.s.resize(need);
-                MultiByteToWideChar(CP_UTF8, 0, field.data(), (int)field.size(), r.s.data(), need);
+                r.resize(need);
+                MultiByteToWideChar(CP_UTF8, 0, field.data(), (int)field.size(), r.data(), need);
             }
             return r;
         };
@@ -388,14 +391,18 @@ private:
 
 WorkPool& GetPool()
 {
-    static WorkPool pool(std::min(std::thread::hardware_concurrency(), 8u));
+    // Floor at 1: std::thread::hardware_concurrency() may return 0, and
+    // std::min(0u, 8u) == 0 would create a pool with no draining worker,
+    // wedging every directory operation on the first Submit().
+    static WorkPool pool(std::max(1u, std::min(std::thread::hardware_concurrency(), 8u)));
     return pool;
 }
 
 }  // namespace
 
 // Walk a directory; each file is en-/de-crypted per its .seal extension
-// (see processFilePath). Subdirectories recurse through the work pool.
+// (see processFilePath). Subdirectories recurse inline on the calling thread;
+// only leaf-file tasks are submitted to the pool (fixes H1 same-pool deadlock).
 template <secure_password SecurePwd>
 bool FileOperations::processDirectory(const std::string& dir,
                                       const SecurePwd& password,
@@ -415,30 +422,51 @@ bool FileOperations::processDirectory(const std::string& dir,
     uint64_t total = 0, ok = 0, fail = 0;
     std::vector<std::future<bool>> futures;
 
-    auto drainFutures = [&]()
+    // Join every submitted FILE task. Pool tasks capture `password` by
+    // reference, so they must be joined before this function returns on ANY
+    // path. Tasks themselves never throw (see the catch-all below), so get()
+    // never rethrows; this also drains the MAX_CONCURRENT batches.
+    auto drainAll = [&]()
     {
         for (auto& f : futures)
         {
             if (f.get())
+            {
                 ++ok;
+            }
             else
+            {
                 ++fail;
+            }
         }
         futures.clear();
     };
 
-    // SAFETY: pool lambdas capture `password` by reference; drainFutures()
-    // must join ALL futures before return so password outlives them. Any
-    // new early-return path MUST drain first.
+    // Belt-and-suspenders: guarantee drain + handle close even if an
+    // unexpected exception (e.g. bad_alloc in joinPath) unwinds the loop.
+    struct ScopeExit
+    {
+        std::function<void()> fn;
+        ~ScopeExit() { fn(); }
+    } scopeExit{[&]
+                {
+                    drainAll();
+                    FindClose(h);
+                }};
+
     do
     {
         const char* name = fd.cFileName;
         if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+        {
             continue;
+        }
         // Skip reparse points (symlinks, junctions, mounts): could escape
         // the tree or loop forever on an upward junction.
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+        {
             continue;
+        }
 
         std::string full = seal::utils::joinPath(dir, name);
 
@@ -450,32 +478,50 @@ bool FileOperations::processDirectory(const std::string& dir,
 
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
         {
-            // Recurse through the pool so siblings run in parallel without
-            // spawning unbounded OS threads.
+            // Recurse INLINE on this thread. The worker pool only ever runs
+            // leaf-file tasks, which never submit or block, so no pool worker
+            // can park waiting on another pool task (the H1 deadlock).
             if (recurse)
             {
-                futures.push_back(GetPool().Submit(
-                    [full, &password]() -> bool
-                    { return FileOperations::processDirectory(full, password, true); }));
+                if (processDirectory(full, password, true))
+                {
+                    ++ok;
+                }
+                else
+                {
+                    ++fail;
+                }
             }
             continue;
         }
 
-        futures.push_back(
-            GetPool().Submit([full, &password]() -> bool
-                             { return FileOperations::processFilePath(full, password); }));
+        futures.push_back(GetPool().Submit(
+            [full, &password]() -> bool
+            {
+                // A file task must never throw past drainAll()/get(); a
+                // genuine file failure is reported as false, matching the
+                // existing ok/fail accounting.
+                try
+                {
+                    return FileOperations::processFilePath(full, password);
+                }
+                catch (...)
+                {
+                    return false;
+                }
+            }));
         ++total;
 
         if (futures.size() >= MAX_CONCURRENT)
         {
-            drainFutures();
+            drainAll();
         }
 
     } while (FindNextFileA(h, &fd));
 
-    FindClose(h);
-
-    drainFutures();
+    // Drain remaining file tasks so the printed counts are complete before
+    // return (the ScopeExit re-drains harmlessly and closes the handle).
+    drainAll();
 
     std::cout << "[dir] " << dir << ": " << ok << " ok, " << fail << " failed, " << total
               << " total\n";
@@ -966,7 +1012,9 @@ bool FileOperations::encryptFileStreaming(const std::string& srcPath,
     seal::Cryptography::opensslCheck(RAND_bytes(iv.data(), (int)iv.size()),
                                      "RAND_bytes(iv) failed");
 
-    auto key = seal::Cryptography::deriveKey(pwd, std::span<const unsigned char>(salt));
+    // Files carry the self-describing KDF header as AAD.
+    const seal::Cryptography::PacketHeader header = seal::Cryptography::makeHeader();
+    auto key = seal::Cryptography::deriveKey(pwd, std::span<const unsigned char>(salt), header.kdf);
 
     seal::EvpCipherCtx ctx;
     seal::Cryptography::opensslCheck(
@@ -980,7 +1028,7 @@ bool FileOperations::encryptFileStreaming(const std::string& srcPath,
         "EncryptInit(key/iv) failed");
 
     // Feed AAD
-    std::span<const unsigned char> aad = seal::Cryptography::aadSpan();
+    std::span<const unsigned char> aad(header.bytes.data(), header.size);
     if (!aad.empty())
     {
         int tmp = 0;
@@ -1112,26 +1160,33 @@ bool FileOperations::decryptFileStreaming(const std::string& srcPath,
     auto fileSize = static_cast<size_t>(in.tellg());
     in.seekg(0, std::ios::beg);
 
-    std::span<const unsigned char> aadExpected = seal::Cryptography::aadSpan();
-    size_t headerSize = aadExpected.size() + seal::cfg::SALT_LEN + seal::cfg::IV_LEN;
+    // Read the 8-byte header and let parsePacketHeader validate it; it
+    // cap-validates the KDF params before any key derivation.
+    std::array<unsigned char, 8> headBuf{};
+    const size_t headRead = std::min<size_t>(headBuf.size(), fileSize);
+    in.read(reinterpret_cast<char*>(headBuf.data()), (std::streamsize)headRead);
+
+    seal::Cryptography::PacketHeader header;
+    try
+    {
+        header = seal::Cryptography::parsePacketHeader(
+            std::span<const unsigned char>(headBuf.data(), headRead));
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "(decrypt-stream) bad packet header: " << e.what() << ": " << srcPath << "\n";
+        return false;
+    }
+    std::span<const unsigned char> aadExpected(header.bytes.data(), header.size);
+    const size_t headerSize = header.size + seal::cfg::SALT_LEN + seal::cfg::IV_LEN;
 
     if (fileSize < headerSize + seal::cfg::TAG_LEN)
     {
         std::cerr << "(decrypt-stream) file too short: " << srcPath << "\n";
         return false;
     }
-
-    // Read and verify AAD header
-    if (!aadExpected.empty())
-    {
-        std::vector<unsigned char> aadBuf(aadExpected.size());
-        in.read(reinterpret_cast<char*>(aadBuf.data()), (std::streamsize)aadBuf.size());
-        if (std::memcmp(aadBuf.data(), aadExpected.data(), aadExpected.size()) != 0)
-        {
-            std::cerr << "(decrypt-stream) bad AAD header: " << srcPath << "\n";
-            return false;
-        }
-    }
+    // Position the stream at the salt, just past the parsed header.
+    in.seekg((std::streamoff)header.size, std::ios::beg);
 
     // Read salt and IV
     std::vector<unsigned char> salt(seal::cfg::SALT_LEN);
@@ -1150,7 +1205,8 @@ bool FileOperations::decryptFileStreaming(const std::string& srcPath,
 
     try
     {
-        auto key = seal::Cryptography::deriveKey(pwd, std::span<const unsigned char>(salt));
+        auto key =
+            seal::Cryptography::deriveKey(pwd, std::span<const unsigned char>(salt), header.kdf);
 
         // Helper: initialise a GCM decrypt context with the shared key/IV/AAD.
         auto initCtx = [&](seal::EvpCipherCtx& ctx)
