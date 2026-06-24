@@ -79,6 +79,22 @@ void writeLine(std::ostream& os, Tone tone, std::string_view text);
 void writeTagged(std::ostream& os, Tone tone, std::string_view tag, std::string_view text);
 
 /**
+ * @brief Interactive y/N gate for destructive or plaintext-emitting actions.
+ * @ingroup CLI
+ *
+ * Prints `<prompt> [y/N]: ` to @p err and reads one line from @p in.
+ * Only `y`/`Y` confirms; everything else (including EOF / closed stdin)
+ * refuses. @p force short-circuits to `true` without prompting.
+ *
+ * @param force  Skip the prompt (e.g. `--force`).
+ * @param in     Input stream (stdin in production; stringstream in tests).
+ * @param err    Stream for the prompt (stderr keeps stdout pipe-clean).
+ * @param prompt Question to display, without the trailing `[y/N]`.
+ * @return `true` when the action is confirmed.
+ */
+bool ConfirmDestructive(bool force, std::istream& in, std::ostream& err, const char* prompt);
+
+/**
  * @brief Pre-parsed segments of a Qt log line for `writeLogLine`.
  * @ingroup Logging
  *

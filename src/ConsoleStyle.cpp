@@ -199,4 +199,28 @@ void writeLogLine(std::ostream& os, Tone levelTone, const LogSegments& segs)
     os << '\n';
 }
 
+bool ConfirmDestructive(bool force, std::istream& in, std::ostream& err, const char* prompt)
+{
+    if (force)
+    {
+        return true;
+    }
+    err << prompt << " [y/N]: " << std::flush;
+    std::string line;
+    if (!std::getline(in, line))
+    {
+        err << "\n";
+        return false;
+    }
+    // Trim ASCII whitespace; only an explicit y/Y confirms.
+    const auto first = line.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos)
+    {
+        return false;
+    }
+    const auto last = line.find_last_not_of(" \t\r\n");
+    const std::string trimmed = line.substr(first, last - first + 1);
+    return trimmed == "y" || trimmed == "Y";
+}
+
 }  // namespace seal::console
