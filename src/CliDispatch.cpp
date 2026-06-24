@@ -158,7 +158,7 @@ void CliDispatchEncrypt(const std::string& input, const CliDispatchCallbacks& cb
     std::string hex = seal::FileOperations::encryptLine(input, cb.password);
     // Hex -> raw bytes for base64.
     std::vector<unsigned char> raw;
-    seal::utils::from_hex(std::string_view{hex}, raw);
+    (void)seal::utils::from_hex(std::string_view{hex}, raw);
     std::string b64 = seal::utils::toBase64(std::span<const unsigned char>(raw));
     cb.output(QString("(hex) %1").arg(QString::fromStdString(hex)));
     cb.output(QString("(b64) %1").arg(QString::fromStdString(b64)));
