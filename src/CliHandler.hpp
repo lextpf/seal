@@ -18,7 +18,7 @@ namespace seal
  * @author Alex (https://github.com/lextpf)
  * @ingroup CliHandler
  *
- * Decouples the command dispatch logic from Backend's signal/slot
+ * Decouples the command dispatch logic from AppViewModel's signal/slot
  * infrastructure so the handler can be tested and maintained
  * independently.
  */
@@ -40,12 +40,29 @@ struct CliCallbacks
  * `:fill`, `:hex`, `:unhex`.
  *
  * @param command Trimmed command string.
- * @param cb      Callbacks for output and Backend interaction.
+ * @param cb      Callbacks for output and AppViewModel interaction.
  * @return `true` if the command was handled (caller should return).
  *         `false` if the command requires the master password and should
- *         be handled by Backend's crypto dispatch.
+ *         be handled by AppViewModel's crypto dispatch.
  */
 bool HandleCliBuiltin(const QString& command, const CliCallbacks& cb);
+
+/**
+ * @brief Build the masked echo line for a CLI command.
+ * @author Alex (https://github.com/lextpf)
+ * @ingroup CliHandler
+ *
+ * Colocated with the command definitions so the set of commands that are
+ * safe to echo verbatim cannot drift out of sync with the dispatcher.
+ * Known non-secret commands echo as typed; `:gen` and `:fill` echo only
+ * the command word (their arguments may be sensitive); everything else
+ * (potential secrets: plaintext, hex, base64, file paths) echoes as
+ * `[input hidden]`.
+ *
+ * @param command Raw command string as entered by the user.
+ * @return The `seal> ...` echo line to append to the CLI transcript.
+ */
+QString CliEchoLine(const QString& command);
 
 }  // namespace seal
 

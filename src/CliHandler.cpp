@@ -83,8 +83,7 @@ bool HandleCliBuiltin(const QString& command, const CliCallbacks& cb)
 
         (void)seal::Clipboard::copyWithTTL(password.data(), password.size());
 
-        cb.output(QString("%1  [copied]")
-                      .arg(QString::fromUtf8(password.data(), static_cast<int>(password.size()))));
+        cb.output(QStringLiteral("(generated password copied)"));
 
         seal::Cryptography::cleanseString(password);
         return true;
@@ -135,7 +134,8 @@ bool HandleCliBuiltin(const QString& command, const CliCallbacks& cb)
         auto bytes = std::vector<unsigned char>(text.begin(), text.end());
         std::string hex = seal::utils::to_hex(std::span<const unsigned char>(bytes));
         (void)seal::Clipboard::copyWithTTL(hex);
-        cb.output(QString("%1  [copied]").arg(QString::fromStdString(hex)));
+        cb.output(QStringLiteral("(hex copied)"));
+        seal::Cryptography::cleanseString(text, bytes, hex);
         return true;
     }
 
@@ -147,17 +147,40 @@ bool HandleCliBuiltin(const QString& command, const CliCallbacks& cb)
         {
             std::string text(bytes.begin(), bytes.end());
             (void)seal::Clipboard::copyWithTTL(text);
-            cb.output(QString("%1  [copied]").arg(QString::fromStdString(text)));
+            cb.output(QStringLiteral("(decoded text copied)"));
+            seal::Cryptography::cleanseString(text);
         }
         else
         {
             cb.output(QStringLiteral("(invalid hex)"));
         }
+        seal::Cryptography::cleanseString(hex, bytes);
         return true;
     }
 
     // Unhandled -- requires master password (crypto dispatch).
     return false;
+}
+
+QString CliEchoLine(const QString& command)
+{
+    const QString trimmed = command.trimmed();
+    if (trimmed == ":help" || trimmed == ":h" || trimmed == ":cls" || trimmed == ":clear-screen" ||
+        trimmed == ":open" || trimmed == ":o" || trimmed == ":edit" || trimmed == ":copy" ||
+        trimmed == ":clip" || trimmed == ":copyfile" || trimmed == ":copyinput" ||
+        trimmed == ":clear" || trimmed == ":none" || trimmed == ":qr")
+    {
+        return QStringLiteral("seal> ") + trimmed;
+    }
+    if (trimmed.startsWith(QStringLiteral(":gen")))
+    {
+        return QStringLiteral("seal> :gen");
+    }
+    if (trimmed.startsWith(QStringLiteral(":fill")))
+    {
+        return QStringLiteral("seal> :fill");
+    }
+    return QStringLiteral("seal> [input hidden]");
 }
 
 }  // namespace seal
