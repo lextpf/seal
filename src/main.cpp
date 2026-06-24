@@ -27,6 +27,7 @@
 #include "Clipboard.hpp"
 #include "Console.hpp"
 #include "ConsoleStyle.hpp"
+#include "CredentialCsv.hpp"
 #include "Cryptography.hpp"
 #include "Diagnostics.hpp"
 #include "FileOperations.hpp"
@@ -42,6 +43,7 @@
 #endif
 
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -72,6 +74,9 @@ enum class Mode
     Hash,
     Verify,
     Wipe,
+    Rekey,
+    List,
+    Get,
     InstallBrowserExtension,
     UninstallBrowserExtension
 };
@@ -84,6 +89,11 @@ struct ProgramOptions
     std::string outputPath;     // secondary / destination path
     std::string stringData;     // inline text for -e/-d
     int genLength = 20;
+    std::string getField = "pass";  // get: pass | user | both
+    bool getStdout = false;         // get: print to stdout instead of clipboard
+    int getTtlSeconds = 6;          // get: clipboard scrub TTL
+    std::string ioFormat = "auto";  // import: auto|seal|chrome ; export: seal|csv
+    bool force = false;             // export: skip the plaintext confirmation
 };
 
 void writeCliDiag(std::ostream& os,
@@ -135,6 +145,13 @@ static void printHelp()
     std::cout << "  hash <file>               Compute SHA-256 hash of a file\n";
     std::cout << "  verify <file.seal>        Verify password for an encrypted file\n";
     std::cout << "  wipe                      Clear clipboard and console buffer\n";
+    std::cout
+        << "  rekey <vault.seal>        Change the vault master password (atomic re-encrypt)\n";
+    std::cout << "  list [vault]              List platform names in a vault\n";
+    std::cout << "  get <platform> [vault]    Retrieve one credential (clipboard by default)\n";
+    std::cout << "      --user|--pass|--both    Field selection (default: --pass)\n";
+    std::cout << "      --stdout                Print raw value instead of clipboard\n";
+    std::cout << "      --ttl <seconds>         Clipboard scrub delay (default 6)\n";
     std::cout << "  import <data> [output]    Import credentials into a vault file\n";
     std::cout << "  export <input> [output]   Export vault to plaintext (re-importable format)\n";
     std::cout
@@ -149,6 +166,8 @@ static void printHelp()
     std::cout << "  -v, --version             Display version information\n";
     std::cout << "  -h, --help                Display this help message\n";
     std::cout << "  (no args)                 GUI mode (default)\n\n";
+    std::cout << "  --format <fmt>            import: auto|seal|chrome   export: seal|csv\n";
+    std::cout << "  --force                   export: skip the plaintext confirmation\n\n";
     std::cout << "Import format:\n";
     std::cout << "  <data> is comma-separated entries: plat:user:pass, plat:user:pass,...\n";
     std::cout << "  <data> can also be a path to a text file containing entries\n";
@@ -172,6 +191,9 @@ static void printHelp()
     std::cout << "  seal hash document.pdf                   SHA-256 hash\n";
     std::cout << "  seal verify secret.txt.seal              Check password correctness\n";
     std::cout << "  seal wipe                                Clear clipboard + console\n";
+    std::cout << "  seal rekey vault.seal                    Rotate the master password\n";
+    std::cout << "  seal list vault.seal                     Show stored platforms\n";
+    std::cout << "  seal get github --stdout | clip          Pipe a password\n";
     std::cout << "  seal import \"github:alice:pw123\"         Import to default .seal\n";
     std::cout << "  seal import entries.txt vault.seal       Import from file to vault\n";
     std::cout << "  seal import - vault.seal < entries.txt   Read entries from stdin\n";
@@ -356,6 +378,92 @@ static int parseArguments(int argc, char* argv[], ProgramOptions& opts)
             if (!trySetMode(opts, Mode::Wipe))
                 return 1;
         }
+        else if (arg == "rekey")
+        {
+            if (!trySetMode(opts, Mode::Rekey))
+                return 1;
+            if (!parseRequiredPath(argc, argv, i, opts, "rekey", "seal rekey <vault.seal>"))
+                return 1;
+        }
+        else if (arg == "list")
+        {
+            if (!trySetMode(opts, Mode::List))
+                return 1;
+            if (i + 1 < argc && !isOptionToken(argv[i + 1]))
+            {
+                opts.inputPath = argv[++i];
+            }
+        }
+        else if (arg == "get")
+        {
+            if (!trySetMode(opts, Mode::Get))
+                return 1;
+            if (i + 1 < argc && !isOptionToken(argv[i + 1]))
+            {
+                opts.stringData = argv[++i];  // platform query
+                if (i + 1 < argc && !isOptionToken(argv[i + 1]))
+                {
+                    opts.inputPath = argv[++i];  // optional vault path
+                }
+            }
+            else
+            {
+                writeCliDiag(std::cerr,
+                             seal::console::Tone::Error,
+                             "ARGS",
+                             {"event=cli.args.parse",
+                              "result=fail",
+                              "command=get",
+                              "reason=missing_platform"});
+                writeCliDiag(std::cerr,
+                             seal::console::Tone::Info,
+                             "USAGE",
+                             {"syntax=seal_get_platform_[vault]_[--user|--pass|--both]_[--stdout]_["
+                              "--ttl_s]"});
+                return 1;
+            }
+        }
+        else if (arg == "--user")
+        {
+            opts.getField = "user";
+        }
+        else if (arg == "--pass")
+        {
+            opts.getField = "pass";
+        }
+        else if (arg == "--both")
+        {
+            opts.getField = "both";
+        }
+        else if (arg == "--stdout")
+        {
+            opts.getStdout = true;
+        }
+        else if (arg == "--ttl")
+        {
+            if (i + 1 < argc)
+            {
+                try
+                {
+                    opts.getTtlSeconds = std::stoi(argv[++i]);
+                }
+                catch (...)
+                {
+                    opts.getTtlSeconds = 6;
+                }
+            }
+        }
+        else if (arg == "--format")
+        {
+            if (i + 1 < argc)
+            {
+                opts.ioFormat = argv[++i];
+            }
+        }
+        else if (arg == "--force")
+        {
+            opts.force = true;
+        }
         else if (arg == "install-browser-extension" || arg == "--install-browser-extension")
         {
             if (!trySetMode(opts, Mode::InstallBrowserExtension))
@@ -444,8 +552,10 @@ static int initializeSecurity(bool allowDynamicCode)
     return 0;
 }
 
-#ifdef USE_QT_UI
-static void loadImportDataFromFile(std::string& importData)
+// Resolve <data> that names a file (or "-" for stdin) into raw content.
+// No newline normalization here: the CSV path needs the raw line structure,
+// and the legacy triple path normalizes for itself in handleImportMode.
+static void readImportSource(std::string& importData)
 {
     std::string fileContent;
     const std::string sourcePath = importData;
@@ -476,9 +586,6 @@ static void loadImportDataFromFile(std::string& importData)
             {"event=import.read.begin", "source=file", seal::diag::pathSummary(sourcePath)});
     }
 
-    // Normalise newlines to commas so entries can be one-per-line or CSV.
-    std::replace_if(
-        fileContent.begin(), fileContent.end(), [](char c) { return c == '\n' || c == '\r'; }, ',');
     importData = fileContent;
 }
 
@@ -564,14 +671,77 @@ static int parseImportEntries(
     return 0;
 }
 
-static int handleImportMode(std::string& importData, const std::string& importOutputPath)
+static int handleImportMode(std::string& importData,
+                            const std::string& importOutputPath,
+                            const std::string& format)
 {
-    loadImportDataFromFile(importData);
+    readImportSource(importData);
+
+    // Format selection: explicit --format wins; auto sniffs the header.
+    std::string effectiveFormat = format;
+    if (effectiveFormat == "auto")
+    {
+        const size_t eol = importData.find('\n');
+        const std::string firstLine =
+            (eol == std::string::npos) ? importData : importData.substr(0, eol);
+        effectiveFormat = seal::csv::LooksLikeChromeCsv(firstLine) ? "chrome" : "seal";
+    }
 
     std::vector<std::tuple<std::string, std::string, std::string>> entries;
-    int rc = parseImportEntries(importData, entries);
-    if (rc != 0)
-        return rc;
+    if (effectiveFormat == "chrome")
+    {
+        std::vector<seal::csv::Credential> csvCreds;
+        seal::csv::Stats stats;
+        if (!seal::csv::ParseChromeCsv(importData, csvCreds, stats))
+        {
+            writeCliDiag(
+                std::cerr,
+                seal::console::Tone::Error,
+                "IMPORT",
+                {"event=import.parse.finish", "result=fail", "format=chrome", "reason=bad_header"});
+            return 1;
+        }
+        writeCliDiag(std::cerr,
+                     seal::console::Tone::Step,
+                     "IMPORT",
+                     {"event=import.parse.finish",
+                      "result=ok",
+                      "format=chrome",
+                      seal::diag::kv("imported", stats.imported),
+                      seal::diag::kv("skipped_no_platform", stats.skippedNoPlatform),
+                      seal::diag::kv("skipped_no_password", stats.skippedNoPassword),
+                      seal::diag::kv("bad_rows", stats.badRows)});
+        for (auto& c : csvCreds)
+        {
+            entries.emplace_back(
+                std::move(c.platform), std::move(c.username), std::move(c.password));
+        }
+        seal::Cryptography::cleanseString(importData);
+    }
+    else if (effectiveFormat == "seal")
+    {
+        // Legacy plat:user:pass entries: newlines normalise to commas so
+        // entries can be one-per-line or comma-separated.
+        std::replace_if(
+            importData.begin(),
+            importData.end(),
+            [](char c) { return c == '\n' || c == '\r'; },
+            ',');
+        int rc = parseImportEntries(importData, entries);
+        if (rc != 0)
+            return rc;
+    }
+    else
+    {
+        writeCliDiag(std::cerr,
+                     seal::console::Tone::Error,
+                     "IMPORT",
+                     {"event=import.parse.finish",
+                      "result=fail",
+                      "reason=unknown_format",
+                      seal::diag::kv("format", seal::diag::sanitizeAscii(effectiveFormat))});
+        return 1;
+    }
 
     if (entries.empty())
     {
@@ -627,15 +797,17 @@ static int handleImportMode(std::string& importData, const std::string& importOu
             seal::Cryptography::cleanseString(secUser, secPass);
         }
 
-        QString outputPath = QString::fromUtf8(importOutputPath.c_str());
-        if (!outputPath.endsWith(".seal", Qt::CaseInsensitive))
+        std::string outputPath = importOutputPath;
+        if (!seal::utils::endsWithCi(outputPath, ".seal"))
+        {
             outputPath += ".seal";
+        }
 
         // Original plaintext entries are now encrypted; wipe them.
         for (auto& [p, u, pw] : entries)
             seal::Cryptography::cleanseString(p, u, pw);
 
-        if (seal::saveVaultV2(outputPath, records, masterPassword))
+        if (seal::saveVault(std::filesystem::path{outputPath}, records, masterPassword))
         {
             writeCliDiag(std::cerr,
                          seal::console::Tone::Success,
@@ -644,7 +816,7 @@ static int handleImportMode(std::string& importData, const std::string& importOu
                           "result=ok",
                           seal::diag::kv("op", opId),
                           seal::diag::kv("record_count", records.size()),
-                          seal::diag::pathSummary(outputPath.toUtf8().toStdString())});
+                          seal::diag::pathSummary(outputPath)});
             seal::Cryptography::cleanseString(masterPassword);
             return 0;
         }
@@ -655,7 +827,7 @@ static int handleImportMode(std::string& importData, const std::string& importOu
                       "result=fail",
                       seal::diag::kv("op", opId),
                       "reason=save_failed",
-                      seal::diag::pathSummary(outputPath.toUtf8().toStdString())});
+                      seal::diag::pathSummary(outputPath)});
         seal::Cryptography::cleanseString(masterPassword);
         return 1;
     }
@@ -674,11 +846,17 @@ static int handleImportMode(std::string& importData, const std::string& importOu
     return 1;
 }
 
-static int handleExportMode(const std::string& inputPath, const std::string& outputPath)
+static int handleExportMode(const std::string& inputPath,
+                            const std::string& outputPath,
+                            const std::string& format,
+                            bool force)
 {
-    QString vaultPath = QString::fromUtf8(inputPath.c_str());
-    if (!vaultPath.endsWith(".seal", Qt::CaseInsensitive))
-        vaultPath += ".seal";
+    std::string vaultPathStr = inputPath;
+    if (!seal::utils::endsWithCi(vaultPathStr, ".seal"))
+    {
+        vaultPathStr += ".seal";
+    }
+    const std::filesystem::path vaultPath{vaultPathStr};
 
     const std::string opId = seal::diag::nextOpId("cli_export");
     writeCliDiag(
@@ -688,8 +866,40 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
         {"event=export.begin",
          "result=start",
          seal::diag::kv("op", opId),
-         seal::diag::pathSummary(vaultPath.toUtf8().toStdString(), "src"),
+         seal::diag::kv("format", format),
+         seal::diag::pathSummary(vaultPathStr, "src"),
          outputPath.empty() ? "dst_kind=stdout" : seal::diag::pathSummary(outputPath, "dst")});
+
+    if (format != "seal" && format != "csv")
+    {
+        writeCliDiag(std::cerr,
+                     seal::console::Tone::Error,
+                     "EXPORT",
+                     {"event=export.finish",
+                      "result=fail",
+                      seal::diag::kv("op", opId),
+                      "reason=unknown_format"});
+        return 1;
+    }
+    const bool csvFormat = (format == "csv");
+
+    // Plaintext gate: every export emits secrets in the clear, so an
+    // explicit confirmation (or --force for scripts) is required first --
+    // before the password prompt, so a refusal costs nothing.
+    const char* confirmPrompt = outputPath.empty()
+                                    ? "Print ALL credentials in PLAINTEXT to this console?"
+                                    : "Export ALL credentials in PLAINTEXT to a file?";
+    if (!seal::console::ConfirmDestructive(force, std::cin, std::cerr, confirmPrompt))
+    {
+        writeCliDiag(std::cerr,
+                     seal::console::Tone::Error,
+                     "EXPORT",
+                     {"event=export.finish",
+                      "result=fail",
+                      seal::diag::kv("op", opId),
+                      "reason=not_confirmed"});
+        return 1;
+    }
 
     seal::basic_secure_string<wchar_t> masterPassword;
     try
@@ -725,7 +935,7 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
                       seal::diag::kv("op", opId),
                       seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
                       seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what())),
-                      seal::diag::pathSummary(vaultPath.toUtf8().toStdString(), "src")});
+                      seal::diag::pathSummary(vaultPathStr, "src")});
         seal::Cryptography::cleanseString(masterPassword);
         return 1;
     }
@@ -762,6 +972,11 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
             return 1;
         }
         out = &outFile;
+    }
+
+    if (csvFormat)
+    {
+        *out << seal::csv::WriteCsvRow({"name", "url", "username", "password"});
     }
 
     size_t exportedCount = 0;
@@ -810,9 +1025,16 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
             }
             // Write + cleanse per record so only one credential ever sits
             // in pageable memory.
-            if (exportedCount > 0)
-                *out << ',';
-            *out << rec.platform << ':' << user << ':' << pass;
+            if (csvFormat)
+            {
+                *out << seal::csv::WriteCsvRow({rec.platform, "", user, pass});
+            }
+            else
+            {
+                if (exportedCount > 0)
+                    *out << ',';
+                *out << rec.platform << ':' << user << ':' << pass;
+            }
             ++exportedCount;
             seal::Cryptography::cleanseString(user, pass);
             cred.cleanse();
@@ -843,10 +1065,10 @@ static int handleExportMode(const std::string& inputPath, const std::string& out
                       seal::diag::kv("op", opId),
                       seal::diag::kv("record_count", exportedCount),
                       seal::diag::pathSummary(outputPath, "dst")});
+        std::cerr << "Reminder: shred the plaintext once done:  seal shred " << outputPath << "\n";
     }
     return 0;
 }
-#endif  // USE_QT_UI
 
 // Process the "seal" input file in cwd (paths/hex tokens, terminated by
 // '?' or '!') as a startup batch before the interactive loop.
@@ -995,32 +1217,13 @@ int main(int argc, char* argv[])
     switch (opts.mode)
     {
         case Mode::Import:
-#ifdef USE_QT_UI
-            return handleImportMode(opts.inputPath, opts.outputPath);
-#else
-            writeCliDiag(std::cerr,
-                         seal::console::Tone::Error,
-                         "CLI",
-                         {"event=cli.mode.dispatch",
-                          "result=fail",
-                          "command=import",
-                          "reason=qt_ui_unavailable"});
-            return 1;
-#endif
+            return handleImportMode(opts.inputPath, opts.outputPath, opts.ioFormat);
 
         case Mode::Export:
-#ifdef USE_QT_UI
-            return handleExportMode(opts.inputPath, opts.outputPath);
-#else
-            writeCliDiag(std::cerr,
-                         seal::console::Tone::Error,
-                         "CLI",
-                         {"event=cli.mode.dispatch",
-                          "result=fail",
-                          "command=export",
-                          "reason=qt_ui_unavailable"});
-            return 1;
-#endif
+            return handleExportMode(opts.inputPath,
+                                    opts.outputPath,
+                                    opts.ioFormat == "auto" ? "seal" : opts.ioFormat,
+                                    opts.force);
 
         case Mode::Gen:
             return seal::HandleGenMode(opts.genLength);
@@ -1032,6 +1235,13 @@ int main(int argc, char* argv[])
             return seal::HandleVerifyMode(opts.inputPath);
         case Mode::Wipe:
             return seal::HandleWipeMode();
+        case Mode::Rekey:
+            return seal::HandleRekeyMode(opts.inputPath);
+        case Mode::List:
+            return seal::HandleListMode(opts.inputPath);
+        case Mode::Get:
+            return seal::HandleGetMode(
+                opts.stringData, opts.inputPath, opts.getField, opts.getStdout, opts.getTtlSeconds);
         case Mode::InstallBrowserExtension:
             return seal::HandleInstallBrowserExtensionMode();
         case Mode::UninstallBrowserExtension:
