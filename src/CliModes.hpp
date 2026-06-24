@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <string>
 
 namespace seal
@@ -28,6 +29,60 @@ int HandleVerifyMode(const std::string& path);
 /// @brief Clear the clipboard and console buffer.
 /// @return 0 on success.
 int HandleWipeMode();
+
+/// @brief Change the master password of a vault file in place (atomic).
+/// @ingroup CLI
+///
+/// Prompts (no echo) for the current password, then for the new password
+/// twice. Delegates to seal::rekeyVault: the original file is replaced
+/// only after the re-encrypted temp vault verifies with the new password.
+///
+/// @param path Filesystem path to the `.seal` vault.
+/// @return 0 on success, 1 on wrong password, mismatch, or I/O error.
+int HandleRekeyMode(const std::string& path);
+
+/// @brief Validate the seal-get field/output flag combination.
+/// @param field    One of "pass", "user", "both".
+/// @param toStdout True when --stdout was passed.
+/// @return `true` for a usable combination ("both" requires --stdout).
+bool GetOptionsValid(const std::string& field, bool toStdout);
+
+/// @brief Clamp the --ttl value to the supported range [1, 600] seconds.
+/// @param requested Raw user-supplied seconds value.
+/// @return The clamped TTL in seconds.
+int ClampGetTtlSeconds(int requested);
+
+/// @brief List platform names of a vault, one per line on stdout.
+/// @ingroup CLI
+///
+/// Decrypts only the vault index (credentials stay encrypted). The
+/// password is prompted without echo. Names go to stdout; diagnostics
+/// and the record count go to stderr.
+///
+/// @param vaultPathArg Vault path, or empty to use findDefaultVault().
+/// @return 0 on success, 1 on wrong password / missing vault / I/O error.
+int HandleListMode(const std::string& vaultPathArg);
+
+/// @brief Retrieve one credential field from a vault.
+/// @ingroup CLI
+///
+/// Matches @p platformQuery case-insensitively (exact, then unique
+/// prefix). Default delivery copies the secret to the clipboard with a
+/// TTL scrub and prints a notice to stderr; `--stdout` prints the raw
+/// value (and nothing else) to stdout instead.
+///
+/// @param platformQuery Platform name or unique prefix.
+/// @param vaultPathArg  Vault path, or empty to use findDefaultVault().
+/// @param field         "pass" (default), "user", or "both".
+/// @param toStdout      Print to stdout instead of clipboard.
+/// @param ttlSeconds    Clipboard scrub delay (clamped to [1, 600]).
+/// @return 0 found and delivered; 1 password or I/O error; 2 not
+///         found / ambiguous.
+int HandleGetMode(const std::string& platformQuery,
+                  const std::string& vaultPathArg,
+                  const std::string& field,
+                  bool toStdout,
+                  int ttlSeconds);
 
 /// @brief Encrypt a file to a new destination.
 /// @param inputPath  Source file to encrypt.
@@ -77,7 +132,7 @@ int HandleUninstallBrowserExtensionMode();
 /// @brief Shared implementation of the install flow.
 /// @ingroup CLI
 ///
-/// Used by both the CLI subcommand and the Backend QML invocation so the
+/// Used by both the CLI subcommand and the AppViewModel QML invocation so the
 /// two surfaces stay in lockstep.
 ///
 /// @param outMessage Optional human-readable status string for the GUI caller.

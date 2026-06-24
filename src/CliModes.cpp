@@ -3,15 +3,18 @@
 #include "Clipboard.hpp"
 #include "Console.hpp"
 #include "ConsoleStyle.hpp"
+#include "CryptoConfig.hpp"
 #include "Cryptography.hpp"
 #include "Diagnostics.hpp"
 #include "FileOperations.hpp"
 #include "PasswordGen.hpp"
 #include "ScopedDpapiUnprotect.hpp"
 #include "Utils.hpp"
+#include "Vault.hpp"
 
 #include <windows.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <filesystem>
@@ -30,6 +33,21 @@ using ScopedUnprotect = seal::ScopedDpapiUnprotect<GuardT>;
 void writeCliDiag(seal::console::Tone tone, std::initializer_list<std::string> fields)
 {
     seal::console::writeTagged(std::cerr, tone, "CLI", seal::diag::joinFields(fields));
+}
+
+// Resolve an explicit-or-default vault path; empty result means not found.
+std::filesystem::path resolveVaultPath(const std::string& vaultPathArg)
+{
+    if (!vaultPathArg.empty())
+    {
+        std::string p = vaultPathArg;
+        if (!seal::utils::endsWithCi(p, ".seal"))
+        {
+            p += ".seal";
+        }
+        return std::filesystem::path{p};
+    }
+    return seal::findDefaultVault();
 }
 }  // namespace
 
@@ -921,6 +939,295 @@ int HandleInstallBrowserExtensionMode()
 int HandleUninstallBrowserExtensionMode()
 {
     return uninstallBrowserExtensionInternal(nullptr);
+}
+
+bool GetOptionsValid(const std::string& field, bool toStdout)
+{
+    if (field == "both")
+    {
+        return toStdout;
+    }
+    return field == "pass" || field == "user";
+}
+
+int ClampGetTtlSeconds(int requested)
+{
+    return std::clamp(requested, 1, 600);
+}
+
+int HandleListMode(const std::string& vaultPathArg)
+{
+    const std::filesystem::path vaultPath = resolveVaultPath(vaultPathArg);
+    const std::string opId = seal::diag::nextOpId("cli_list");
+    if (vaultPath.empty())
+    {
+        writeCliDiag(seal::console::Tone::Error,
+                     {"event=cli.list.finish",
+                      "result=fail",
+                      seal::diag::kv("op", opId),
+                      "reason=no_vault_found"});
+        return 1;
+    }
+
+    try
+    {
+        seal::basic_secure_string<wchar_t> password = seal::readPasswordConsole();
+        seal::DPAPIGuard<seal::basic_secure_string<wchar_t>> guard(&password);
+        std::vector<seal::VaultRecord> records;
+        {
+            ScopedUnprotect dpapiScope(guard);
+            records = seal::loadVaultIndex(vaultPath, password);
+        }
+        for (const auto& rec : records)
+        {
+            if (!rec.deleted)
+            {
+                std::cout << rec.platform << "\n";
+            }
+        }
+        writeCliDiag(seal::console::Tone::Success,
+                     {"event=cli.list.finish",
+                      "result=ok",
+                      seal::diag::kv("op", opId),
+                      seal::diag::kv("record_count", records.size())});
+        seal::Cryptography::cleanseString(password);
+        return 0;
+    }
+    catch (const std::exception& e)
+    {
+        writeCliDiag(seal::console::Tone::Error,
+                     {"event=cli.list.finish",
+                      "result=fail",
+                      seal::diag::kv("op", opId),
+                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what()))});
+        return 1;
+    }
+}
+
+int HandleGetMode(const std::string& platformQuery,
+                  const std::string& vaultPathArg,
+                  const std::string& field,
+                  bool toStdout,
+                  int ttlSeconds)
+{
+    const std::string opId = seal::diag::nextOpId("cli_get");
+    if (!GetOptionsValid(field, toStdout))
+    {
+        writeCliDiag(seal::console::Tone::Error,
+                     {"event=cli.get.finish",
+                      "result=fail",
+                      seal::diag::kv("op", opId),
+                      "reason=invalid_options",
+                      "hint=both_requires_stdout"});
+        return 1;
+    }
+    const std::filesystem::path vaultPath = resolveVaultPath(vaultPathArg);
+    if (vaultPath.empty())
+    {
+        writeCliDiag(seal::console::Tone::Error,
+                     {"event=cli.get.finish",
+                      "result=fail",
+                      seal::diag::kv("op", opId),
+                      "reason=no_vault_found"});
+        return 1;
+    }
+
+    try
+    {
+        seal::basic_secure_string<wchar_t> password = seal::readPasswordConsole();
+        seal::DPAPIGuard<seal::basic_secure_string<wchar_t>> guard(&password);
+
+        std::vector<seal::VaultRecord> records;
+        {
+            ScopedUnprotect dpapiScope(guard);
+            records = seal::loadVaultIndex(vaultPath, password);
+        }
+
+        // Blank (not remove) deleted entries so indices stay aligned.
+        std::vector<std::string> names;
+        names.reserve(records.size());
+        for (const auto& rec : records)
+        {
+            names.push_back(rec.deleted ? std::string{} : rec.platform);
+        }
+
+        const seal::PlatformMatch match = seal::matchPlatform(names, platformQuery);
+        if (match.outcome == seal::MatchOutcome::NotFound)
+        {
+            writeCliDiag(seal::console::Tone::Error,
+                         {"event=cli.get.finish",
+                          "result=fail",
+                          seal::diag::kv("op", opId),
+                          "reason=not_found"});
+            seal::Cryptography::cleanseString(password);
+            return 2;
+        }
+        if (match.outcome == seal::MatchOutcome::Ambiguous)
+        {
+            std::cerr << "Ambiguous platform; candidates:\n";
+            for (const auto& cand : match.candidates)
+            {
+                std::cerr << "  " << cand << "\n";
+            }
+            writeCliDiag(seal::console::Tone::Error,
+                         {"event=cli.get.finish",
+                          "result=fail",
+                          seal::diag::kv("op", opId),
+                          "reason=ambiguous",
+                          seal::diag::kv("candidates", match.candidates.size())});
+            seal::Cryptography::cleanseString(password);
+            return 2;
+        }
+
+        seal::DecryptedCredential cred;
+        {
+            ScopedUnprotect dpapiScope(guard);
+            cred = seal::decryptCredentialOnDemand(records[(size_t)match.index], password);
+        }
+
+        std::string userUtf8 = seal::utils::secureWideToUtf8(cred.username);
+        std::string passUtf8 = seal::utils::secureWideToUtf8(cred.password);
+        cred.cleanse();
+
+        int rc = 0;
+        if (toStdout)
+        {
+            // Raw value(s) + newline only: pipe-clean by contract.
+            if (field == "user")
+            {
+                std::cout << userUtf8 << "\n";
+            }
+            else if (field == "pass")
+            {
+                std::cout << passUtf8 << "\n";
+            }
+            else
+            {
+                std::cout << userUtf8 << "\t" << passUtf8 << "\n";
+            }
+            std::cout.flush();
+        }
+        else
+        {
+            const std::string& value = (field == "user") ? userUtf8 : passUtf8;
+            const DWORD ttlMs = static_cast<DWORD>(ClampGetTtlSeconds(ttlSeconds)) * 1000u;
+            if (!seal::Clipboard::copyWithTTL(value.data(), value.size(), ttlMs))
+            {
+                writeCliDiag(seal::console::Tone::Error,
+                             {"event=cli.get.finish",
+                              "result=fail",
+                              seal::diag::kv("op", opId),
+                              "reason=clipboard_failed"});
+                rc = 1;
+            }
+            else
+            {
+                std::cerr << ((field == "user") ? "Username" : "Password")
+                          << " copied to clipboard (scrubbed in " << ClampGetTtlSeconds(ttlSeconds)
+                          << "s).\n";
+            }
+        }
+
+        seal::Cryptography::cleanseString(userUtf8, passUtf8, password);
+        if (rc == 0)
+        {
+            writeCliDiag(seal::console::Tone::Success,
+                         {"event=cli.get.finish",
+                          "result=ok",
+                          seal::diag::kv("op", opId),
+                          std::string("sink=") + (toStdout ? "stdout" : "clipboard")});
+        }
+        return rc;
+    }
+    catch (const std::exception& e)
+    {
+        writeCliDiag(seal::console::Tone::Error,
+                     {"event=cli.get.finish",
+                      "result=fail",
+                      seal::diag::kv("op", opId),
+                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what()))});
+        return 1;
+    }
+}
+
+int HandleRekeyMode(const std::string& path)
+{
+    std::string vaultPathStr = path;
+    if (!seal::utils::endsWithCi(vaultPathStr, ".seal"))
+    {
+        vaultPathStr += ".seal";
+    }
+    const std::filesystem::path vaultPath{vaultPathStr};
+
+    const std::string opId = seal::diag::nextOpId("cli_rekey");
+    writeCliDiag(seal::console::Tone::Step,
+                 {"event=cli.rekey.begin",
+                  "result=start",
+                  seal::diag::kv("op", opId),
+                  seal::diag::pathSummary(vaultPathStr)});
+
+    try
+    {
+        seal::basic_secure_string<wchar_t> currentPw =
+            seal::readPasswordConsole("Current password: ");
+        seal::basic_secure_string<wchar_t> newPw = seal::readPasswordConsole("New password: ");
+        seal::basic_secure_string<wchar_t> confirmPw =
+            seal::readPasswordConsole("Confirm new password: ");
+
+        if (newPw.size() == 0)
+        {
+            writeCliDiag(seal::console::Tone::Error,
+                         {"event=cli.rekey.finish",
+                          "result=fail",
+                          seal::diag::kv("op", opId),
+                          "reason=empty_new_password"});
+            seal::Cryptography::cleanseString(currentPw, newPw, confirmPw);
+            return 1;
+        }
+
+        // Constant-time confirmation compare over the raw wide bytes
+        // (ctEqual's byte_like concept excludes wchar_t containers).
+        bool pwMatch = newPw.size() == confirmPw.size();
+        if (pwMatch)
+        {
+            seal::RWGuard<wchar_t> newGuard(newPw.data());
+            seal::RWGuard<wchar_t> confirmGuard(confirmPw.data());
+            pwMatch = seal::Cryptography::ctEqualRaw(
+                reinterpret_cast<const unsigned char*>(newPw.data()),
+                reinterpret_cast<const unsigned char*>(confirmPw.data()),
+                newPw.size() * sizeof(wchar_t));
+        }
+        if (!pwMatch)
+        {
+            writeCliDiag(seal::console::Tone::Error,
+                         {"event=cli.rekey.finish",
+                          "result=fail",
+                          seal::diag::kv("op", opId),
+                          "reason=confirmation_mismatch"});
+            seal::Cryptography::cleanseString(currentPw, newPw, confirmPw);
+            return 1;
+        }
+
+        const size_t count = seal::rekeyVault(vaultPath, currentPw, newPw);
+        seal::Cryptography::cleanseString(currentPw, newPw, confirmPw);
+
+        writeCliDiag(seal::console::Tone::Success,
+                     {"event=cli.rekey.finish",
+                      "result=ok",
+                      seal::diag::kv("op", opId),
+                      seal::diag::kv("record_count", count)});
+        return 0;
+    }
+    catch (const std::exception& e)
+    {
+        writeCliDiag(seal::console::Tone::Error,
+                     {"event=cli.rekey.finish",
+                      "result=fail",
+                      seal::diag::kv("op", opId),
+                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
+                      seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what()))});
+        return 1;
+    }
 }
 
 }  // namespace seal
