@@ -5,6 +5,7 @@
 #include "BridgeMessage.hpp"
 #include "Diagnostics.hpp"
 #include "Logging.hpp"
+#include "ProcessPin.hpp"
 #include "SignerUtils.hpp"
 
 #include <QtCore/QString>
@@ -17,6 +18,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <stop_token>
 #include <string>
@@ -303,6 +305,7 @@ struct BrowserBridge::Impl
     PipeSecurity m_PipeSecurity;  ///< Per-user DACL, built once, applied to every pipe instance.
     mutable std::shared_mutex m_MapMutex;
     std::unordered_map<BridgeKey, BridgeEntry, BridgeKeyHash> m_Map;
+    std::unordered_map<DWORD, int> m_BrowserConnCounts;  // guarded by m_MapMutex
     std::string m_ExpectedSignerIdentity;
 
     // Internal so enable() can re-call without going through the public
@@ -315,10 +318,14 @@ struct BrowserBridge::Impl
     bool verifySignerMatches(const std::wstring& peerPath) const;
     void handleMessage(DWORD browserPid, std::string_view payload);
     void pruneExpiredLocked(const std::chrono::steady_clock::time_point& now);
+    void noteBrowserConnected(DWORD browserPid);
+    void noteBrowserDisconnected(DWORD browserPid);
     bool readFramedMessage(HANDLE pipe,
                            std::vector<char>& outBuf,
                            OVERLAPPED& overlapped,
-                           std::stop_token stopToken);
+                           std::stop_token stopToken,
+                           const seal::signer::PinnedProcess& peer,
+                           const seal::signer::PinnedProcess& browser);
     bool writeFramedMessage(HANDLE pipe, std::string_view payload, OVERLAPPED& overlapped);
 };
 
@@ -471,6 +478,39 @@ void BrowserBridge::Impl::pruneExpiredLocked(const std::chrono::steady_clock::ti
     }
 }
 
+void BrowserBridge::Impl::noteBrowserConnected(DWORD browserPid)
+{
+    std::unique_lock<std::shared_mutex> lock(m_MapMutex);
+    ++m_BrowserConnCounts[browserPid];
+}
+
+void BrowserBridge::Impl::noteBrowserDisconnected(DWORD browserPid)
+{
+    std::unique_lock<std::shared_mutex> lock(m_MapMutex);
+    auto it = m_BrowserConnCounts.find(browserPid);
+    if (it == m_BrowserConnCounts.end())
+    {
+        return;
+    }
+    if (--it->second <= 0)
+    {
+        m_BrowserConnCounts.erase(it);
+        // Erase every map entry for this browserPid. Manual loop mirrors
+        // pruneExpiredLocked's iteration style (no dependence on std::erase_if).
+        for (auto mit = m_Map.begin(); mit != m_Map.end();)
+        {
+            if (mit->first.m_BrowserPid == browserPid)
+            {
+                mit = m_Map.erase(mit);
+            }
+            else
+            {
+                ++mit;
+            }
+        }
+    }
+}
+
 void BrowserBridge::Impl::handleMessage(DWORD browserPid, std::string_view payload)
 {
     if (m_Disabled.load())
@@ -534,7 +574,9 @@ void BrowserBridge::Impl::handleMessage(DWORD browserPid, std::string_view paylo
 bool BrowserBridge::Impl::readFramedMessage(HANDLE pipe,
                                             std::vector<char>& outBuf,
                                             OVERLAPPED& overlapped,
-                                            std::stop_token stopToken)
+                                            std::stop_token stopToken,
+                                            const seal::signer::PinnedProcess& peer,
+                                            const seal::signer::PinnedProcess& browser)
 {
     // Two phases:
     //   1. Length prefix: idle is legit (no clicks for hours). Wait
@@ -546,7 +588,10 @@ bool BrowserBridge::Impl::readFramedMessage(HANDLE pipe,
     constexpr DWORD kStopPollMs = 1000;
 
     auto isStopping = [&]() noexcept
-    { return stopToken.stop_requested() || !m_Running.load() || m_Disabled.load(); };
+    {
+        const bool stopping = stopToken.stop_requested() || !m_Running.load() || m_Disabled.load();
+        return stopping || !peer.alive() || !browser.alive();
+    };
 
     std::uint32_t lengthBytes = 0;
     DWORD bytesRead = 0;
@@ -890,7 +935,36 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
             seal::diag::joinFields({"event=fill.bridge.reject", "reason=peer_pid_unknown"}));
         return;
     }
-    const std::wstring peerPath = seal::signer::resolveProcessPath(peerPid);
+
+    seal::signer::PinnedProcess peer(peerPid);
+    if (!peer)
+    {
+        qCWarning(logBridge).noquote() << QString::fromStdString(seal::diag::joinFields(
+            {"event=fill.bridge.reject",
+             "reason=pin_failed",
+             "sub=peer",
+             seal::diag::kv("peer_pid", static_cast<unsigned int>(peerPid)),
+             seal::diag::kv("last_error", static_cast<unsigned int>(peer.lastError()))}));
+        return;
+    }
+
+    // The pin closes the recycling window only for events AFTER OpenProcess
+    // returned. Re-read the pipe's client PID and require it still equals the
+    // pinned PID, rejecting a recycle in the GetNamedPipeClientProcessId ->
+    // OpenProcess gap.
+    DWORD peerPidCheck = 0;
+    if (!GetNamedPipeClientProcessId(pipe, &peerPidCheck) || peerPidCheck != peer.pid())
+    {
+        qCWarning(logBridge).noquote() << QString::fromStdString(seal::diag::joinFields(
+            {"event=fill.bridge.reject",
+             "reason=peer_pid_changed",
+             seal::diag::kv("peer_pid", static_cast<unsigned int>(peerPid))}));
+        return;
+    }
+
+    // peerPath comes from the pinned handle; WinVerifyTrust still reads the file
+    // from disk (file-level Authenticode TOCTOU is a documented residual).
+    const std::wstring peerPath = peer.imagePath();
     if (peerPath.empty())
     {
         qCWarning(logBridge).noquote() << QString::fromStdString(seal::diag::joinFields(
@@ -908,75 +982,94 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
         return;
     }
 
-    // Walk up the ancestry from peerPid until we find a signed-browser
-    // ancestor (not just the immediate parent: Chromium sometimes
-    // launches native-messaging hosts via cmd.exe). The map is keyed
-    // on the browser PID because BrowserBridgeProbe lookups come from
-    // WindowFromPoint(), which returns the browser's PID.
-    //
-    // This walk also closes the signed-host-puppeting hole: any
-    // non-shell, non-browser ancestor terminates the walk with reject.
+    // Walk up the ancestry from peerPid until we find a signed-browser ancestor.
+    // Each hop is pinned; a parent created strictly after its child indicates a
+    // recycled (stale) parent-PID link and is rejected fail-closed.
     constexpr int kMaxAncestorDepth = 6;
-    DWORD browserPid = 0;
+    seal::signer::PinnedProcess browser;  // retained for the connection if found
     std::wstring browserPath;
-    std::string parentChain;  // "cmd.exe>chrome.exe", logged on success and failure.
+    std::string parentChain;
     std::string failSubReason = "browser_ancestor_not_found";
     std::string failedImage;
+    std::optional<std::uint64_t> childCreation = peer.creationTime();
+    DWORD curPid = seal::signer::resolveParentPid(peerPid);
+    for (int depth = 0; depth < kMaxAncestorDepth && curPid != 0; ++depth)
     {
-        DWORD curPid = seal::signer::resolveParentPid(peerPid);
-        for (int depth = 0; depth < kMaxAncestorDepth && curPid != 0; ++depth)
+        seal::signer::PinnedProcess cur(curPid);
+        if (!cur)
         {
-            const std::wstring curPath = seal::signer::resolveProcessPath(curPid);
-            if (curPath.empty())
-            {
-                failSubReason = "path_unresolved";
-                break;
-            }
-            // Append basename to the chain string.
-            {
-                const auto sep = curPath.find_last_of(L"\\/");
-                const std::wstring basename =
-                    (sep == std::wstring::npos) ? curPath : curPath.substr(sep + 1);
-                std::string base;
-                base.reserve(basename.size());
-                for (wchar_t c : basename)
-                {
-                    base.push_back((c >= 0x20 && c < 0x7F) ? static_cast<char>(c) : '?');
-                }
-                if (!parentChain.empty())
-                {
-                    parentChain += '>';
-                }
-                parentChain += base;
-                failedImage = base;
-            }
+            failSubReason = "path_unresolved";
+            break;
+        }
 
-            if (seal::signer::isKnownBrowserImage(curPath))
-            {
-                if (!seal::signer::winVerifyTrustOk(curPath))
-                {
-                    failSubReason = "winverifytrust_failed";
-                    break;
-                }
-                browserPid = curPid;
-                browserPath = curPath;
-                break;
-            }
-            if (!seal::signer::isShellImage(curPath))
-            {
-                failSubReason = "image_not_in_browser_list";
-                break;
-            }
-            // Shell hop: walk up another level.
-            curPid = seal::signer::resolveParentPid(curPid);
-        }
-        if (browserPid == 0 && failSubReason == "browser_ancestor_not_found" && curPid == 0)
+        const std::wstring curPath = cur.imagePath();
+        if (curPath.empty())
         {
-            failSubReason = "parent_pid_unknown_in_chain";
+            failSubReason = "path_unresolved";
+            break;
         }
+
+        // Append basename to the chain BEFORE the per-hop reject checks, so a
+        // hop rejected for stale_parent_link / creation_time_unavailable still
+        // appears in parent_chain / failed_image (original always-append order).
+        {
+            const auto sep = curPath.find_last_of(L"\\/");
+            const std::wstring basename =
+                (sep == std::wstring::npos) ? curPath : curPath.substr(sep + 1);
+            std::string base;
+            base.reserve(basename.size());
+            for (wchar_t c : basename)
+            {
+                base.push_back((c >= 0x20 && c < 0x7F) ? static_cast<char>(c) : '?');
+            }
+            if (!parentChain.empty())
+            {
+                parentChain += '>';
+            }
+            parentChain += base;
+            failedImage = base;
+        }
+
+        // G2 narrowing, FAIL-CLOSED. Strict '>' lets a parent+child sharing one
+        // FILETIME tick pass; a missing creation time rejects rather than skips.
+        const std::optional<std::uint64_t> curCreation = cur.creationTime();
+        if (!curCreation || !childCreation)
+        {
+            failSubReason = "creation_time_unavailable";
+            break;
+        }
+        if (*curCreation > *childCreation)
+        {
+            failSubReason = "stale_parent_link";
+            break;
+        }
+
+        if (seal::signer::isKnownBrowserImage(curPath))
+        {
+            if (!seal::signer::winVerifyTrustOk(curPath))
+            {
+                failSubReason = "winverifytrust_failed";
+                break;
+            }
+            browser = std::move(cur);
+            browserPath = curPath;
+            break;
+        }
+        if (!seal::signer::isShellImage(curPath))
+        {
+            failSubReason = "image_not_in_browser_list";
+            break;
+        }
+
+        childCreation = curCreation;  // shell hop: ordering carries upward
+        curPid = seal::signer::resolveParentPid(cur.pid());
+    }
+    if (!browser && failSubReason == "browser_ancestor_not_found" && curPid == 0)
+    {
+        failSubReason = "parent_pid_unknown_in_chain";
     }
 
-    if (browserPid == 0)
+    if (!browser)
     {
         qCWarning(logBridge).noquote() << QString::fromStdString(seal::diag::joinFields(
             {"event=fill.bridge.reject",
@@ -991,7 +1084,7 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
     }
     // The "parent" for the rest of the connection is the discovered browser
     // ancestor -- that PID owns the user's window click, hence map key.
-    const DWORD parentPid = browserPid;
+    const DWORD parentPid = browser.pid();
 
     // Per-connection nonce -- NOT the HMAC key (that one only derives
     // the pipe-name suffix and never leaves the process). Fresh per
@@ -1015,7 +1108,7 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
     }
 
     std::vector<char> echoBuf;
-    if (!readFramedMessage(pipe, echoBuf, overlapped, stopToken))
+    if (!readFramedMessage(pipe, echoBuf, overlapped, stopToken, peer, browser))
     {
         return;
     }
@@ -1033,6 +1126,7 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
     const seal::signer::BrowserKind kind = seal::signer::identifyBrowser(browserPath);
     const std::size_t kindIdx = static_cast<std::size_t>(kind);
     m_PeerCounts[kindIdx].fetch_add(1, std::memory_order_relaxed);
+    noteBrowserConnected(parentPid);
     qCInfo(logBridge).noquote() << QString::fromStdString(
         seal::diag::joinFields({"event=fill.bridge.accept",
                                 "result=ok",
@@ -1043,7 +1137,11 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
     std::vector<char> message;
     while (m_Running.load() && !stopToken.stop_requested() && !m_Disabled.load())
     {
-        if (!readFramedMessage(pipe, message, overlapped, stopToken))
+        if (!peer.alive() || !browser.alive())
+        {
+            break;
+        }
+        if (!readFramedMessage(pipe, message, overlapped, stopToken, peer, browser))
         {
             break;
         }
@@ -1052,11 +1150,29 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
         handleMessage(parentPid, std::string_view(message.data(), message.size()));
     }
 
+    // A liveness trip emits the specific token; otherwise the existing
+    // disconnect info line. Teardown latency on browser exit is <= 1 s.
+    if (!peer.alive())
+    {
+        qCWarning(logBridge).noquote() << QString::fromStdString(seal::diag::joinFields(
+            {"event=fill.bridge.disconnect",
+             "reason=peer_exited",
+             seal::diag::kv("browser_pid", static_cast<unsigned int>(parentPid))}));
+    }
+    else if (!browser.alive())
+    {
+        qCWarning(logBridge).noquote() << QString::fromStdString(seal::diag::joinFields(
+            {"event=fill.bridge.disconnect",
+             "reason=browser_exited",
+             seal::diag::kv("browser_pid", static_cast<unsigned int>(parentPid))}));
+    }
+
     m_PeerCounts[kindIdx].fetch_sub(1, std::memory_order_relaxed);
     qCInfo(logBridge).noquote() << QString::fromStdString(
         seal::diag::joinFields({"event=fill.bridge.disconnect",
                                 seal::diag::kv("browser_pid", static_cast<unsigned int>(parentPid)),
                                 seal::diag::kv("browser", seal::signer::browserKindToken(kind))}));
+    noteBrowserDisconnected(parentPid);
 }
 
 BrowserBridge::BrowserBridge()
@@ -1106,6 +1222,10 @@ void BrowserBridge::disable()
     {
         std::unique_lock<std::shared_mutex> lock(m_Impl->m_MapMutex);
         m_Impl->m_Map.clear();
+        // Symmetry with m_Map: workers already drained their own counts on join
+        // above, so this is a no-op today, but it future-proofs the panic path
+        // against any change to the join-before-clear ordering.
+        m_Impl->m_BrowserConnCounts.clear();
     }
     qCInfo(logBridge).noquote() << QString::fromStdString(
         seal::diag::joinFields({"event=fill.bridge.disabled"}));
