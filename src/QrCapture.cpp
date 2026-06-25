@@ -1,6 +1,7 @@
 #include "QrCapture.hpp"
 
 #include "CameraSelector.hpp"
+#include "CancellationToken.hpp"
 #include "ConsoleStyle.hpp"
 #include "Diagnostics.hpp"
 #include "Logging.hpp"
@@ -130,15 +131,12 @@ struct CaptureJobGuard
 
 }  // namespace
 
-seal::secure_string<> seal::captureQrFromWebcam()
+seal::secure_string<> seal::captureQrFromWebcam(seal::CancellationToken token)
 {
     seal::secure_string<> result;
 
     // Memory cap while OpenCV is active.
     CaptureJobGuard jobGuard(kCaptureMemoryLimitBytes);
-
-    // OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS is set in main.cpp before
-    // workers spawn to avoid a getenv race.
 
     cv::VideoCapture cap;
     cv::Mat frame;
@@ -148,14 +146,17 @@ seal::secure_string<> seal::captureQrFromWebcam()
         return result;
     }
 
-    // Warmup: live preview lets the sensor's AE/AWB converge before the
-    // first detection -- otherwise early frames are too dark/washed out.
     const int cameraWarmupMs = seal::EnvIntOrDefault("SEAL_CAMERA_WARMUP_MS", 250, 0, 5000);
     if (cameraWarmupMs > 0)
     {
         auto start = std::chrono::steady_clock::now();
         while (std::chrono::steady_clock::now() - start < std::chrono::milliseconds(cameraWarmupMs))
         {
+            if (token.cancelled())
+            {
+                cv::destroyAllWindows();
+                return result;
+            }
             cap >> frame;
             if (frame.empty())
                 break;
@@ -169,7 +170,6 @@ seal::secure_string<> seal::captureQrFromWebcam()
         }
     }
 
-    // Focus the webcam window so ESC works immediately.
     {
         HWND hwnd = FindWindowA(nullptr, "webcam");
         if (hwnd)
@@ -181,7 +181,6 @@ seal::secure_string<> seal::captureQrFromWebcam()
 
     writeQrDiag(seal::console::Tone::Info, {"event=qr.capture.ready", "result=ok"});
 
-    // QR decode loop
     cv::QRCodeDetector qrDetector;
     const auto captureStart = std::chrono::steady_clock::now();
     const int captureTimeoutSec =
@@ -189,6 +188,14 @@ seal::secure_string<> seal::captureQrFromWebcam()
 
     while (true)
     {
+        // Poll cooperative cancellation token first.
+        if (token.cancelled())
+        {
+            writeQrDiag(seal::console::Tone::Warning,
+                        {"event=qr.capture.finish", "result=fail", "reason=cancelled"});
+            break;
+        }
+
         // Enforce capture timeout.
         {
             auto elapsed = std::chrono::steady_clock::now() - captureStart;
@@ -203,14 +210,11 @@ seal::secure_string<> seal::captureQrFromWebcam()
             }
         }
 
-        // Drop 2 buffered frames so detection isn't a few hundred ms behind
-        // the live view.
         for (int i = 0; i < 2; ++i)
             cap.grab();
         if (!cap.read(frame) || frame.empty())
             break;
 
-        // Reject oversized frames from malicious virtual-camera drivers.
         if (frame.cols > kMaxFrameDimension || frame.rows > kMaxFrameDimension)
         {
             writeQrDiag(seal::console::Tone::Warning,
@@ -223,17 +227,12 @@ seal::secure_string<> seal::captureQrFromWebcam()
             continue;
         }
 
-        // Grayscale + downscale to 480 px wide. Finder patterns are
-        // high-contrast (no value in colour) and downscaling cuts detection
-        // time ~4x at 1080p.
         cv::Mat gray;
         cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
         const double scale = std::min(1.0, 480.0 / gray.cols);
         if (scale < 1.0)
             cv::resize(gray, gray, cv::Size(), scale, scale, cv::INTER_AREA);
 
-        // Try standard polarity first, then invert and retry -- some
-        // generators output white-on-black.
         std::vector<cv::Point> points;
         std::string data = qrDetector.detectAndDecode(gray, points);
         if (data.empty())
@@ -243,11 +242,8 @@ seal::secure_string<> seal::captureQrFromWebcam()
             data = qrDetector.detectAndDecode(gray, points);
         }
 
-        // Move into locked secure memory and wipe the pageable copy so the
-        // credential doesn't linger on a swappable heap page.
         if (!data.empty())
         {
-            // QR v40 max ~4296 bytes; anything larger is anomalous.
             if (data.size() > kMaxQrDataBytes)
             {
                 writeQrDiag(seal::console::Tone::Warning,
@@ -259,7 +255,7 @@ seal::secure_string<> seal::captureQrFromWebcam()
                 SecureZeroMemory(data.data(), data.size());
                 continue;
             }
-            result.s.assign(data.begin(), data.end());
+            result.assign(data.begin(), data.end());
             writeQrDiag(seal::console::Tone::Success,
                         {"event=qr.decode.finish",
                          "result=ok",

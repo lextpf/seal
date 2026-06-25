@@ -1,4 +1,5 @@
 #pragma once
+#include "CancellationToken.hpp"
 #include "Cryptography.hpp"
 
 namespace seal
@@ -64,11 +65,19 @@ namespace seal
  */
 
 /**
- * @brief Launch the webcam and scan for a QR code.
- * @return Decoded QR text in a secure string. Returns an empty string
- *         if no QR code is detected before timeout, the user presses
- *         Escape, or camera initialization fails.
+ * @brief Launch the webcam and scan for a QR code, with cooperative cancellation.
+ *
+ * Polls @p token on each frame loop iteration, letting the caller cancel the
+ * capture via `AsyncHandle::cancel()` without relying on the ESC key. The
+ * default argument is a never-cancelled token, so a no-arg call behaves like a
+ * plain blocking capture (cancellable only by ESC / timeout / camera failure).
+ *
+ * @param token  Cancellation token polled each frame; cancelled() causes early
+ *               return. Defaults to a never-cancelled token.
+ * @return Decoded QR text in a secure string. Returns an empty string if no QR
+ *         code is detected before timeout, the user presses Escape, the token
+ *         is cancelled, or camera initialization fails.
  */
-secure_string<> captureQrFromWebcam();
+secure_string<> captureQrFromWebcam(CancellationToken token = {});
 
 }  // namespace seal
