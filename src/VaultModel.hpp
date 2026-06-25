@@ -39,7 +39,8 @@ namespace seal
  * pointer set via setRecords(). Call refresh() after any mutation
  * (add, edit, delete, load) to trigger a full `beginResetModel` /
  * `endResetModel` cycle, which re-filters and notifies all attached
- * views.
+ * views. The model is bindable-only from QML; all mutation goes
+ * through AppViewModel.
  *
  * ## :material-format-list-numbered: Roles
  *
@@ -50,7 +51,7 @@ namespace seal
  * - **MaskedPassword** - fixed asterisk placeholder
  * - **RecordIndex** - real index for decrypt-on-demand lookups
  *
- * @see Backend
+ * @see AppViewModel
  */
 class VaultListModel : public QAbstractListModel
 {
@@ -104,7 +105,7 @@ public:
 
     /// @brief Set the visual ordering applied after filtering.
     /// @param mode One of the SortMode enum values.
-    Q_INVOKABLE void setSortMode(int mode);
+    void setSortMode(int mode);
 
     /// @brief Get the active ordering mode.
     int sortMode() const;
@@ -118,7 +119,7 @@ public:
     /// @brief Map a filtered-model row to the real record index.
     /// @param row Row index in the filtered view.
     /// @return Index into the backing `std::vector<VaultRecord>`, or -1 if out of range.
-    Q_INVOKABLE int recordIndexForRow(int row) const;
+    int recordIndexForRow(int row) const;
 
 signals:
     void countChanged();
