@@ -13,14 +13,17 @@ namespace seal
  * @author Alex (https://github.com/lextpf)
  * @ingroup WindowController
  *
- * Extracted from Backend to isolate window management from vault/crypto logic.
- * Backend owns this controller and relays its signals to QML.
+ * Extracted from AppViewModel to isolate window management from vault/crypto logic.
+ * AppViewModel owns this controller and relays its signals to QML.
  *
- * @see Backend, WindowChrome
+ * @see AppViewModel, WindowChrome
  */
 class WindowController : public QObject
 {
     Q_OBJECT
+
+    Q_PROPERTY(bool isAlwaysOnTop READ isAlwaysOnTop NOTIFY alwaysOnTopChanged)
+    Q_PROPERTY(bool isCompact READ isCompact NOTIFY compactChanged)
 
 public:
     explicit WindowController(QObject* parent = nullptr);
@@ -33,16 +36,16 @@ public:
 
     /// @brief Apply DWM dark or light window theme and update the custom title bar.
     /// @param dark `true` for dark theme, `false` for light.
-    void updateWindowTheme(bool dark);
+    Q_INVOKABLE void updateWindowTheme(bool dark);
 
     /// @brief Initiate a native window drag via `startSystemMove()`.
-    void startWindowDrag();
+    Q_INVOKABLE void startWindowDrag();
 
     /// @brief Toggle always-on-top (HWND_TOPMOST / HWND_NOTOPMOST).
-    void toggleAlwaysOnTop();
+    Q_INVOKABLE void toggleAlwaysOnTop();
 
     /// @brief Toggle compact mode (shrinks window to a minimal strip).
-    void toggleCompact();
+    Q_INVOKABLE void toggleCompact();
 
 signals:
     void alwaysOnTopChanged();  ///< Always-on-top toggled.
