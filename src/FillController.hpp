@@ -11,6 +11,7 @@
 
 #include "BrowserBridge.hpp"
 #include "BrowserBridgeProbe.hpp"
+#include "CredentialSession.hpp"
 #include "Cryptography.hpp"
 #include "FusionDecider.hpp"
 #include "ImeStateProbe.hpp"
@@ -133,9 +134,11 @@ public:
      * @brief Arm the controller for a specific vault record.
      *
      * Installs global WH_MOUSE_LL and WH_KEYBOARD_LL hooks and transitions
-     * to Armed. The controller borrows pointers to the records vector
-     * and master password (caller must keep them alive until fill completes
-     * or is cancelled).
+     * to Armed. The controller borrows a pointer to the records vector and a
+     * reference to the credential session (caller must keep them alive until
+     * fill completes or is cancelled). The master key stays DPAPI-protected
+     * while armed; performType() opens a scoped session.unlock() only around
+     * the on-demand decrypt, so plaintext exists for the decrypt instant.
      *
      * A generation counter snapshot is taken at arm-time and validated before
      * every pointer dereference in performType(). If the owner mutates the
@@ -149,16 +152,16 @@ public:
      *
      * @param recordIndex     Index into the records vector
      * @param records         Reference to the vault records (must outlive the fill)
-     * @param masterPw        Master password for on-demand decryption (must outlive the fill)
+     * @param session         Credential session that owns the master key; performType()
+     *                        unlocks it only for the decrypt (must outlive the fill)
      * @param ownerGeneration Monotonic counter owned by the caller; incremented on every
      *                        records/password mutation.
      * @return `true` if hooks were installed and arming succeeded.
      */
-    [[nodiscard]] bool arm(
-        int recordIndex,
-        const std::vector<seal::VaultRecord>& records,
-        const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPw,
-        const uint64_t& ownerGeneration);
+    [[nodiscard]] bool arm(int recordIndex,
+                           const std::vector<seal::VaultRecord>& records,
+                           seal::CredentialSession& session,
+                           const uint64_t& ownerGeneration);
 
     /**
      * @brief Arm the controller in dry-run "diagnose" mode.
@@ -212,7 +215,7 @@ public:
 
     /**
      * @brief Whether any browser-companion native messaging host is currently
-     * connected to the bridge (handshake complete, port open). Used by Backend
+     * connected to the bridge (handshake complete, port open). Used by AppViewModel
      * to drive the chip's aggregate "actually working" visual.
      */
     bool isBridgePeerConnected() const;
@@ -339,9 +342,8 @@ private:
     int m_RecordIndex = -1;                   ///< Index of the armed vault record.
     const std::vector<seal::VaultRecord>* m_Records =
         nullptr;  ///< Borrowed pointer to vault records.
-    const seal::basic_secure_string<wchar_t,
-                                    seal::locked_allocator<wchar_t>>* m_MasterPw =
-        nullptr;  ///< Borrowed pointer to master password.
+    seal::CredentialSession* m_Session =
+        nullptr;  ///< Borrowed session; unlocked only for the on-demand decrypt.
 
     const uint64_t* m_OwnerGeneration = nullptr;  ///< Points to owner's generation counter.
     uint64_t m_SnapshotGeneration = 0;  ///< Generation at arm() time; mismatch means stale.

@@ -207,27 +207,29 @@ void FillController::updateStatusText()
         emit fillStatusTextChanged();
 }
 
-bool FillController::arm(
-    int recordIndex,
-    const std::vector<seal::VaultRecord>& records,
-    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPw,
-    const uint64_t& ownerGeneration)
+bool FillController::arm(int recordIndex,
+                         const std::vector<seal::VaultRecord>& records,
+                         seal::CredentialSession& session,
+                         const uint64_t& ownerGeneration)
 {
     // If already armed (user clicked a different record), tear down first.
     if (m_State.load() != State::Idle)
         cancel();
 
-    // Borrow (no copy): masterPw is locked_allocator-backed and records can
-    // be huge -- copying would double the SeLockMemoryPrivilege quota and
-    // force double-cleanse on cancel. Caller (Backend) keeps them alive
-    // until fillCompleted / fillCancelled / fillError.
+    // Borrow (no copy): records can be huge -- copying would double the
+    // SeLockMemoryPrivilege quota and force double-cleanse on cancel. The
+    // session stays DPAPI-protected while armed; performType() opens its own
+    // scoped unlock() only around the decrypt, so the master key is plaintext
+    // for the decrypt instant rather than the whole armed window. Caller
+    // (AppViewModel) keeps records + session alive until fillCompleted /
+    // fillCancelled / fillError.
     //
     // Borrowing races with vault mutations between Ctrl+Click and keystroke
     // send. We snapshot ownerGeneration here; performType() bails via
     // fillError() if the live counter has moved.
     m_RecordIndex = recordIndex;
     m_Records = &records;
-    m_MasterPw = &masterPw;
+    m_Session = &session;
     m_OwnerGeneration = &ownerGeneration;
     m_SnapshotGeneration = ownerGeneration;
     m_RemainingSeconds = FILL_TIMEOUT_SECONDS;
@@ -251,7 +253,7 @@ bool FillController::arm(
         removeHooks();
         m_RecordIndex = -1;
         m_Records = nullptr;
-        m_MasterPw = nullptr;
+        m_Session = nullptr;
         emit fillError(QStringLiteral("Failed to install input hooks"));
         return false;
     }
@@ -279,7 +281,7 @@ void FillController::cancel()
     // Clear borrowed pointers + generation snapshot to avoid dangling.
     m_RecordIndex = -1;
     m_Records = nullptr;
-    m_MasterPw = nullptr;
+    m_Session = nullptr;
     m_OwnerGeneration = nullptr;
     m_SnapshotGeneration = 0;
     m_TypedFields = TypedNone;
@@ -534,9 +536,8 @@ void FillController::performType()
             // immediately after typing (cred.cleanse + trimWorkingSet below).
             seal::DecryptedCredential cred;
             const auto* records = m_Records;
-            const auto* masterPw = m_MasterPw;
             const int recordIndex = m_RecordIndex;
-            if (!records || !masterPw || recordIndex < 0 ||
+            if (!records || !m_Session || recordIndex < 0 ||
                 recordIndex >= static_cast<int>(records->size()))
             {
                 qCWarning(logFill) << "performType: record became unavailable";
@@ -604,7 +605,19 @@ void FillController::performType()
 
             try
             {
-                cred = seal::decryptCredentialOnDemand(record, *masterPw);
+                // Master key is plaintext ONLY for this decrypt; the Access
+                // window re-protects on scope exit, before cred is typed and
+                // cleansed below. m_Session non-null was checked above.
+                auto access = m_Session->unlock();
+                if (!access.ok())
+                {
+                    qCWarning(logFill).noquote() << QString::fromStdString(seal::diag::joinFields(
+                        {"event=auth.unlock", "result=fail", "reason=dpapi_unprotect"}));
+                    emit fillError(QStringLiteral("Could not access the master key."));
+                    cancel();
+                    return;
+                }
+                cred = seal::decryptCredentialOnDemand(record, access.password());
             }
             catch (const std::exception& e)
             {
@@ -669,7 +682,7 @@ void FillController::performType()
                 transitionTo(State::Idle);
                 m_RecordIndex = -1;
                 m_Records = nullptr;
-                m_MasterPw = nullptr;
+                m_Session = nullptr;
                 m_TypedFields = TypedNone;
                 m_RemainingSeconds = 0;
                 emit countdownSecondsChanged();
