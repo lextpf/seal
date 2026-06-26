@@ -7,7 +7,8 @@ import QtQuick.Layouts
 // Replaces the old AccountsTable. Service / username / password columns are
 // gone; each account is now a single chip showing its resolved brand icon
 // (or a monogram fallback) plus its name. Single-click toggles selection,
-// double-click arms autofill directly via Backend.armFill.
+// double-click arms autofill via AppViewModel.armFillForRow (which
+// resolves the row and delegates to Fill.armFor).
 //
 // The card shell (background gradient, border, two decorative blobs) is
 // preserved from the previous design so the visual frame around the data
@@ -18,7 +19,7 @@ import QtQuick.Layouts
 Rectangle {
     id: root
 
-    property var model              // VaultListModel instance from Backend
+    property var model              // VaultListModel instance from AppViewModel
     property int selectedRow: -1    // Visual index of the selected chip (-1 = none)
     property bool searchActive: false
     property bool vaultLoaded: false
@@ -153,22 +154,6 @@ Rectangle {
         opacity: 0.10
     }
 
-    // Push the current Theme.sortMode into the model on startup AND on
-    // every subsequent change. The VaultListModel owns the actual ordering
-    // — we just keep it in sync with the persisted preference.
-    Component.onCompleted: {
-        if (root.model) root.model.setSortMode(Theme.sortMode);
-    }
-    Connections {
-        target: Theme
-        function onSortModeChanged() {
-            if (root.model) root.model.setSortMode(Theme.sortMode);
-        }
-    }
-    onModelChanged: {
-        if (root.model) root.model.setSortMode(Theme.sortMode);
-    }
-
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -205,26 +190,41 @@ Rectangle {
                 // Flow is a positioner that derives from Item and ignores any
                 // `padding` property — that's why the previous version had an
                 // asymmetric gap in compact mode.
-                topPadding: 14
-                bottomPadding: 14
-                leftPadding: 14
-                rightPadding: 14
+                //
+                // The 14px visual gutter is split 10px ScrollView padding +
+                // 4px margin INSIDE the clipped viewport (the wrapper Item
+                // below). The selected chip's outer glow ring draws ~3px
+                // outside its delegate bounds; ScrollView clips at the padded
+                // content area, so without the in-content margin the ring is
+                // sliced off at the top/left for first-row / first-column
+                // chips. 10 + 4 keeps the layout pixel-identical.
+                topPadding: 10
+                bottomPadding: 10
+                leftPadding: 10
+                rightPadding: 10
 
                 contentWidth: availableWidth
 
-                Flow {
-                    id: chipFlow
+                Item {
                     width: scroll.availableWidth
-                    spacing: 8
+                    implicitHeight: chipFlow.implicitHeight + 8
 
-                    Repeater {
-                        id: chipRepeater
-                        model: root.model
+                    Flow {
+                        id: chipFlow
+                        x: 4
+                        y: 4
+                        width: parent.width - 8
+                        spacing: 8
 
-                        delegate: AccountChip {
-                            selected: root.selectedRow === index
-                            onClicked: root.rowClicked(index)
-                            onDoubleClicked: root.rowDoubleClicked(index)
+                        Repeater {
+                            id: chipRepeater
+                            model: root.model
+
+                            delegate: AccountChip {
+                                selected: root.selectedRow === index
+                                onClicked: root.rowClicked(index)
+                                onDoubleClicked: root.rowDoubleClicked(index)
+                            }
                         }
                     }
                 }
