@@ -4,47 +4,14 @@ import QtQuick.Layouts
 
 // Embedded terminal panel for interactive CLI commands.
 //
-// Replaces the main vault UI (SearchBar, AccountsTable, ActionBar)
-// when CLI mode is toggled via the window chrome button. Commands are dispatched
-// to Backend.executeCliCommand() and output is received via Backend.cliOutputReady.
+// Replaces the main vault UI (SearchBar, AccountsGrid, ActionBar)
+// when CLI mode is toggled via the window chrome button. The panel is a
+// dumb view: commands are dispatched to Cli.executeCliCommand()
+// and the full transcript (echo lines, output, trim policy) is owned by
+// the ViewModel and bound via Cli.cliOutputText.
 
 Item {
     id: root
-
-    // Accumulated output text. Using a single string + TextArea instead of
-    // a ListView so the user can select and copy arbitrary spans of output.
-    // Capped at _maxLines to prevent unbounded growth during long sessions.
-    property string outputText: ""
-    property int _lineCount: 0
-    readonly property int _maxLines: 500
-    readonly property int _trimTarget: 400
-
-    function _appendOutput(line) {
-        if (outputText.length > 0)
-            outputText += "\n"
-        outputText += line
-        _lineCount++
-
-        // Trim oldest lines in batches to avoid O(n) split/join on every append.
-        if (_lineCount > _maxLines) {
-            var lines = outputText.split("\n")
-            outputText = lines.slice(lines.length - _trimTarget).join("\n")
-            _lineCount = _trimTarget
-        }
-
-        Qt.callLater(function() {
-            outputScroll.ScrollBar.vertical.position = 1.0 - outputScroll.ScrollBar.vertical.size
-        })
-    }
-
-    Connections {
-        target: Backend
-        function onCliOutputReady(text) { root._appendOutput(text) }
-        function onCliOutputCleared() {
-            root.outputText = ""
-            root._lineCount = 0
-        }
-    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -79,7 +46,13 @@ Item {
 
                 TextArea {
                     id: outputArea
-                    text: root.outputText
+                    text: Cli.cliOutputText
+                    // Auto-scroll to the newest line whenever the ViewModel
+                    // appends output (pure view concern).
+                    onTextChanged: Qt.callLater(function() {
+                        outputScroll.ScrollBar.vertical.position =
+                                1.0 - outputScroll.ScrollBar.vertical.size
+                    })
                     readOnly: true
                     selectByMouse: true
                     selectionColor: Theme.btnGradBot
@@ -139,10 +112,9 @@ Item {
                 Keys.onEnterPressed: submitCommand()
 
                 function submitCommand() {
-                    var cmd = inputField.text.trim()
-                    if (cmd.length === 0) return
-                    root._appendOutput("seal> " + inputField.text)
-                    Backend.executeCliCommand(inputField.text)
+                    if (inputField.text.trim().length === 0)
+                        return
+                    Cli.executeCliCommand(inputField.text)
                     inputField.text = ""
                 }
             }
