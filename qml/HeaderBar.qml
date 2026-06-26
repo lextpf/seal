@@ -20,6 +20,7 @@ Item {
     signal loadClicked()
     signal saveClicked()
     signal unloadClicked()
+    signal rekeyClicked()
 
     property bool vaultLoaded: false
 
@@ -31,7 +32,7 @@ Item {
         anchors.fill: parent
         acceptedButtons: Qt.LeftButton
         onPressed: function(mouse) {
-            Backend.startWindowDrag()
+            WindowVM.startWindowDrag()
         }
         onDoubleClicked: function(mouse) {
             var w = root.Window.window
@@ -477,6 +478,21 @@ Item {
         tintTextHover: Theme.textSecondary
         background.implicitWidth: 100
         onClicked: root.unloadClicked()
+    }
+
+    TintedButton {
+        text: "Rekey"
+        faIcon: Theme.iconKey
+        enabled: root.vaultLoaded
+        tintTop:       Theme.iconBtnTop
+        tintEnd:       Theme.iconBtnEnd
+        tintHoverTop:  Theme.iconBtnHoverTop
+        tintHoverEnd:  Theme.iconBtnHoverEnd
+        tintPressed:   Theme.iconBtnPressed
+        tintText:      Theme.textIcon
+        tintTextHover: Theme.textSecondary
+        background.implicitWidth: 100
+        onClicked: root.rekeyClicked()
     }
     }  // RowLayout
     }  // MouseArea
