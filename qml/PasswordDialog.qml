@@ -7,16 +7,16 @@ import QtQuick.Layouts
 //
 // Close policy is Escape-only (NoAutoClose): clicking outside does NOT dismiss
 // the dialog. This prevents accidental closure that would leave the user stuck
-// without a password (the Backend has a pending action waiting for it).
+// without a password (the AppViewModel has a pending action waiting for it).
 //
 // Lifecycle:
-//   1. Backend emits passwordRequired() -> Main.qml opens this dialog
+//   1. AppViewModel emits passwordRequired() -> Main.qml opens this dialog
 //   2. User types password or clicks QR to scan from webcam
-//   3. QR scan: Backend captures text, emits qrTextReady() -> fillPassword()
+//   3. QR scan: AppViewModel captures text, emits qrTextReady() -> fillPassword()
 //      populates the field (user can hover eye to verify before confirming)
 //   4. Manual entry: User presses OK or Enter -> dialog closes, accepted(password) fires,
-//      Main.qml calls Backend.submitPassword() which resumes the pending action
-//   5. If wrong password: Backend emits passwordRetryRequired() with error text,
+//      Main.qml calls AppViewModel.submitPassword() which resumes the pending action
+//   5. If wrong password: AppViewModel emits passwordRetryRequired() with error text,
 //      Main.qml re-opens this dialog with errorMessage set
 //
 // The dialog closes BEFORE accepted() fires so it's gone during the potentially
@@ -132,6 +132,11 @@ Popup {
         passwordField.forceActiveFocus();
     }
 
+    // Best-effort scrub: QML strings are immutable and GC-managed, so they cannot be SecureZero'd.
+    // We clear the visible field and drop references; the authoritative secret lifetime is governed
+    // C++-side by CredentialSession.
+    onClosed: passwordField.text = ""
+
     contentItem: ColumnLayout {
         spacing: 0
 
@@ -224,7 +229,7 @@ Popup {
                 anchors.right: parent.right
                 anchors.rightMargin: 8
                 anchors.verticalCenter: parent.verticalCenter
-                source: passwordField.showPassword ? Theme.iconEyeSlash : Theme.iconEye
+                source: passwordField.showPassword ? Theme.iconEye : Theme.iconEyeSlash
                 color: eyeArea.containsMouse ? Theme.accent : Theme.textMuted
                 width: Theme.iconSizeMedium
                 height: Theme.iconSizeMedium
@@ -245,6 +250,7 @@ Popup {
             Keys.onReturnPressed: {
                 if (passwordField.text.length > 0) {
                     var pw = passwordField.text;
+                    passwordField.text = ""; // Best-effort scrub before close animation runs.
                     root.close();
                     root.accepted(pw);
                 }
@@ -252,6 +258,7 @@ Popup {
             Keys.onEnterPressed: {
                 if (passwordField.text.length > 0) {
                     var pw = passwordField.text;
+                    passwordField.text = ""; // Best-effort scrub before close animation runs.
                     root.close();
                     root.accepted(pw);
                 }
@@ -269,8 +276,8 @@ Popup {
 
             Item { Layout.fillWidth: true }
 
-            // QR button. Clicking triggers a webcam capture (Backend::requestQrCapture).
-            // The dialog stays open during capture; on success the Backend emits
+            // QR button. Clicking triggers a webcam capture (AppViewModel::requestQrCapture).
+            // The dialog stays open during capture; on success the AppViewModel emits
             // qrTextReady() which calls fillPassword() to populate the field.
             Button {
                 id: qrButton
@@ -339,6 +346,7 @@ Popup {
                 enabled: passwordField.text.length > 0
                 onClicked: {
                     var pw = passwordField.text;
+                    passwordField.text = ""; // Best-effort scrub before close animation runs.
                     root.close();
                     root.accepted(pw);
                 }
