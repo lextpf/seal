@@ -6,29 +6,22 @@ import QtQuick.Layouts
 // Add / edit account dialog. Dual-mode: editIndex == -1 means "add a new
 // credential", >= 0 means "edit the record at that index."
 //
-// The caller (Main.qml) sets initialService/Username/Password before opening.
-// For add mode these are blank; for edit mode they're the decrypted values
-// returned by Backend::decryptAccountForEdit(). On OK, the accepted() signal
-// carries the field values and editIndex back to Main.qml, which routes to
-// Backend.addAccount() or Backend.editAccount() accordingly.
-//
-// Security note: plaintext credentials exist in QML only between the moment
-// the dialog opens and when it closes. The C++ side wipes the QVariantMap
-// source immediately after emission.
+// The caller (Main.qml) sets only non-secret metadata before opening.
+// In edit mode, blank username/password fields mean "keep the stored value";
+// stored secrets are not preloaded into QML properties.
 
 Popup {
     id: root
 
     property string dialogTitle: "Add Account"
     property string initialService: ""
-    property string initialUsername: ""
-    property string initialPassword: ""
     property int editIndex: -1  // -1 = add mode, >= 0 = record index to edit
     property bool _showValidation: false
+    readonly property bool _requiresSecretFields: root.editIndex < 0
     readonly property color shellTone: root.editIndex >= 0 ? Theme.accent3 : Theme.accent2
     readonly property string shellIcon: root.editIndex >= 0 ? Theme.iconPen : Theme.iconPlus
     readonly property string shellSubtitle: root.editIndex >= 0
-                                         ? "Update stored login details."
+                                         ? "Change service or enter replacement login details."
                                          : "Add a credential to your vault."
 
     signal accepted(string service, string username, string password, int editIdx)
@@ -237,10 +230,12 @@ Popup {
             TextField {
                 id: usernameField
                 Layout.fillWidth: true
-                text: root.initialUsername
+                text: ""
                 font.family: Theme.fontFamily
                 font.pixelSize: Theme.fontSizeMedium
                 color: Theme.textPrimary
+                placeholderText: root._requiresSecretFields ? "" : "Leave blank to keep current"
+                placeholderTextColor: Theme.textPlaceholder
                 selectByMouse: true
 
                 background: Rectangle {
@@ -248,7 +243,8 @@ Popup {
                     radius: Theme.radiusSmall
                     color: usernameField.activeFocus ? Theme.bgInputFocus : Theme.bgInput
                     border.width: 1
-                    border.color: root._showValidation && usernameField.text.trim() === "" ? Theme.textError
+                    border.color: root._showValidation && root._requiresSecretFields
+                                                   && usernameField.text.trim() === "" ? Theme.textError
                                  : usernameField.activeFocus ? Theme.borderFocus : Theme.borderInput
                 }
 
@@ -275,10 +271,12 @@ Popup {
             TextField {
                 id: passwordField
                 Layout.fillWidth: true
-                text: root.initialPassword
+                text: ""
                 font.family: Theme.fontFamily
                 font.pixelSize: Theme.fontSizeMedium
                 color: Theme.textPrimary
+                placeholderText: root._requiresSecretFields ? "" : "Leave blank to keep current"
+                placeholderTextColor: Theme.textPlaceholder
                 // Hover-to-reveal: password is masked by default and only shown while
                 // the cursor is over the eye icon. Re-hides immediately when the
                 // cursor leaves, reducing shoulder-surfing exposure time vs a
@@ -298,7 +296,8 @@ Popup {
                     radius: Theme.radiusSmall
                     color: passwordField.activeFocus ? Theme.bgInputFocus : Theme.bgInput
                     border.width: 1
-                    border.color: root._showValidation && passwordField.text === "" ? Theme.textError
+                    border.color: root._showValidation && root._requiresSecretFields
+                                                   && passwordField.text === "" ? Theme.textError
                                  : passwordField.activeFocus ? Theme.borderFocus : Theme.borderInput
                 }
 
@@ -310,7 +309,7 @@ Popup {
                     anchors.right: parent.right
                     anchors.rightMargin: 8
                     anchors.verticalCenter: parent.verticalCenter
-                    source: passwordField.showPassword ? Theme.iconEyeSlash : Theme.iconEye
+                    source: passwordField.showPassword ? Theme.iconEye : Theme.iconEyeSlash
                     color: eyeArea.containsMouse ? Theme.accent3 : Theme.textMuted
                     width: Theme.iconSizeMedium
                     height: Theme.iconSizeMedium
@@ -334,7 +333,7 @@ Popup {
             Layout.rightMargin: 24
             Layout.topMargin: 4
             visible: root._showValidation
-            text: "All fields are required."
+            text: root._requiresSecretFields ? "All fields are required." : "Service is required."
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeSmall
             color: Theme.textError
@@ -398,8 +397,9 @@ Popup {
                 id: okButton
                 text: "OK"
                 enabled: serviceField.text.trim().length > 0
-                      && usernameField.text.trim().length > 0
-                      && passwordField.text.length > 0
+                      && (!root._requiresSecretFields
+                          || (usernameField.text.trim().length > 0
+                              && passwordField.text.length > 0))
                 onClicked: root.submitForm()
 
                 HoverHandler { id: acctOkHover; cursorShape: Qt.PointingHandCursor }
@@ -449,7 +449,7 @@ Popup {
         var svc = serviceField.text.trim()
         var usr = usernameField.text.trim()
         var pwd = passwordField.text
-        if (svc === "" || usr === "" || pwd === "") {
+        if (svc === "" || (root._requiresSecretFields && (usr === "" || pwd === ""))) {
             _showValidation = true
             return
         }
@@ -457,11 +457,11 @@ Popup {
         root.close()
     }
 
-    // Reset fields on open (blanks for add, pre-populated for edit).
+    // Reset fields on open. Edit mode intentionally leaves secrets blank.
     function resetFields() {
         serviceField.text = initialService;
-        usernameField.text = initialUsername;
-        passwordField.text = initialPassword;
+        usernameField.text = "";
+        passwordField.text = "";
     }
 
     onAboutToShow: { _showValidation = false; resetFields() }
@@ -470,8 +470,6 @@ Popup {
     // closes so plaintext doesn't linger in Qt's heap for the session.
     onClosed: {
         initialService = ""
-        initialUsername = ""
-        initialPassword = ""
         serviceField.text = ""
         usernameField.text = ""
         passwordField.text = ""
