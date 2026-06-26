@@ -19,10 +19,10 @@ Row {
     id: root
     spacing: 8
 
-    // Per-browser descriptors. `key` selects which Backend property the chip
+    // Per-browser descriptors. `key` selects which AppViewModel property the chip
     // binds to; the icon must exist at assets/brands/<icon>.
     readonly property var _browsers: [
-        {"label": "Google Chrome", "icon": "chrome.svg", "key": "chrome"},
+        {"label": "Chrome", "icon": "chrome.svg", "key": "chrome"},
         {"label": "Brave", "icon": "brave.svg", "key": "brave"}
     ]
 
@@ -38,10 +38,10 @@ Row {
             // browser's companion peer is actually connected. Without the
             // peer-connected half, the chip would light green at app launch
             // even if the extension isn't installed (or hasn't connected yet).
-            readonly property bool _on: Backend.bridgeEnabled
+            readonly property bool _on: Bridge.bridgeEnabled
                                         && (modelData.key === "chrome"
-                                                ? Backend.bridgeChromeConnected
-                                                : Backend.bridgeBraveConnected)
+                                                ? Bridge.bridgeChromeConnected
+                                                : Bridge.bridgeBraveConnected)
 
             implicitWidth: chipBg.implicitWidth
             implicitHeight: 22
@@ -186,16 +186,16 @@ Row {
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onClicked: (mouse) => {
                         if (mouse.button === Qt.RightButton) {
-                            Backend.setBridgeEnabled(!Backend.bridgeEnabled);
+                            Bridge.setBridgeEnabled(!Bridge.bridgeEnabled);
                         } else {
-                            Backend.runBridgeDiagnose();
+                            Bridge.runBridgeDiagnose();
                         }
                     }
                 }
 
                 ToolTip.visible: chipMouse.containsMouse
                 ToolTip.delay: 600
-                ToolTip.text: (!Backend.bridgeEnabled
+                ToolTip.text: (!Bridge.bridgeEnabled
                                ? "Bridge disabled (M8 panic). Right-click to re-enable."
                                : chip._on
                                    ? (chip.modelData.label + " companion connected.")
