@@ -24,7 +24,7 @@ Item {
     required property string brandIconPath  // qrc path for the resolved brand icon, "" if no match
     required property string maskedUsername  // Kept for model-role compatibility
     required property string maskedPassword  // Kept for model-role compatibility
-    required property int recordIndex     // Stable index into Backend::m_Records
+    required property int recordIndex     // Stable index into AppViewModel::m_Records
     required property bool selected       // Driven by parent's selectedRow binding
     property bool isHovered: mouseArea.containsMouse
 

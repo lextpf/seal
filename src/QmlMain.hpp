@@ -5,7 +5,7 @@
 /**
  * @brief Launch QML GUI mode for seal.
  *
- * Creates the QGuiApplication, registers the Backend and Theme
+ * Creates the QGuiApplication, registers the AppViewModel and Theme
  * singletons with the QML engine, loads `Main.qml`, installs the
  * custom message handler, and enters the Qt event loop.
  *
@@ -16,7 +16,7 @@
  * @pre Security mitigations must be applied before calling this function
  *      (with `allowDynamicCode = true` for QML's V4 JIT engine).
  *
- * @see Backend, installSealMessageHandler
+ * @see AppViewModel, installSealMessageHandler
  */
 int RunQMLMode(int argc, char* argv[]);
 

@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 
-// Live search field. Typing here instantly updates Backend.searchFilter, which
+// Live search field. Typing here instantly updates AppViewModel.searchFilter, which
 // triggers VaultListModel::setFilter() in C++ to re-filter the visible rows.
 // The model uses case-insensitive substring matching against platform names.
 //

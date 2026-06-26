@@ -18,7 +18,7 @@ namespace seal
  * @author Alex (https://github.com/lextpf)
  * @ingroup CliHandler
  *
- * Decouples the CLI encrypt/decrypt/file dispatch logic from Backend's
+ * Decouples the CLI encrypt/decrypt/file dispatch logic from AppViewModel's
  * signal/slot infrastructure so the dispatch can be maintained independently.
  */
 struct CliDispatchCallbacks
