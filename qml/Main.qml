@@ -7,14 +7,14 @@ import QtQuick.Window
 //
 // Responsibilities:
 //   - Owns the top-level layout (header, search, table, actions, footer)
-//   - Wires every Backend signal to the appropriate dialog (password, error, info, edit, delete)
+//   - Wires every AppViewModel signal to the appropriate dialog (password, error, info, edit, delete)
 //   - Manages dialog instances (created once, shown/hidden via open()/close() to avoid
 //     repeated QML object creation and to preserve state across re-shows)
 //   - Drives startup (autoLoadVault) and shutdown (cleanup) lifecycle hooks
 //
 // Data flow:
-//   Backend (C++) --signals--> Connections block here --sets props/opens--> Dialog instances
-//   Dialog instances --signals (accepted/confirmed)--> Backend Q_INVOKABLE slots
+//   AppViewModel (C++) --signals--> Connections block here --sets props/opens--> Dialog instances
+//   Dialog instances --signals (accepted/confirmed)--> AppViewModel Q_INVOKABLE slots
 //
 // No credential plaintext ever reaches QML. The VaultListModel exposes only
 // masked strings; real values are decrypted on-demand in C++ and sent via
@@ -44,16 +44,24 @@ ApplicationWindow {
     // dark mode or vice-versa.
     Connections {
         target: Theme
-        function onDarkChanged() { Backend.updateWindowTheme(Theme.dark) }
+        function onDarkChanged() { WindowVM.updateWindowTheme(Theme.dark) }
     }
 
-    // Central signal router. Backend emits signals from C++ when it needs the
+    // The chip-grid ordering preference persists with the other view
+    // preferences in Theme; the ViewModel forwards it to the model.
+    Binding {
+        target: AppViewModel
+        property: "sortMode"
+        value: Theme.sortMode
+    }
+
+    // Central signal router. AppViewModel emits signals from C++ when it needs the
     // UI to react (show a dialog, fill a field, report an error). Each handler
     // here configures the target dialog's properties and opens it. This keeps
-    // all Backend-to-UI wiring in one place rather than scattered across
+    // all AppViewModel-to-UI wiring in one place rather than scattered across
     // individual components.
     Connections {
-        target: Backend
+        target: AppViewModel
 
         function onErrorOccurred(title, message) {
             errorDialog.title = title;
@@ -68,10 +76,32 @@ ApplicationWindow {
             confirmDlg.open();
         }
 
+        // Edit dialog requested for the selected record - the ViewModel
+        // resolved the row and supplies the non-secret metadata.
+        function onEditAccountRequested(index, service) {
+            accountDlg.dialogTitle = "Edit Account";
+            accountDlg.editIndex = index;
+            accountDlg.initialService = service;
+            accountDlg.open();
+        }
+
         function onInfoMessage(title, message) {
             infoDialog.title = title;
             infoDialog.message = message;
             infoDialog.open();
+        }
+
+        // Rekey result - surface via the info/error dialogs.
+        function onRekeyFinished(success, message) {
+            if (success) {
+                infoDialog.title = "Master password changed";
+                infoDialog.message = message;
+                infoDialog.open();
+            } else {
+                errorDialog.title = "Rekey failed";
+                errorDialog.message = message;
+                errorDialog.open();
+            }
         }
 
         // First password prompt, no error message.
@@ -86,37 +116,39 @@ ApplicationWindow {
             passwordDlg.open();
         }
 
-        // Show error on QR failure - route to CLI panel or password dialog.
+        // QR failed - surface the error in the password dialog. CLI-mode
+        // results never reach here; the ViewModel routes them straight
+        // into the CLI transcript.
         function onQrCaptureFinished(success) {
-            if (!success) {
-                if (Backend.isCliMode)
-                    Backend.handleQrResultForCli("(QR capture failed or cancelled)");
-                else
-                    passwordDlg.errorMessage = "QR capture failed or cancelled.";
-            }
+            if (!success)
+                passwordDlg.errorMessage = "QR capture failed or cancelled.";
         }
 
-        // QR captured text - fill the password field, or route to CLI panel.
+        // QR captured text - pre-fill the password dialog.
         function onQrTextReady(text) {
-            if (Backend.isCliMode) {
-                Backend.handleQrResultForCli(text);
-            } else {
-                passwordDlg.errorMessage = "";
-                passwordDlg.fillPassword(text);
-            }
+            passwordDlg.errorMessage = "";
+            passwordDlg.fillPassword(text);
+        }
+    }
+
+    // Bridge signals routed directly from BridgeViewModel (now a first-class
+    // context property). infoMessage/errorOccurred cover bridge install/uninstall
+    // results; bridgeDiagnoseReady/Cancelled handle the dry-run dialog lifecycle.
+    // AppViewModel still emits its own infoMessage/errorOccurred for vault ops,
+    // so both Connections blocks coexist.
+    Connections {
+        target: Bridge
+
+        function onInfoMessage(title, message) {
+            infoDialog.title = title;
+            infoDialog.message = message;
+            infoDialog.open();
         }
 
-        // Deferred edit path: if no password was set when the user clicked Edit,
-        // the Backend queued the decrypt and emits this signal once the password
-        // dialog completes and decryption succeeds. The data map carries the
-        // plaintext fields for one-time display in the edit dialog.
-        function onEditAccountReady(data) {
-            accountDlg.dialogTitle = "Edit Account";
-            accountDlg.editIndex = data.editIndex;
-            accountDlg.initialService = data.service;
-            accountDlg.initialUsername = data.username;
-            accountDlg.initialPassword = data.password;
-            accountDlg.open();
+        function onErrorOccurred(title, message) {
+            errorDialog.title = title;
+            errorDialog.message = message;
+            errorDialog.open();
         }
 
         // Browser-bridge diagnose dry-run finished. The summary is a
@@ -139,24 +171,22 @@ ApplicationWindow {
         accountDlg.dialogTitle = "Add Account";
         accountDlg.editIndex = -1;
         accountDlg.initialService = "";
-        accountDlg.initialUsername = "";
-        accountDlg.initialPassword = "";
         accountDlg.open();
     }
 
     Component.onCompleted: {
-        Backend.updateWindowTheme(Theme.dark);
+        WindowVM.updateWindowTheme(Theme.dark);
         visible = true;
         // Try loading the last-used vault automatically on startup.
-        Backend.autoLoadVault();
+        AppViewModel.autoLoadVault();
     }
 
-    // Cleanup runs synchronously before the window closes. Backend::cleanup()
+    // Cleanup runs synchronously before the window closes. AppViewModel::cleanup()
     // cancels any armed fill hooks, auto-encrypts the configured directory
     // (if any), wipes the master password, and trims the working set so
     // sensitive data doesn't linger in physical RAM after exit.
     onClosing: function(close) {
-        Backend.cleanup();
+        AppViewModel.cleanup();
         close.accepted = true;
     }
 
@@ -249,7 +279,7 @@ ApplicationWindow {
         height: 36
         z: 9
         acceptedButtons: Qt.LeftButton
-        onPressed: function(mouse) { Backend.startWindowDrag() }
+        onPressed: function(mouse) { WindowVM.startWindowDrag() }
         onDoubleClicked: function(mouse) {
             if (window.visibility === Window.Maximized)
                 window.showNormal()
@@ -268,28 +298,28 @@ ApplicationWindow {
 
         ChromeButton {
             iconSource: Theme.iconThumbtack
-            idleColor: Backend.isAlwaysOnTop ? Theme.accentSoft : "transparent"
-            iconColor: Backend.isAlwaysOnTop ? Theme.accent
+            idleColor: WindowVM.isAlwaysOnTop ? Theme.accentSoft : "transparent"
+            iconColor: WindowVM.isAlwaysOnTop ? Theme.accent
                      : hovered ? Theme.textPrimary : Theme.textMuted
-            iconRotation: Backend.isAlwaysOnTop ? 0 : 30
-            onClicked: Backend.toggleAlwaysOnTop()
+            iconRotation: WindowVM.isAlwaysOnTop ? 0 : 30
+            onClicked: WindowVM.toggleAlwaysOnTop()
         }
         ChromeButton {
-            iconSource: Backend.passwordSet ? Theme.iconLockOpen : Theme.iconLock
-            iconColor: hovered && Backend.passwordSet ? Theme.textWarning : Theme.textMuted
-            opacity: Backend.passwordSet ? 1.0 : 0.4
-            onClicked: if (Backend.passwordSet) Backend.lockVault()
+            iconSource: AppViewModel.passwordSet ? Theme.iconLockOpen : Theme.iconLock
+            iconColor: hovered && AppViewModel.passwordSet ? Theme.textWarning : Theme.textMuted
+            opacity: AppViewModel.passwordSet ? 1.0 : 0.4
+            onClicked: if (AppViewModel.passwordSet) AppViewModel.lockVault()
         }
         ChromeButton {
             iconSource: Theme.iconTerminal
-            idleColor: Backend.isCliMode ? Theme.accentSoft : "transparent"
-            iconColor: Backend.isCliMode ? Theme.accent
+            idleColor: Cli.isCliMode ? Theme.accentSoft : "transparent"
+            iconColor: Cli.isCliMode ? Theme.accent
                      : hovered ? Theme.textPrimary : Theme.textMuted
-            onClicked: Backend.toggleCliMode()
+            onClicked: Cli.toggleCliMode()
         }
         ChromeButton {
-            iconSource: Backend.isCompact ? Theme.iconExpand : Theme.iconCompress
-            onClicked: Backend.toggleCompact()
+            iconSource: WindowVM.isCompact ? Theme.iconExpand : Theme.iconCompress
+            onClicked: WindowVM.toggleCompact()
         }
         ChromeButton {
             iconSource: Theme.iconChevronDown
@@ -408,32 +438,33 @@ ApplicationWindow {
             // Header (hidden in compact mode)
             HeaderBar {
                 Layout.fillWidth: true
-                visible: !Backend.isCompact
-                vaultLoaded: Backend.vaultLoaded
+                visible: !WindowVM.isCompact
+                vaultLoaded: AppViewModel.vaultLoaded
 
-                onLoadClicked: Backend.loadVault()
-                onSaveClicked: Backend.saveVault()
-                onUnloadClicked: Backend.unloadVault()
+                onLoadClicked: AppViewModel.loadVault()
+                onSaveClicked: AppViewModel.saveVault()
+                onUnloadClicked: AppViewModel.unloadVault()
+                onRekeyClicked: rekeyDlg.open()
             }
 
             // Header separator (hidden in compact/CLI mode)
             Rectangle {
                 Layout.fillWidth: true
-                visible: !Backend.isCompact && !Backend.isCliMode
+                visible: !WindowVM.isCompact && !Cli.isCliMode
                 implicitHeight: 1
                 color: Theme.divider
             }
 
-            // Two-way binding: typing here sets Backend.searchFilter, which
+            // Two-way binding: typing here sets AppViewModel.searchFilter, which
             // calls VaultModel::setFilter() in C++ to re-filter the proxy list.
             // The model emits dataChanged and the ListView updates instantly.
             SearchBar {
                 id: searchBar
                 Layout.fillWidth: true
-                visible: !Backend.isCliMode
-                vaultLoaded: Backend.vaultLoaded
-                resultCount: Backend.vaultModel.count
-                onSearchRequested: function(text) { Backend.searchFilter = text }
+                visible: !Cli.isCliMode
+                vaultLoaded: AppViewModel.vaultLoaded
+                resultCount: AppViewModel.vaultModel.count
+                onSearchRequested: function(text) { AppViewModel.searchFilter = text }
             }
 
             // Single-click toggles selection (same row twice deselects).
@@ -442,92 +473,66 @@ ApplicationWindow {
             AccountsGrid {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                visible: !Backend.isCliMode
-                // Compact: top/bottom border (1+1) + toolbar (32) + ScrollView's
-                //          symmetric top/bottom padding (14+14) + one chip Item
-                //          (38, includes hover-lift headroom). The Flow's
-                //          `padding` property used to live here but was a silent
-                //          no-op; padding now lives on the ScrollView itself.
-                Layout.maximumHeight: Backend.isCompact
+                visible: !Cli.isCliMode
+                // Compact: top/bottom border (1+1) + toolbar (32) + ScrollView
+                //          padding plus in-content margin (10+4 per side = 14+14)
+                //          + one chip Item (38, includes hover-lift headroom).
+                //          The Flow's `padding` property used to live here but
+                //          was a silent no-op; the gutter now lives on the
+                //          ScrollView plus a wrapper Item inside the clip area.
+                Layout.maximumHeight: WindowVM.isCompact
                                       ? (1 + 32 + 14 + 38 + 14 + 1)
                                       : (1 + 32 + 4 * 44 + 14 + 14 + 1)
-                model: Backend.vaultModel
-                selectedRow: Backend.selectedIndex
-                searchActive: Backend.searchFilter.length > 0
-                isCompact: Backend.isCompact
-                vaultLoaded: Backend.vaultLoaded
+                model: AppViewModel.vaultModel
+                selectedRow: AppViewModel.selectedIndex
+                searchActive: AppViewModel.searchFilter.length > 0
+                isCompact: WindowVM.isCompact
+                vaultLoaded: AppViewModel.vaultLoaded
 
                 onRowClicked: function(row) {
-                    Backend.selectedIndex = (Backend.selectedIndex === row) ? -1 : row;
+                    AppViewModel.selectedIndex = (AppViewModel.selectedIndex === row) ? -1 : row;
                 }
 
                 onRowDoubleClicked: function(row) {
-                    var realIdx = Backend.vaultModel.recordIndexForRow(row);
-                    if (realIdx < 0) return;
-                    Backend.selectedIndex = row;
-                    Backend.armFill(realIdx);
+                    AppViewModel.armFillForRow(row);
                 }
 
                 onAddAccountRequested: window.openAddAccountDialog()
                 onClearSearchRequested: {
                     searchBar.text = "";
-                    Backend.searchFilter = "";
+                    AppViewModel.searchFilter = "";
                 }
             }
 
-            // CRUD + Fill action buttons. When a search filter is active, the
-            // visible row indices don't match the underlying record vector, so
-            // each handler calls vaultModel.recordIndexForRow() to resolve the
-            // visual index to the real record position before calling Backend.
+            // CRUD + Fill action buttons. Each handler delegates to a single
+            // ViewModel gesture command; the ViewModel resolves the visible
+            // row to the underlying record (they differ while a search
+            // filter is active).
             ActionBar {
                 Layout.fillWidth: true
-                visible: !Backend.isCliMode
-                hasSelection: Backend.hasSelection
-                isFillArmed: Backend.isFillArmed
-                fillCountdownSeconds: Backend.fillCountdownSeconds
-                isCompact: Backend.isCompact
-                isBusy: Backend.isBusy
+                visible: !Cli.isCliMode
+                hasSelection: AppViewModel.hasSelection
+                isFillArmed: Fill.isFillArmed
+                fillCountdownSeconds: Fill.fillCountdownSeconds
+                isCompact: WindowVM.isCompact
+                isBusy: AppViewModel.isBusy
 
                 onAddClicked: {
                     window.openAddAccountDialog();
                 }
 
-                // Synchronous path: if the password is already set, decryptAccountForEdit()
-                // returns a QVariantMap with plaintext fields immediately. If not, it
-                // returns an empty map and the deferred path (onEditAccountReady) handles it.
-                onEditClicked: {
-                    if (!Backend.hasSelection) return;
-                    var realIdx = Backend.vaultModel.recordIndexForRow(Backend.selectedIndex);
-                    var data = Backend.decryptAccountForEdit(realIdx);
-                    if (!data.service) return;
-                    accountDlg.dialogTitle = "Edit Account";
-                    accountDlg.editIndex = realIdx;
-                    accountDlg.initialService = data.service;
-                    accountDlg.initialUsername = data.username;
-                    accountDlg.initialPassword = data.password;
-                    accountDlg.open();
-                }
+                onEditClicked: AppViewModel.requestEditSelected()
 
-                onDeleteClicked: {
-                    if (!Backend.hasSelection) return;
-                    var realIdx = Backend.vaultModel.recordIndexForRow(Backend.selectedIndex);
-                    confirmDlg.deleteIndex = realIdx;
-                    confirmDlg.message = "Are you sure you want to delete this account?";
-                    confirmDlg.open();
-                }
+                onDeleteClicked: AppViewModel.requestDeleteSelected()
 
                 // Arms global mouse/keyboard hooks via FillController. The seal
                 // window minimizes so the user can Ctrl+Click in any external app
                 // to type the username, then Ctrl+Click again for the password.
                 // The hooks are removed automatically on completion, timeout, or cancel.
-                onFillClicked: {
-                    if (!Backend.hasSelection) return;
-                    var realIdx = Backend.vaultModel.recordIndexForRow(Backend.selectedIndex);
-                    Backend.armFill(realIdx);
-                }
+                onFillClicked: AppViewModel.armFillForSelection()
 
                 onCancelFillClicked: {
-                    Backend.cancelFill();
+                    Fill.cancelFill();
                 }
             }
 
@@ -535,19 +540,31 @@ ApplicationWindow {
             CliPanel {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                visible: Backend.isCliMode
+                visible: Cli.isCliMode
             }
         }
 
         // Status footer (hidden in compact mode)
         StatusFooter {
             Layout.fillWidth: true
-            visible: !Backend.isCompact
-            statusText: Backend.statusText
-            fillArmed: Backend.isFillArmed
-            vaultFileName: Backend.vaultFileName
-            accountCount: Backend.vaultModel.count
+            visible: !WindowVM.isCompact
+            statusText: AppViewModel.statusText
+            fillArmed: Fill.isFillArmed
+            vaultFileName: AppViewModel.vaultFileName
+            accountCount: AppViewModel.vaultModel.count
         }
+    }
+
+    // Full-window loading cover. Shown while the vault is being decrypted or
+    // re-encrypted on a worker thread; sits above all content and chrome (modal
+    // dialogs still render above it on Overlay.overlay, but none are open during
+    // a load). Binds to the dedicated isLoading flag — not isBusy — so the
+    // 3-second auto-fill countdown never triggers it.
+    LoadingOverlay {
+        anchors.fill: parent
+        z: 100
+        running: AppViewModel.isLoading
+        caption: AppViewModel.loadingCaption
     }
 
     // -- Dialogs --
@@ -555,16 +572,21 @@ ApplicationWindow {
     // This avoids repeated QML object construction (expensive for styled popups)
     // and keeps dialog state (e.g. error messages) stable across re-shows.
 
-    // Master password entry. Blocks all interaction until submitted. The Backend
+    // Master password entry. Blocks all interaction until submitted. The AppViewModel
     // stores a pending action lambda that re-executes once the password is set,
     // so the user never has to re-click the original action after entering it.
+    RekeyDialog {
+        id: rekeyDlg
+        parent: Overlay.overlay
+    }
+
     PasswordDialog {
         id: passwordDlg
         onAccepted: function(password) {
-            Backend.submitPassword(password);
+            AppViewModel.submitPassword(password);
         }
         onQrRequested: {
-            Backend.requestQrCapture();
+            AppViewModel.requestQrCapture();
         }
     }
 
@@ -573,9 +595,9 @@ ApplicationWindow {
         id: accountDlg
         onAccepted: function(service, username, password, editIdx) {
             if (editIdx >= 0)
-                Backend.editAccount(editIdx, service, username, password);
+                AppViewModel.editAccount(editIdx, service, username, password);
             else
-                Backend.addAccount(service, username, password);
+                AppViewModel.addAccount(service, username, password);
         }
     }
 
@@ -587,7 +609,7 @@ ApplicationWindow {
 
         onConfirmed: {
             if (deleteIndex >= 0)
-                Backend.deleteAccount(deleteIndex);
+                AppViewModel.deleteAccount(deleteIndex);
             deleteIndex = -1;
         }
     }
