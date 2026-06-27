@@ -1,8 +1,10 @@
+#include "../src/ConsoleStyle.hpp"
 #include "../src/PasswordGen.hpp"
 #include "test_helpers.hpp"
 
 #include <gtest/gtest.h>
 
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -281,5 +283,36 @@ TEST_F(PasswordGenTest, UsesDocumentedCharset)
     for (const char ch : password.view())
     {
         EXPECT_NE(kAllowed.find(ch), std::string_view::npos);
+    }
+}
+TEST(ConfirmDestructiveTest, ForceBypassesPrompt)
+{
+    std::istringstream in("");
+    std::ostringstream err;
+    EXPECT_TRUE(seal::console::ConfirmDestructive(true, in, err, "Export ALL?"));
+    EXPECT_TRUE(err.str().empty());
+}
+
+TEST(ConfirmDestructiveTest, AcceptsYesRejectsEverythingElse)
+{
+    {
+        std::istringstream in("y\n");
+        std::ostringstream err;
+        EXPECT_TRUE(seal::console::ConfirmDestructive(false, in, err, "Export ALL?"));
+    }
+    {
+        std::istringstream in("Y\n");
+        std::ostringstream err;
+        EXPECT_TRUE(seal::console::ConfirmDestructive(false, in, err, "Export ALL?"));
+    }
+    {
+        std::istringstream in("n\n");
+        std::ostringstream err;
+        EXPECT_FALSE(seal::console::ConfirmDestructive(false, in, err, "Export ALL?"));
+    }
+    {
+        std::istringstream in("");  // EOF == refusal
+        std::ostringstream err;
+        EXPECT_FALSE(seal::console::ConfirmDestructive(false, in, err, "Export ALL?"));
     }
 }
