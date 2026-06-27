@@ -13,9 +13,6 @@ site/*
 __pycache__/
 *.pyc
 
-# Generated knowledge-graph output (understand-anything tool)
-.understand-anything/
-
 # Photoshop design sources / preview exports
 *.psd
 
