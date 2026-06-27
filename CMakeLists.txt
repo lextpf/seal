@@ -103,7 +103,7 @@ if(VCPKG_TARGET_TRIPLET MATCHES "static")
     endif()
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Widgets Concurrent)
 find_package(OpenSSL REQUIRED)
 
 message(STATUS "Qt6 version: ${Qt6_VERSION}")
@@ -133,6 +133,7 @@ set(WINDOWS_LIBS
     UIAutomationCore
     Bcrypt
     Wintrust
+    Wtsapi32
 )
 
 # Static OpenCV videoio (MSMF backend) requires these.
@@ -149,7 +150,10 @@ set(SEAL_SOURCES
     src/ConsoleStyle.cpp
     src/Diagnostics.cpp
     src/FileOperations.cpp
-    src/Backend.cpp
+    src/AppViewModel.cpp
+    src/BridgeViewModel.cpp
+    src/CliPanelViewModel.cpp
+    src/TypeController.cpp
     src/QrCapture.cpp
     src/FillController.cpp
     src/VaultModel.cpp
@@ -174,6 +178,11 @@ set(SEAL_SOURCES
     src/BrowserBridge.cpp
     src/BrowserBridgeProbe.cpp
     src/BrandIconResolver.cpp
+    src/CredentialCsv.cpp
+    src/AutoLockController.cpp
+    src/CredentialSession.cpp
+    src/CredentialWorkspace.cpp
+    src/AsyncRunner.cpp
 )
 
 qt_standard_project_setup()
@@ -214,6 +223,7 @@ target_link_libraries(seal PRIVATE
     Qt6::Quick
     Qt6::QuickControls2
     Qt6::Widgets
+    Qt6::Concurrent
     ${WINDOWS_LIBS}
     ${OpenCV_LIBS}
 )
@@ -245,11 +255,13 @@ qt_add_qml_module(seal
         qml/ConfirmDialog.qml
         qml/DialogBlobs.qml
         qml/PasswordDialog.qml
+        qml/RekeyDialog.qml
         qml/RippleEffect.qml
         qml/SvgIcon.qml
         qml/TintedButton.qml
         qml/CliPanel.qml
         qml/BridgeSettings.qml
+        qml/LoadingOverlay.qml
     RESOURCES
         "assets/fonts/b0a4eabe-5fe5-41e3-8dc3-2df2b82ec4eb.ttf"
         ${SEAL_DUOTONE_SVGS}
@@ -353,17 +365,36 @@ if(ENABLE_TESTS)
         tests/test_signer_family.cpp
         tests/test_brand_icon_resolver.cpp
         tests/test_url_binding.cpp
+        tests/test_ui_secret_boundaries.cpp
+        tests/test_file_operations.cpp
+        tests/test_vault_roundtrip.cpp
+        tests/test_credential_csv.cpp
+        tests/test_autolock_policy.cpp
+        tests/test_credential_session.cpp
+        tests/test_credential_workspace.cpp
+        tests/test_cancellation_token.cpp
+        tests/test_secure_string.cpp
+        tests/test_process_pin.cpp
+        tests/test_vault_rekey.cpp
+        tests/test_directory_crypto.cpp
         src/Cryptography.cpp
         src/Utils.cpp
         src/Clipboard.cpp
         src/Console.cpp
         src/FileOperations.cpp
+        src/Vault.cpp
+        src/Diagnostics.cpp
+        src/CliModes.cpp
+        src/ConsoleStyle.cpp
         src/PasswordGen.cpp
         src/FusionDecider.cpp
         src/Win32StyleProbe.cpp
         src/ImeStateProbe.cpp
         src/BridgeMessage.cpp
         src/BrandIconResolver.cpp
+        src/CredentialCsv.cpp
+        src/CredentialSession.cpp
+        src/CredentialWorkspace.cpp
     )
 
     target_include_directories(seal_tests PRIVATE
@@ -385,6 +416,7 @@ if(ENABLE_TESTS)
     target_compile_definitions(seal_tests PRIVATE
         NOMINMAX
         _WIN32_WINNT=0x0A00
+        SEAL_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     )
 
     include(GoogleTest)
