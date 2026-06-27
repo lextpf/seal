@@ -1,0 +1,4 @@
+name,url,username,password,note
+"Quoted, Inc",https://quoted.example,dave,"p,w""x""
+line2",ignored note
+Plain,https://plain.example,erin,simple

@@ -1,0 +1,4 @@
+name,url,username,password
+GitHub,https://github.com,alice,gh-pass-1
+,https://accounts.google.com,bob,goo-pass-2
+NoPassword,https://x.example,carol,
