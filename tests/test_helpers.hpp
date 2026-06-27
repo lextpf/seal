@@ -5,6 +5,7 @@
 #include "../src/Console.hpp"
 #include "../src/Cryptography.hpp"
 #include "../src/FileOperations.hpp"
+#include "../src/ScopedDpapiUnprotect.hpp"
 #include "../src/Utils.hpp"
 
 /**
