@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -49,7 +50,7 @@ TEST_F(EncryptDecryptLineTest, InvalidHexThrows)
     auto password = make_secure_string("test_password");
     std::string invalidHex = "not_valid_hex";
 
-    EXPECT_THROW(seal::FileOperations::decryptLine(invalidHex, password), std::runtime_error);
+    EXPECT_THROW((void)seal::FileOperations::decryptLine(invalidHex, password), std::runtime_error);
 }
 
 TEST_F(EncryptDecryptLineTest, HexWithSpaces)
@@ -82,7 +83,8 @@ TEST_F(EncryptDecryptLineTest, WrongPasswordThrows)
 
     std::string hexOutput = seal::FileOperations::encryptLine(plaintext, correctPassword);
 
-    EXPECT_THROW(seal::FileOperations::decryptLine(hexOutput, wrongPassword), std::runtime_error);
+    EXPECT_THROW((void)seal::FileOperations::decryptLine(hexOutput, wrongPassword),
+                 std::runtime_error);
 }
 
 TEST_F(EncryptDecryptLineTest, UnicodeText)
@@ -293,4 +295,39 @@ TEST_F(FileOperationsTest, ParseTriplesTrimsServiceAndUser)
     EXPECT_TRUE(seal::FileOperations::parseTriples(" svc : user :pass", out));
     ASSERT_EQ(out.size(), 1U);
     EXPECT_EQ(seal::FileOperations::tripleToUtf8(out[0]), "svc:user:pass");
+}
+
+TEST_F(FileOperationsTest, StreamedFilesCarrySelfDescribingHeaderAndRoundtrip)
+{
+    auto srcFile = GetTestFile("v2_src.txt");
+    auto encFile = GetTestFile("v2_src.txt.seal");
+    auto decFile = GetTestFile("v2_back.txt");
+
+    const std::string content = "streaming v2 contents";
+    {
+        std::ofstream out(srcFile, std::ios::binary);
+        out << content;
+    }
+
+    auto password = make_secure_string("file-pw");
+    ASSERT_TRUE(
+        seal::FileOperations::encryptFileStreaming(srcFile.string(), encFile.string(), password));
+
+    {
+        std::ifstream in(encFile, std::ios::binary);
+        char head[8]{};
+        in.read(head, sizeof(head));
+        ASSERT_EQ(in.gcount(), 8);
+        EXPECT_EQ(std::memcmp(head, "seal", 4), 0);
+        EXPECT_EQ(static_cast<unsigned char>(head[4]), 0x01);  // alg = scrypt
+        EXPECT_EQ(static_cast<unsigned char>(head[5]), 16);    // log2N
+    }
+
+    ASSERT_TRUE(
+        seal::FileOperations::decryptFileStreaming(encFile.string(), decFile.string(), password));
+
+    std::ifstream in2(decFile, std::ios::binary);
+    std::string roundtripped((std::istreambuf_iterator<char>(in2)),
+                             std::istreambuf_iterator<char>());
+    EXPECT_EQ(roundtripped, content);
 }
