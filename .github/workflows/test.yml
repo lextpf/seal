@@ -10,7 +10,7 @@ on:
 jobs:
   test:
     name: test
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     env:
       VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
