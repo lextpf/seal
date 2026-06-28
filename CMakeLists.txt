@@ -237,6 +237,21 @@ target_compile_definitions(seal PRIVATE
 file(GLOB SEAL_DUOTONE_SVGS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} assets/duotone/*.svg)
 file(GLOB SEAL_BRAND_SVGS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} assets/brands/*.svg)
 
+# Bundled UI text font: a licensed asset that is intentionally untracked
+# (.gitignore: assets/). CI and any fresh checkout build *without* it, so the
+# resource must be optional - embed it only when the file is present on disk.
+# At runtime Theme.qml's FontLoader falls back to a system font when the qrc
+# entry is missing, so the GUI still loads. (The SVG globs above degrade the
+# same way: an empty assets/ tree yields empty lists, not a configure error.)
+set(SEAL_FONT_RESOURCES "")
+set(_seal_bundled_font "assets/fonts/b0a4eabe-5fe5-41e3-8dc3-2df2b82ec4eb.ttf")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_seal_bundled_font}")
+    list(APPEND SEAL_FONT_RESOURCES "${_seal_bundled_font}")
+else()
+    message(STATUS "seal: bundled font absent - building without it "
+                   "(Theme.qml uses a system fallback)")
+endif()
+
 qt_add_qml_module(seal
     URI seal
     VERSION 1.0
@@ -263,7 +278,7 @@ qt_add_qml_module(seal
         qml/BridgeSettings.qml
         qml/LoadingOverlay.qml
     RESOURCES
-        "assets/fonts/b0a4eabe-5fe5-41e3-8dc3-2df2b82ec4eb.ttf"
+        ${SEAL_FONT_RESOURCES}
         ${SEAL_DUOTONE_SVGS}
         ${SEAL_BRAND_SVGS}
 )
