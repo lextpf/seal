@@ -126,9 +126,11 @@ Rectangle {
     }
 
     radius: Theme.radiusLarge
+    // Deliberately transparent (bgGrid/bgGridEnd, not bgCard) so the animated
+    // background blobs float visibly through the chip area — see Main.qml.
     gradient: Gradient {
-        GradientStop { position: 0; color: Theme.bgCard }
-        GradientStop { position: 1; color: Theme.bgCardEnd }
+        GradientStop { position: 0; color: Theme.bgGrid }
+        GradientStop { position: 1; color: Theme.bgGridEnd }
     }
     border.width: 1
     border.color: Theme.dark ? Theme.borderMedium : Theme.borderSubtle
