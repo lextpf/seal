@@ -9,12 +9,12 @@ docs/*
 site/*
 !site/.gitkeep
 
+# Knowledge-graph / analysis output
+graphify-out/
+
 # Python
 __pycache__/
 *.pyc
-
-# Photoshop design sources / preview exports
-*.psd
 
 # Application assets
 assets/
