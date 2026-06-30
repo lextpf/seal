@@ -79,6 +79,12 @@ QtObject {
     property color bgSurface:         pick("#0a101c", "#eaf0f7")
     property color bgCard:            pick(Qt.rgba(0.03, 0.06, 0.12, 0.78), Qt.rgba(0.975, 0.985, 1.0, 0.95))
     property color bgCardEnd:         pick(Qt.rgba(0.02, 0.05, 0.11, 0.86), Qt.rgba(0.95, 0.965, 0.985, 0.98))
+    // The accounts-grid card sits directly over the animated background blobs,
+    // so it runs noticeably more transparent than bgCard/bgCardEnd (which back
+    // the search field and the empty-state panels). The lower alpha lets the
+    // floating blobs read through beneath the chips as moving colour.
+    property color bgGrid:            pick(Qt.rgba(0.03, 0.06, 0.12, 0.50), Qt.rgba(0.975, 0.985, 1.0, 0.40))
+    property color bgGridEnd:         pick(Qt.rgba(0.02, 0.05, 0.11, 0.60), Qt.rgba(0.95, 0.965, 0.985, 0.50))
     property color bgDialog:          pick("#101828", "#fafbfd")
     property color bgInput:           pick(Qt.rgba(0.02, 0.05, 0.11, 0.92), Qt.rgba(0.985, 0.99, 1.0, 0.98))
     property color bgInputFocus:      pick(Qt.rgba(0.04, 0.07, 0.15, 0.96), Qt.rgba(1.0, 1.0, 1.0, 0.99))
@@ -93,8 +99,11 @@ QtObject {
 
     property color bgHeaderTop:       pick(Qt.rgba(0.04, 0.08, 0.18, 0.96), Qt.rgba(0.96, 0.975, 0.995, 0.98))
     property color bgHeaderEnd:       pick(Qt.rgba(0.03, 0.06, 0.16, 0.98), Qt.rgba(0.88, 0.91, 0.96, 0.99))
-    property color bgFooterTop:       pick(Qt.rgba(0.02, 0.05, 0.12, 0.96), Qt.rgba(0.90, 0.93, 0.97, 0.98))
-    property color bgFooterEnd:       pick(Qt.rgba(0.02, 0.04, 0.10, 1.0),  Qt.rgba(0.82, 0.86, 0.92, 1.0))
+    // Footer runs as transparent as the accounts-grid card (bgGrid/bgGridEnd)
+    // so the floating background blobs stay visible through the bottom bar; the
+    // faint top border (borderDim) still separates it from the content above.
+    property color bgFooterTop:       pick(Qt.rgba(0.02, 0.05, 0.12, 0.50), Qt.rgba(0.90, 0.93, 0.97, 0.40))
+    property color bgFooterEnd:       pick(Qt.rgba(0.02, 0.04, 0.10, 0.60), Qt.rgba(0.82, 0.86, 0.92, 0.50))
     property color surfaceHighlight:  pick(Qt.rgba(0.74, 0.84, 1.0, 0.16), Qt.rgba(1.0, 1.0, 1.0, 0.78))
     property color surfaceHighlightSoft:
                                       pick(Qt.rgba(0.54, 0.68, 1.0, 0.10), Qt.rgba(0.40, 0.62, 0.98, 0.18))
@@ -260,14 +269,22 @@ QtObject {
 
     property color rippleColor:       pick(Qt.rgba(1.0, 1.0, 1.0, 0.25), Qt.rgba(0.0, 0.0, 0.0, 0.18))
 
-    // Background blobs: three distinct hues at roughly 5-8% alpha for visible
-    // layered depth. Dark gets a modest extra lift on the main window. Each
-    // hue is chosen to contrast
-    // with the others (purple / teal / magenta in dark; cobalt / teal / lilac in
-    // light) for color variety that bleeds through semi-transparent surfaces.
-    property color blobColor1:        pick(Qt.rgba(0.32, 0.22, 0.88, 0.084), Qt.rgba(0.20, 0.47, 0.90, 0.068))
-    property color blobColor2:        pick(Qt.rgba(0.08, 0.58, 0.68, 0.078), Qt.rgba(0.12, 0.56, 0.54, 0.058))
-    property color blobColor3:        pick(Qt.rgba(0.65, 0.12, 0.55, 0.070), Qt.rgba(0.54, 0.34, 0.82, 0.050))
+    // Background blobs: three distinct hues bleeding through the semi-transparent
+    // surfaces for layered depth. Each hue contrasts with the others (purple /
+    // teal / magenta in dark; cobalt / teal / lilac in light). Light runs a
+    // HIGHER alpha than dark: a colour glowing over the near-black dark base
+    // reads at far lower alpha than the same colour tinting the near-white light
+    // base, so to keep the blobs equally visible in both themes light needs the
+    // stronger fill. Surfaces (bgGrid/footer) sit at matched transparency in both
+    // themes so the field reads through identically.
+    property color blobColor1:        pick(Qt.rgba(0.32, 0.22, 0.88, 0.084), Qt.rgba(0.20, 0.47, 0.90, 0.22))
+    property color blobColor2:        pick(Qt.rgba(0.08, 0.58, 0.68, 0.078), Qt.rgba(0.12, 0.56, 0.54, 0.20))
+    property color blobColor3:        pick(Qt.rgba(0.65, 0.12, 0.55, 0.070), Qt.rgba(0.54, 0.34, 0.82, 0.18))
+
+    // Drifting motes (see Main.qml): tiny plankton/snow specks. Kept fainter
+    // than the blobs so they stay a peripheral texture, not bright dots. (The
+    // Mote's own twinkle multiplies this, so the effective alpha peaks ~0.09.)
+    property color moteColor:    pick(Qt.rgba(0.82, 0.90, 1.0, 0.12), Qt.rgba(0.22, 0.45, 0.88, 0.20))
 
     // Dialog background blobs: higher alpha than main-window blobs because
     // dialogs paint on a solid bgDialog fill (not semi-transparent) and sit
