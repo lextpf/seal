@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Effects
 import QtQuick.Layouts
 
 // Master password entry dialog.
@@ -59,71 +58,23 @@ Popup {
         }
     }
 
-    background: Rectangle {
-        id: dialogBg
-        color: Theme.bgDialog
-        radius: Theme.radiusLarge
-        border.width: 1
-        border.color: Theme.borderMedium
-
-        // Decorative overlays are masked to the dialog's rounded silhouette so
-        // the top gradient, edge light, and tone blob don't bleed into the
-        // invisible corner regions of the rounded rectangle.
-        Item {
-            anchors.fill: parent
-            layer.enabled: true
-            layer.smooth: true
-            layer.effect: MultiEffect {
-                maskEnabled: true
-                maskSource: dialogShellMask
-                autoPaddingEnabled: false
-            }
-
-            DialogBlobs { }
-
-            Rectangle {
-                anchors.top: parent.top
-                anchors.left: parent.left
-                anchors.right: parent.right
-                height: 54
-                gradient: Gradient {
-                    GradientStop { position: 0.0; color: Qt.rgba(root.shellTone.r, root.shellTone.g, root.shellTone.b, 0.04) }
-                    GradientStop { position: 1.0; color: Qt.rgba(root.shellTone.r, root.shellTone.g, root.shellTone.b, 0.0) }
-                }
-            }
-
-            Rectangle {
-                anchors.top: parent.top
-                anchors.left: parent.left
-                anchors.right: parent.right
-                height: 1
-                color: Theme.dialogEdgeLight
-                opacity: 0.20
-            }
-
-            Rectangle {
-                width: 170
-                height: 124
-                radius: 85
-                x: -26
-                y: -54
-                color: Qt.rgba(root.shellTone.r, root.shellTone.g, root.shellTone.b, 0.05)
-            }
-        }
-
-        Rectangle {
-            id: dialogShellMask
-            anchors.fill: parent
-            radius: parent.radius
-            visible: false
-            layer.enabled: true
-            layer.smooth: true
-            antialiasing: true
-        }
-    }
+    // No card. The field, title, and buttons float bare at the centre of the
+    // live "unseal" sonar (LoadingOverlay, raised behind this dialog by Main):
+    // password entry IS the heart of the instrument, not a panel sitting over a
+    // spinner. The field keeps its own input fill for legibility; everything
+    // else reads directly on the sonar's deep scrim. Containment comes from that
+    // scrim, so the dialog's background and modal dim are both transparent.
+    background: Item {}
 
     Overlay.modal: Rectangle {
-        color: Theme.bgOverlay
+        color: "transparent"
+        // The bare field has no title bar, so the dimmed area around it doubles
+        // as the window's drag handle -- the prompt stays repositionable. Presses
+        // on the field/buttons render above this and are unaffected.
+        MouseArea {
+            anchors.fill: parent
+            onPressed: function(mouse) { WindowVM.startWindowDrag() }
+        }
     }
 
     // Clear stale password on open.
@@ -342,7 +293,7 @@ Popup {
             // and guaranteed decryption failure.
             Button {
                 id: okButton
-                text: "OK"
+                text: "Unlock"
                 enabled: passwordField.text.length > 0
                 onClicked: {
                     var pw = passwordField.text;
