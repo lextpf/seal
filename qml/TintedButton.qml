@@ -31,11 +31,14 @@ Button {
     HoverHandler { id: btnHover; cursorShape: Qt.PointingHandCursor }
 
     contentItem: Row {
-        spacing: 6
+        // Collapse the icon slot entirely when there's no icon, so a text-only
+        // button (e.g. "Cancel") centres on its own rather than sitting shifted
+        // by a phantom icon width + gap.
+        spacing: root.faIcon !== "" ? 6 : 0
         anchors.centerIn: parent
         SvgIcon {
             source: root.faIcon
-            width: Theme.iconSizeMedium
+            width: visible ? Theme.iconSizeMedium : 0
             height: Theme.iconSizeMedium
             color: !root.enabled ? root._disText : root.hovered ? root.tintTextHover : root.tintText
             visible: root.faIcon !== ""
