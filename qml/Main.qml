@@ -111,9 +111,22 @@ ApplicationWindow {
         }
 
         // Re-prompt after a failed decryption attempt (wrong password / GCM auth failure).
+        // The re-opening dialog drives the cover back to its `listening` state;
+        // breakSeal() plays the one-shot fracture over it -- a failed GCM tag
+        // shown as a seal that broke.
         function onPasswordRetryRequired(message) {
             passwordDlg.errorMessage = message;
             passwordDlg.open();
+            loadingOverlay.breakSeal();
+        }
+
+        // A verified unlock. vaultLoadedChanged also fires on unload, so gate on
+        // the now-true state. This is the clean success trigger for the closing
+        // seal; if it never arrives the cover still dismisses normally (the grind
+        // just fades), so the unlock flow is never blocked by the flourish.
+        function onVaultLoadedChanged() {
+            if (AppViewModel.vaultLoaded)
+                loadingOverlay.sealSuccess();
         }
 
         // QR failed - surface the error in the password dialog. CLI-mode
@@ -358,66 +371,219 @@ ApplicationWindow {
     }
 
     // Eight decorative background blobs at z:-1 create subtle depth and visual
-    // warmth behind the main UI. Percentage-based x/y positions scale with the
-    // window so they redistribute naturally on resize. Three alternating colors
-    // at 3-5% alpha keep them unobtrusive; the semi-transparent bgCard lets
-    // them bleed through the main content area for a layered glass effect.
-    // Each blob animates its color on theme toggle for a smooth transition.
-    Rectangle {
-        width: 260; height: 260; radius: 130
+    // warmth behind the main UI. Percentage-based baseX/baseY positions scale
+    // with the window so they redistribute naturally on resize. Three
+    // alternating colors at 5-8% alpha keep them unobtrusive; the deliberately
+    // transparent accounts-grid card (bgGrid/bgGridEnd) lets them bleed through
+    // the chip area as moving color for a layered glass-on-water effect.
+    //
+    // Motion: every blob floats on a shared swell — a slow vertical bob plus a
+    // smaller horizontal sway — and breathes with a faint scale swell, as if
+    // resting on water. A single phase clock (Ambient.tidePhase) drives the whole
+    // field; each blob reads it through Math.sin() at its own frequency and
+    // phase offset, so the surface moves coherently rather than as scattered
+    // wobble (same one-driver-many-readers trick as the LoadingOverlay spinner).
+    // Integer frequency multipliers make sin() land on its start value at the
+    // 2*pi wrap, so the infinite loop has no visible seam. Color still animates
+    // on theme toggle via the component's Behavior.
+    //
+    // Ambient motion clock lives in the Ambient singleton (shared by the
+    // header, chips, and glass surfaces). Pause it while the window is hidden
+    // or minimized so idle motion costs nothing in the tray.
+    Binding {
+        target: Ambient
+        property: "awake"
+        value: window.visible && window.visibility !== Window.Minimized
+    }
+
+    component Blob: Rectangle {
+        id: blob
+        property real phase: 0                 // shared clock, injected per instance
+        property real baseX: 0                 // responsive anchor (percentage of window)
+        property real baseY: 0
+        property real swayAmp: Theme.px(12)    // horizontal drift (the smaller axis)
+        property real bobAmp: Theme.px(18)     // vertical bob (the dominant swell)
+        property real breatheAmp: 0.05         // scale swell, +/-5%
+        property int freqX: 1                  // integer multipliers keep the loop seamless
+        property int freqY: 1
+        property int freqS: 1
+        property real phaseX: 0                // phase offsets spread the field out of sync
+        property real phaseY: 0
+        property real phaseS: 0
+
+        radius: width / 2
+        z: -1
+        antialiasing: true
+        transformOrigin: Item.Center
+        // "Living aurora" motion: wide roam (5x the base amps so the blobs
+        // visibly wander), strong breathing (~20%), and a slow brightness pulse
+        // so the colours wax and wane. Large amplitude at the slow 13s tide
+        // reads as majestic, not frantic; overlapping blobs blend hues for free.
+        x: baseX + swayAmp * 5.0 * Math.sin(phase * freqX + phaseX)
+        y: baseY + bobAmp * 5.0 * Math.sin(phase * freqY + phaseY)
+        scale: 1.0 + breatheAmp * 4.0 * Math.sin(phase * freqS + phaseS)
+        opacity: 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(phase * freqS + phaseS + 1.0))
+        Behavior on color { ColorAnimation { duration: 350 } }
+    }
+
+    // Drifting motes: tiny faint specks, each on its own slow closed-loop drift
+    // plus an alpha twinkle, staggered by seed. Plankton/snow-in-water -- life
+    // in peripheral vision, never something to look at.
+    component Mote: Rectangle {
+        id: mote
+        property real baseX: 0
+        property real baseY: 0
+        property int seed: 0
+        width: Theme.px(3 + (seed % 3)); height: width
+        radius: width / 2
+        color: Theme.moteColor
+        antialiasing: true
+        z: -1
+        x: baseX + Theme.px(11) * Math.sin(Ambient.tidePhase + seed)
+        y: baseY + Theme.px(11) * Math.cos(Ambient.driftPhase + seed)
+        opacity: 0.30 + 0.45 * (0.5 + 0.5 * Math.sin(Ambient.tidePhase * 2 + seed))
+    }
+
+    Blob {
+        width: 260; height: 260
         color: Theme.blobColor1
-        Behavior on color { ColorAnimation { duration: 350 } }
-        x: window.width * 0.04; y: window.height * -0.05
-        z: -1
+        baseX: window.width * 0.04; baseY: window.height * -0.05
+        phase: Ambient.tidePhase
+        freqX: 1; freqY: 1; freqS: 1
+        phaseX: 0.0; phaseY: 0.6; phaseS: 0.0
+        bobAmp: Theme.px(18); swayAmp: Theme.px(12); breatheAmp: 0.05
     }
-    Rectangle {
-        width: 200; height: 200; radius: 100
+    Blob {
+        width: 200; height: 200
         color: Theme.blobColor2
-        Behavior on color { ColorAnimation { duration: 350 } }
-        x: window.width * 0.82; y: window.height * 0.06
-        z: -1
+        baseX: window.width * 0.82; baseY: window.height * 0.06
+        phase: Ambient.tidePhase
+        freqX: 2; freqY: 1; freqS: 2
+        phaseX: 1.8; phaseY: 2.2; phaseS: 1.0
+        bobAmp: Theme.px(16); swayAmp: Theme.px(11); breatheAmp: 0.06
     }
-    Rectangle {
-        width: 320; height: 320; radius: 160
+    Blob {
+        width: 320; height: 320
         color: Theme.blobColor3
-        Behavior on color { ColorAnimation { duration: 350 } }
-        x: window.width * 0.42; y: window.height * 0.12
-        z: -1
+        baseX: window.width * 0.42; baseY: window.height * 0.12
+        phase: Ambient.tidePhase
+        freqX: 1; freqY: 1; freqS: 1
+        phaseX: 0.9; phaseY: 4.0; phaseS: 2.4
+        bobAmp: Theme.px(20); swayAmp: Theme.px(14); breatheAmp: 0.045
     }
-    Rectangle {
-        width: 240; height: 240; radius: 120
+    Blob {
+        width: 240; height: 240
         color: Theme.blobColor1
-        Behavior on color { ColorAnimation { duration: 350 } }
-        x: window.width * 0.72; y: window.height * 0.38
-        z: -1
+        baseX: window.width * 0.72; baseY: window.height * 0.38
+        phase: Ambient.tidePhase
+        freqX: 2; freqY: 1; freqS: 1
+        phaseX: 3.3; phaseY: 1.4; phaseS: 4.0
+        bobAmp: Theme.px(17); swayAmp: Theme.px(12); breatheAmp: 0.055
     }
-    Rectangle {
-        width: 280; height: 280; radius: 140
+    Blob {
+        width: 280; height: 280
         color: Theme.blobColor2
-        Behavior on color { ColorAnimation { duration: 350 } }
-        x: window.width * 0.08; y: window.height * 0.45
-        z: -1
+        baseX: window.width * 0.08; baseY: window.height * 0.45
+        phase: Ambient.tidePhase
+        freqX: 1; freqY: 2; freqS: 1
+        phaseX: 4.6; phaseY: 3.0; phaseS: 5.2
+        bobAmp: Theme.px(15); swayAmp: Theme.px(13); breatheAmp: 0.05
     }
-    Rectangle {
-        width: 180; height: 180; radius: 90
+    Blob {
+        width: 180; height: 180
         color: Theme.blobColor3
-        Behavior on color { ColorAnimation { duration: 350 } }
-        x: window.width * 0.52; y: window.height * 0.55
-        z: -1
+        baseX: window.width * 0.52; baseY: window.height * 0.55
+        phase: Ambient.tidePhase
+        freqX: 2; freqY: 1; freqS: 2
+        phaseX: 0.4; phaseY: 5.0; phaseS: 0.8
+        bobAmp: Theme.px(16); swayAmp: Theme.px(11); breatheAmp: 0.06
     }
-    Rectangle {
-        width: 220; height: 220; radius: 110
+    Blob {
+        width: 220; height: 220
         color: Theme.blobColor1
-        Behavior on color { ColorAnimation { duration: 350 } }
-        x: window.width * 0.30; y: window.height * 0.72
-        z: -1
+        baseX: window.width * 0.30; baseY: window.height * 0.72
+        phase: Ambient.tidePhase
+        freqX: 1; freqY: 1; freqS: 1
+        phaseX: 5.4; phaseY: 2.6; phaseS: 3.0
+        bobAmp: Theme.px(18); swayAmp: Theme.px(12); breatheAmp: 0.05
     }
-    Rectangle {
-        width: 160; height: 160; radius: 80
+    Blob {
+        width: 160; height: 160
         color: Theme.blobColor2
-        Behavior on color { ColorAnimation { duration: 350 } }
-        x: window.width * 0.88; y: window.height * 0.68
-        z: -1
+        baseX: window.width * 0.88; baseY: window.height * 0.68
+        phase: Ambient.tidePhase
+        freqX: 2; freqY: 2; freqS: 1
+        phaseX: 2.5; phaseY: 0.2; phaseS: 4.6
+        bobAmp: Theme.px(13); swayAmp: Theme.px(10); breatheAmp: 0.065
+    }
+
+    // 10 motes spread deterministically across the window (no Math.random so
+    // positions are stable across runs); each drifts + twinkles off its seed.
+    Repeater {
+        model: 10
+        Mote {
+            seed: index
+            baseX: window.width * (((index * 0.17) + 0.05) % 1.0)
+            baseY: window.height * (((index * 0.29) + 0.08) % 1.0)
+        }
+    }
+
+    // Tidal ripples: soft rings that bloom at RANDOM spots in RANDOM colours and
+    // expand outward, like scattered drops on the water the blobs float on. Kept
+    // MORE transparent than the blobs so they stay a subtle accent, not a focal
+    // element. Each ring re-picks its origin + hue when it restarts (at ph~0,
+    // while it's invisible, so there's no visible jump). z:-1 with the blobs;
+    // gated on Ambient.awake so it idles when the window is hidden.
+    property real ripplePhase: 0
+    NumberAnimation on ripplePhase {
+        running: Ambient.awake
+        from: 0; to: 1; duration: 12000
+        loops: Animation.Infinite
+    }
+    Repeater {
+        model: 3
+        Rectangle {
+            id: ripple
+            readonly property real ph: (window.ripplePhase + index / 3.0) % 1.0
+            property real lastPh: 0
+            property real cx: (index * 0.31 + 0.2) % 1.0   // initial spread; re-randomized on wrap
+            property real cy: (index * 0.47 + 0.15) % 1.0
+            // Ripple colours match the blobs (their three theme hues), taken at
+            // full opacity -- the opacity binding below supplies the transparency.
+            property var blobHues: [Theme.blobColor1, Theme.blobColor2, Theme.blobColor3]
+            property color hue: Qt.rgba(blobHues[index % 3].r, blobHues[index % 3].g, blobHues[index % 3].b, 1.0)
+            readonly property real maxD: Math.hypot(window.width, window.height) * 1.2
+
+            onPhChanged: {
+                if (ph < lastPh) {              // wrapped -> new cycle: re-seed while invisible
+                    cx = Math.random();
+                    cy = Math.random();
+                    var c = blobHues[Math.floor(Math.random() * 3)];
+                    hue = Qt.rgba(c.r, c.g, c.b, 1.0);
+                }
+                lastPh = ph;
+            }
+
+            width: maxD * (0.04 + 0.96 * ph)
+            height: width
+            radius: width / 2
+            x: window.width * cx - width / 2
+            y: window.height * cy - height / 2
+            color: "transparent"
+            // Thick at birth, then an EXPONENTIAL drop so it thins out hard and
+            // early -- ~half-thickness by ph 0.1, near the 1px floor by ph ~0.3,
+            // staying thin for the rest of the expansion. Like a wave front that
+            // spreads and dissipates fast.
+            border.width: Math.max(Theme.px(1), Theme.px(8) * Math.exp(-7.0 * ph))
+            border.color: ripple.hue
+            // Brightest just after it blooms (small), then gains transparency as
+            // it grows and fades out by the rim. The quick fade-in over the first
+            // 12% avoids a pop at the freshly re-seeded origin. Peak ~0.11 --
+            // subtler than the blobs.
+            opacity: Math.min(1.0, ph / 0.12) * Math.pow(1.0 - ph, 1.4) * (Theme.dark ? 0.08 : 0.14)
+            z: -1
+            antialiasing: true
+        }
     }
 
     // Two-tier ColumnLayout: the outer one fills the window edge-to-edge (so the
@@ -555,16 +721,20 @@ ApplicationWindow {
         }
     }
 
-    // Full-window loading cover. Shown while the vault is being decrypted or
-    // re-encrypted on a worker thread; sits above all content and chrome (modal
-    // dialogs still render above it on Overlay.overlay, but none are open during
-    // a load). Binds to the dedicated isLoading flag — not isBusy — so the
-    // 3-second auto-fill countdown never triggers it.
+    // The unified "unseal" instrument. One cover that spans master-password
+    // entry AND the decryption it triggers, so they read as a single continuous
+    // moment (see LoadingOverlay.qml). `listening` is password entry (calm aurora,
+    // bare field owns the centre); `sounding` is the scrypt grind (full sonar);
+    // a verified unlock plays the closing seal (sealSuccess), a wrong key plays
+    // the fracture (breakSeal). Binds to the dedicated isLoading flag — not isBusy
+    // — so the 3-second auto-fill countdown never triggers it.
     LoadingOverlay {
+        id: loadingOverlay
         anchors.fill: parent
         z: 100
-        running: AppViewModel.isLoading
-        caption: AppViewModel.loadingCaption
+        listening: passwordDlg.visible && !AppViewModel.isLoading
+        sounding: AppViewModel.isLoading
+        caption: AppViewModel.isLoading ? AppViewModel.loadingCaption : ""
     }
 
     // -- Dialogs --
