@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Effects
 import QtQuick.Layouts
 
 // Master-password change dialog.
@@ -71,18 +72,65 @@ Popup {
     }
 
     background: Rectangle {
+        id: dialogBg
         color: Theme.bgDialog
         radius: Theme.radiusLarge
         border.width: 1
         border.color: Theme.borderMedium
 
+        // Decorative overlays masked to the dialog's rounded silhouette, matching
+        // the Add/Edit dialog shell: drifting blobs, a top tone gradient, an edge
+        // light, and a corner tone blob -- all in this dialog's shellTone.
+        Item {
+            anchors.fill: parent
+            layer.enabled: true
+            layer.smooth: true
+            layer.effect: MultiEffect {
+                maskEnabled: true
+                maskSource: dialogShellMask
+                autoPaddingEnabled: false
+            }
+
+            DialogBlobs { }
+
+            Rectangle {
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                height: 54
+                gradient: Gradient {
+                    GradientStop { position: 0.0; color: Qt.rgba(root.shellTone.r, root.shellTone.g, root.shellTone.b, 0.04) }
+                    GradientStop { position: 1.0; color: Qt.rgba(root.shellTone.r, root.shellTone.g, root.shellTone.b, 0.0) }
+                }
+            }
+
+            Rectangle {
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                height: 1
+                color: Theme.dialogEdgeLight
+                opacity: 0.20
+            }
+
+            Rectangle {
+                width: 180
+                height: 128
+                radius: 90
+                x: -30
+                y: -52
+                color: Qt.rgba(root.shellTone.r, root.shellTone.g, root.shellTone.b, 0.05)
+            }
+        }
+
         Rectangle {
-            anchors.top: parent.top
-            anchors.left: parent.left
-            anchors.right: parent.right
-            height: 1
-            color: Theme.dialogEdgeLight
-            opacity: 0.20
+            id: dialogShellMask
+            anchors.fill: parent
+            radius: parent.radius
+            visible: false
+            layer.enabled: true
+            layer.smooth: true
+            antialiasing: true
         }
     }
 
@@ -90,25 +138,53 @@ Popup {
         color: Theme.bgOverlay
     }
 
-    // Shared styling for the three password fields.
+    // Shared styling for the three password fields. Hover-to-reveal eye, mirroring
+    // the Add/Edit dialog: masked by default, shown only while the cursor is over
+    // the eye, re-hidden the moment it leaves (less shoulder-surfing exposure than
+    // a persistent toggle).
     component RekeyField: TextField {
+        id: field
         Layout.fillWidth: true
         Layout.leftMargin: 24
         Layout.rightMargin: 24
-        echoMode: TextInput.Password
+        echoMode: field.showPassword ? TextInput.Normal : TextInput.Password
         passwordCharacter: "⦁"
         placeholderTextColor: Theme.textMuted
         font.family: Theme.fontFamily
         font.pixelSize: Theme.fontSizeLarge
         color: Theme.textPrimary
         leftPadding: 12
+        rightPadding: 36
+
+        property bool showPassword: rekeyEyeArea.containsMouse
 
         background: Rectangle {
             implicitHeight: 38
             radius: Theme.radiusSmall
-            color: parent.activeFocus ? Theme.bgInputFocus : Theme.bgInput
+            color: field.activeFocus ? Theme.bgInputFocus : Theme.bgInput
             border.width: 1
-            border.color: parent.activeFocus ? Theme.borderFocus : Theme.borderSubtle
+            border.color: field.activeFocus ? Theme.borderFocus : Theme.borderSubtle
+        }
+
+        SvgIcon {
+            anchors.right: parent.right
+            anchors.rightMargin: 8
+            anchors.verticalCenter: parent.verticalCenter
+            source: field.showPassword ? Theme.iconEye : Theme.iconEyeSlash
+            color: rekeyEyeArea.containsMouse ? Theme.accent : Theme.textMuted
+            width: Theme.iconSizeMedium
+            height: Theme.iconSizeMedium
+
+            // Qt.NoButton: track hover without intercepting clicks (which would
+            // steal focus from the field). -4 margin enlarges the hit area.
+            MouseArea {
+                id: rekeyEyeArea
+                anchors.fill: parent
+                anchors.margins: -4
+                cursorShape: Qt.PointingHandCursor
+                hoverEnabled: true
+                acceptedButtons: Qt.NoButton
+            }
         }
     }
 
