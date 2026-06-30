@@ -193,6 +193,10 @@ set_source_files_properties(qml/Theme.qml PROPERTIES
     QT_QML_SINGLETON_TYPE TRUE
 )
 
+set_source_files_properties(qml/Ambient.qml PROPERTIES
+    QT_QML_SINGLETON_TYPE TRUE
+)
+
 qt_add_executable(seal
     ${SEAL_SOURCES}
 )
@@ -258,6 +262,7 @@ qt_add_qml_module(seal
     RESOURCE_PREFIX /qt/qml
     QML_FILES
         qml/Theme.qml
+        qml/Ambient.qml
         qml/Main.qml
         qml/HeaderBar.qml
         qml/SearchBar.qml
