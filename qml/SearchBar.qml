@@ -122,7 +122,10 @@ TextField {
     background: Rectangle {
         implicitHeight: 44
         radius: Theme.radiusLarge
-        color: !root.enabled ? Theme.bgCard : root.activeFocus ? Theme.bgInputFocus : Theme.bgCard
+        // Matches the accounts-grid card transparency so the background blobs
+        // read through the field: idle/disabled = bgGrid (the card's top alpha),
+        // focused = bgGridEnd (its slightly more grounded bottom alpha).
+        color: !root.enabled ? Theme.bgGrid : root.activeFocus ? Theme.bgGridEnd : Theme.bgGrid
         border.width: 1
         border.color: !root.enabled ? (Theme.dark ? Theme.borderMedium : Theme.borderSubtle)
                     : root.activeFocus ? Theme.borderFocus
