@@ -16,27 +16,44 @@ constexpr std::size_t kMaxPayloadBytes = 4096;
 constexpr int kMaxDepth = 4;
 constexpr std::size_t kMaxHostLen = 253;
 constexpr std::size_t kHashLen = 64;
+constexpr std::size_t kMaxVisitLen = 64;
 constexpr std::int32_t kCoordMin = -50000;
 constexpr std::int32_t kCoordMax = 50000;
 
-// Bit flags -- duplicate-key detection becomes one test per slot.
+// Bit flags - duplicate-key detection becomes one test per slot.
 constexpr std::uint32_t kKeyV = 1U << 0;
 constexpr std::uint32_t kKeyX = 1U << 1;
 constexpr std::uint32_t kKeyY = 1U << 2;
 constexpr std::uint32_t kKeyTag = 1U << 3;
 constexpr std::uint32_t kKeyUrlHost = 1U << 4;
 constexpr std::uint32_t kKeyUrlPathHash = 1U << 5;
-constexpr std::uint32_t kKeyAll = kKeyV | kKeyX | kKeyY | kKeyTag | kKeyUrlHost | kKeyUrlPathHash;
+constexpr std::uint32_t kKeyKind = 1U << 6;
+constexpr std::uint32_t kKeySecure = 1U << 7;
+constexpr std::uint32_t kKeyForm = 1U << 8;
+constexpr std::uint32_t kKeyUser = 1U << 9;
+constexpr std::uint32_t kKeyVisit = 1U << 10;
 
-// Hand-rolled bounded recursive-descent JSON parser. Supports only the
-// schema subset: objects, ASCII-printable strings, signed decimal ints,
-// structural punctuation. No floats, scientific notation, leading zeros,
-// Unicode escapes, or escapes other than \\ and \". Depth is capped at
-// every object/array entry to defend the C stack from deep nesting.
+// Click report: the legacy six-field shape. `kind` is optional (absent ==
+// click); `secure`/`form`/`user`/`visit` are forbidden.
+constexpr std::uint32_t kClickRequired =
+    kKeyV | kKeyX | kKeyY | kKeyTag | kKeyUrlHost | kKeyUrlPathHash;
+constexpr std::uint32_t kClickAllowed = kClickRequired | kKeyKind;
+
+// Nav report: host + secure/form flags, no click coordinates. `user` (a login-identifier
+// field for email-first / multi-step logins) and `visit` (the per-document page-load token
+// behind the once-per-visit staging latches) are OPTIONAL, so a stale extension sending an
+// older nav shape still parses; an absent visit makes staging fail closed downstream.
+constexpr std::uint32_t kNavRequired = kKeyV | kKeyKind | kKeyUrlHost | kKeySecure | kKeyForm;
+constexpr std::uint32_t kNavAllowed = kNavRequired | kKeyUser | kKeyVisit;
+
+// Hand-rolled bounded recursive-descent JSON parser. Supports only the schema subset:
+// objects, ASCII-printable strings, signed decimal ints, structural punctuation. No floats,
+// scientific notation, leading zeros, Unicode escapes, or escapes other than \\ and \". Depth
+// is capped at every object/array entry to defend the C stack from deep nesting.
 class Parser
 {
 public:
-    Parser(std::string_view payload) noexcept
+    explicit Parser(std::string_view payload) noexcept
         : m_Begin(payload.data()),
           m_End(payload.data() + payload.size()),
           m_Cursor(payload.data())
@@ -110,7 +127,19 @@ public:
             }
             skipWhitespace();
         }
-        if (seenKeys != kKeyAll)
+        // Kind-selected required/allowed masks. m_Kind was set while parsing
+        // the `kind` value (default Click when the key is absent). A key legal
+        // only in the other shape is reported as an unknown key; a missing
+        // required key as a missing key.
+        const std::uint32_t required =
+            (out->m_Kind == BridgeKind::Nav) ? kNavRequired : kClickRequired;
+        const std::uint32_t allowed =
+            (out->m_Kind == BridgeKind::Nav) ? kNavAllowed : kClickAllowed;
+        if ((seenKeys & ~allowed) != 0)
+        {
+            return BridgeParseError::UnknownKey;
+        }
+        if ((seenKeys & required) != required)
         {
             return BridgeParseError::MissingKey;
         }
@@ -206,7 +235,7 @@ private:
                 }
                 else
                 {
-                    // Keys/values are pure ASCII -- reject \n, \t, \uXXXX, etc.
+                    // Keys/values are pure ASCII - reject \n, \t, \uXXXX, etc.
                     return BridgeParseError::BadValue;
                 }
                 if (n >= bufSize)
@@ -255,12 +284,12 @@ private:
         {
             return BridgeParseError::Malformed;
         }
-        // Only "0" / "-0" allowed -- reject other leading zeros.
+        // Only "0" / "-0" allowed - reject other leading zeros.
         if (digitCount > 1 && *digitStart == '0')
         {
             return BridgeParseError::BadValue;
         }
-        // No '.', 'e', '+', '-' here -- cursor must be at structural punctuation.
+        // No '.', 'e', '+', '-' here - cursor must be at structural punctuation.
         if (m_Cursor < m_End)
         {
             const char trailing = *m_Cursor;
@@ -308,6 +337,26 @@ private:
         if (key == std::string_view("url_path_hash"))
         {
             return kKeyUrlPathHash;
+        }
+        if (key == std::string_view("kind"))
+        {
+            return kKeyKind;
+        }
+        if (key == std::string_view("secure"))
+        {
+            return kKeySecure;
+        }
+        if (key == std::string_view("form"))
+        {
+            return kKeyForm;
+        }
+        if (key == std::string_view("user"))
+        {
+            return kKeyUser;
+        }
+        if (key == std::string_view("visit"))
+        {
+            return kKeyVisit;
         }
         return 0;
     }
@@ -454,6 +503,88 @@ private:
                     }
                 }
                 out->m_UrlPathHash.assign(buf.data(), len);
+                return BridgeParseError::None;
+            }
+            case kKeyKind:
+            {
+                std::array<char, 16> buf{};
+                std::size_t len = 0;
+                const BridgeParseError err = parseAsciiString(buf.data(), buf.size(), &len);
+                if (err != BridgeParseError::None)
+                {
+                    return err;
+                }
+                const std::string_view value(buf.data(), len);
+                if (value == std::string_view("click"))
+                {
+                    out->m_Kind = BridgeKind::Click;
+                }
+                else if (value == std::string_view("nav"))
+                {
+                    out->m_Kind = BridgeKind::Nav;
+                }
+                else
+                {
+                    return BridgeParseError::BadValue;
+                }
+                return BridgeParseError::None;
+            }
+            case kKeyVisit:
+            {
+                // Per-document page-load token. Random alnum+dash (a UUID is
+                // 36 chars); anything else is fail-closed rejected. The +1
+                // buffer slack makes an in-cap overrun a BadValue length
+                // rejection rather than TooLarge, matching url_host.
+                std::array<char, kMaxVisitLen + 1> buf{};
+                std::size_t len = 0;
+                const BridgeParseError err = parseAsciiString(buf.data(), buf.size(), &len);
+                if (err != BridgeParseError::None)
+                {
+                    return err;
+                }
+                if (len == 0 || len > kMaxVisitLen)
+                {
+                    return BridgeParseError::BadValue;
+                }
+                for (std::size_t i = 0; i < len; ++i)
+                {
+                    const char c = buf[i];
+                    const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                                    (c >= '0' && c <= '9') || c == '-';
+                    if (!ok)
+                    {
+                        return BridgeParseError::BadValue;
+                    }
+                }
+                out->m_Visit.assign(buf.data(), len);
+                return BridgeParseError::None;
+            }
+            case kKeySecure:
+            case kKeyForm:
+            case kKeyUser:
+            {
+                std::int64_t value = 0;
+                const BridgeParseError err = parseInt64(&value);
+                if (err != BridgeParseError::None)
+                {
+                    return err;
+                }
+                if (value != 0 && value != 1)
+                {
+                    return BridgeParseError::BadValue;
+                }
+                if (keyBit == kKeySecure)
+                {
+                    out->m_Secure = (value == 1);
+                }
+                else if (keyBit == kKeyForm)
+                {
+                    out->m_HasPasswordForm = (value == 1);
+                }
+                else
+                {
+                    out->m_HasUsernameField = (value == 1);
+                }
                 return BridgeParseError::None;
             }
             default:

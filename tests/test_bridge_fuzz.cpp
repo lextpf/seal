@@ -31,6 +31,14 @@ std::string buildValid()
            std::string(64, 'a') + std::string("\"}");
 }
 
+// Canonical navigation report: host + secure/form flags, no click coords.
+std::string buildValidNav()
+{
+    return std::string(
+        "{\"v\":1,\"kind\":\"nav\",\"url_host\":\"example.com\","
+        "\"secure\":1,\"form\":1}");
+}
+
 }  // namespace
 
 class BridgeFuzzTest : public ::testing::Test
@@ -363,6 +371,225 @@ TEST_F(BridgeFuzzTest, NestedObjectInValueRejected)
                              std::string(64, 'a') + std::string("\"}");
     ParsedBridgeMessage parsed;
     EXPECT_NE(parseBridgeMessage(body, &parsed), BridgeParseError::None);
+}
+
+TEST_F(BridgeFuzzTest, NavMessageParses)
+{
+    ParsedBridgeMessage parsed;
+    const auto err = parseBridgeMessage(buildValidNav(), &parsed);
+    EXPECT_EQ(err, BridgeParseError::None);
+    EXPECT_EQ(parsed.m_Version, 1);
+    EXPECT_EQ(parsed.m_Kind, seal::BridgeKind::Nav);
+    EXPECT_EQ(parsed.m_UrlHost, std::string("example.com"));
+    EXPECT_TRUE(parsed.m_Secure);
+    EXPECT_TRUE(parsed.m_HasPasswordForm);
+}
+
+TEST_F(BridgeFuzzTest, NavSecureAndFormZeroParses)
+{
+    const std::string body =
+        "{\"v\":1,\"kind\":\"nav\",\"url_host\":\"a.com\",\"secure\":0,\"form\":0}";
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::None);
+    EXPECT_FALSE(parsed.m_Secure);
+    EXPECT_FALSE(parsed.m_HasPasswordForm);
+}
+
+TEST_F(BridgeFuzzTest, ClickReportDefaultsToClickKind)
+{
+    // A legacy message with no `kind` key parses as a Click report.
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(buildValid(), &parsed), BridgeParseError::None);
+    EXPECT_EQ(parsed.m_Kind, seal::BridgeKind::Click);
+}
+
+TEST_F(BridgeFuzzTest, ClickWithExplicitKindAccepted)
+{
+    const std::string body = std::string(
+                                 "{\"v\":1,\"kind\":\"click\",\"x\":1,\"y\":2,"
+                                 "\"tag\":\"password\","
+                                 "\"url_host\":\"a\",\"url_path_hash\":\"") +
+                             std::string(64, 'a') + std::string("\"}");
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::None);
+    EXPECT_EQ(parsed.m_Kind, seal::BridgeKind::Click);
+}
+
+TEST_F(BridgeFuzzTest, NavWithClickKeyRejected)
+{
+    // x/y/tag/url_path_hash are click-only; present in a nav report -> unknown.
+    const std::string body =
+        "{\"v\":1,\"kind\":\"nav\",\"url_host\":\"a.com\",\"secure\":1,\"form\":1,\"x\":5}";
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::UnknownKey);
+}
+
+TEST_F(BridgeFuzzTest, NavMissingSecureRejected)
+{
+    const std::string body = "{\"v\":1,\"kind\":\"nav\",\"url_host\":\"a.com\",\"form\":1}";
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::MissingKey);
+}
+
+TEST_F(BridgeFuzzTest, NavMissingFormRejected)
+{
+    const std::string body = "{\"v\":1,\"kind\":\"nav\",\"url_host\":\"a.com\",\"secure\":1}";
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::MissingKey);
+}
+
+TEST_F(BridgeFuzzTest, ClickWithNavFlagRejected)
+{
+    // secure/form are nav-only; present in a click report -> unknown key.
+    const std::string body = std::string(
+                                 "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"password\","
+                                 "\"url_host\":\"a\",\"secure\":1,\"url_path_hash\":\"") +
+                             std::string(64, 'a') + std::string("\"}");
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::UnknownKey);
+}
+
+TEST_F(BridgeFuzzTest, KindBadValueRejected)
+{
+    const std::string body =
+        "{\"v\":1,\"kind\":\"teleport\",\"url_host\":\"a.com\",\"secure\":1,\"form\":1}";
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::BadValue);
+}
+
+TEST_F(BridgeFuzzTest, NavSecureOutOfRangeRejected)
+{
+    const std::string body =
+        "{\"v\":1,\"kind\":\"nav\",\"url_host\":\"a.com\",\"secure\":2,\"form\":1}";
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::BadValue);
+}
+
+TEST_F(BridgeFuzzTest, NavWithUserFieldParses)
+{
+    const std::string body =
+        "{\"v\":1,\"kind\":\"nav\",\"url_host\":\"a.com\",\"secure\":1,\"form\":0,\"user\":1}";
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::None);
+    EXPECT_FALSE(parsed.m_HasPasswordForm);
+    EXPECT_TRUE(parsed.m_HasUsernameField);
+}
+
+TEST_F(BridgeFuzzTest, NavUserFieldIsOptional)
+{
+    // The 5-field nav (no `user`) still parses; user defaults false.
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(buildValidNav(), &parsed), BridgeParseError::None);
+    EXPECT_FALSE(parsed.m_HasUsernameField);
+}
+
+TEST_F(BridgeFuzzTest, NavUserOutOfRangeRejected)
+{
+    const std::string body =
+        "{\"v\":1,\"kind\":\"nav\",\"url_host\":\"a.com\",\"secure\":1,\"form\":1,\"user\":2}";
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::BadValue);
+}
+
+TEST_F(BridgeFuzzTest, ClickWithUserFlagRejected)
+{
+    // user is nav-only; present in a click report -> unknown key.
+    const std::string body = std::string(
+                                 "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"password\","
+                                 "\"url_host\":\"a\",\"user\":1,\"url_path_hash\":\"") +
+                             std::string(64, 'a') + std::string("\"}");
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::UnknownKey);
+}
+
+TEST_F(BridgeFuzzTest, NavWithVisitTokenParses)
+{
+    // `visit` is the per-document page-load token driving the once-per-visit
+    // staging latches (UUID charset: alnum + dash).
+    const std::string body =
+        "{\"v\":1,\"kind\":\"nav\",\"url_host\":\"a.com\",\"secure\":1,\"form\":1,"
+        "\"visit\":\"3f2b-A9\"}";
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::None);
+    EXPECT_EQ(parsed.m_Visit, std::string("3f2b-A9"));
+}
+
+TEST_F(BridgeFuzzTest, NavVisitIsOptional)
+{
+    // A stale extension sending no `visit` still parses; the token defaults
+    // empty (staging then fails closed downstream).
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(buildValidNav(), &parsed), BridgeParseError::None);
+    EXPECT_TRUE(parsed.m_Visit.empty());
+}
+
+TEST_F(BridgeFuzzTest, NavVisitEmptyRejected)
+{
+    const std::string body =
+        "{\"v\":1,\"kind\":\"nav\",\"url_host\":\"a.com\",\"secure\":1,\"form\":1,"
+        "\"visit\":\"\"}";
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::BadValue);
+}
+
+TEST_F(BridgeFuzzTest, NavVisitLengthBoundary)
+{
+    // 64 chars is the cap (a UUID is 36); 65 fits the parse buffer but fails
+    // the length check, like url_host's 253/254 split.
+    const std::string ok = std::string(
+                               "{\"v\":1,\"kind\":\"nav\",\"url_host\":\"a.com\","
+                               "\"secure\":1,\"form\":1,\"visit\":\"") +
+                           std::string(64, 'a') + std::string("\"}");
+    const std::string tooLong = std::string(
+                                    "{\"v\":1,\"kind\":\"nav\",\"url_host\":\"a.com\","
+                                    "\"secure\":1,\"form\":1,\"visit\":\"") +
+                                std::string(65, 'a') + std::string("\"}");
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(ok, &parsed), BridgeParseError::None);
+    EXPECT_EQ(parsed.m_Visit.size(), 64u);
+    EXPECT_EQ(parseBridgeMessage(tooLong, &parsed), BridgeParseError::BadValue);
+}
+
+TEST_F(BridgeFuzzTest, NavVisitBadCharsetRejected)
+{
+    // Only [A-Za-z0-9-]: underscores, spaces, dots are rejected fail-closed.
+    for (const char* bad : {"ab_c", "a b", "a.b"})
+    {
+        const std::string body = std::string(
+                                     "{\"v\":1,\"kind\":\"nav\",\"url_host\":\"a.com\","
+                                     "\"secure\":1,\"form\":1,\"visit\":\"") +
+                                 bad + std::string("\"}");
+        ParsedBridgeMessage parsed;
+        EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::BadValue) << bad;
+    }
+}
+
+TEST_F(BridgeFuzzTest, NavVisitWrongTypeRejected)
+{
+    const std::string body =
+        "{\"v\":1,\"kind\":\"nav\",\"url_host\":\"a.com\",\"secure\":1,\"form\":1,\"visit\":7}";
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::Malformed);
+}
+
+TEST_F(BridgeFuzzTest, ClickWithVisitRejected)
+{
+    // visit is nav-only; present in a click report -> unknown key.
+    const std::string body = std::string(
+                                 "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"password\","
+                                 "\"url_host\":\"a\",\"visit\":\"abc\",\"url_path_hash\":\"") +
+                             std::string(64, 'a') + std::string("\"}");
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::UnknownKey);
+}
+
+TEST_F(BridgeFuzzTest, NavVisitDuplicateRejected)
+{
+    const std::string body =
+        "{\"v\":1,\"kind\":\"nav\",\"url_host\":\"a.com\",\"secure\":1,\"form\":1,"
+        "\"visit\":\"abc\",\"visit\":\"def\"}";
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::DuplicateKey);
 }
 
 TEST_F(BridgeFuzzTest, RandomFuzzNeverCrashes)
