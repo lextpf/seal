@@ -11,6 +11,7 @@ site/*
 
 # Knowledge-graph / analysis output
 graphify-out/
+.understand-anything/
 
 # Python
 __pycache__/
