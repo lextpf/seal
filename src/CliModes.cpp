@@ -399,7 +399,7 @@ int HandleStringMode(bool encryptMode, const std::string& inlineData)
         }
         else
         {
-            // Auto-detect: hex first (stricter -- even length + xdigit only),
+            // Auto-detect: hex first (stricter even length + xdigit only),
             // then Base64. Hex chars are a Base64 subset, so this order
             // makes the more specific test win.
             bool looksHex = (input.size() % 2 == 0) && input.size() >= 4 &&
@@ -466,11 +466,10 @@ namespace
 constexpr std::wstring_view kHostName = L"com.seal.fill";
 constexpr std::string_view kHostNameAscii = "com.seal.fill";
 
-// Deterministic Chrome extension ID derived from the RSA "key" field in
-// extensions/seal-browser/manifest.json: first 16 bytes of SHA-256(SPKI
-// DER), each nibble 0..15 -> a..p. Hardcoded so the install handler can
-// pre-fill allowed_origins without manual JSON editing. **MUST** be
-// updated if the manifest's "key" is ever regenerated.
+// Deterministic Chrome extension ID from the RSA "key" in
+// extensions/browser/manifest.json: first 16 bytes of SHA-256(SPKI DER),
+// each nibble 0..15 -> a..p. Hardcoded to pre-fill allowed_origins without
+// manual JSON edits. MUST be updated if the manifest "key" is regenerated.
 constexpr std::string_view kSealExtensionIdAscii = "dfjclelhkideboildnjihgildihjjmdo";
 
 // Browser registry roots under HKCU.
@@ -478,83 +477,16 @@ struct BrowserTarget
 {
     std::wstring_view m_DisplayName;
     std::wstring_view m_SubKey;
-    std::wstring_view m_AppPathsExe;    ///< Executable name registered under App Paths.
-    std::wstring_view m_ExtensionsUrl;  ///< URL to open after install for sideloading.
 };
 
-// Chrome + Brave. Both are Chromium, so they share the same extension (same
-// RSA "key" -> same extension ID -> same chrome-extension:// origin) and the
-// same Chromium manifest (com.seal.fill.json); only the per-browser registry
-// root differs. Edge/Opera/Vivaldi would slot in the same way. Firefox is a
-// different engine (separate manifest schema + Mozilla registry root) and is
-// intentionally not included here.
+// Chrome + Brave: both Chromium, so they share one extension (same RSA "key"
+// -> same ID -> same chrome-extension:// origin) and manifest
+// (com.seal.fill.json); only the registry root differs. Edge/Opera/Vivaldi fit
+// the same way; Firefox (different engine, own manifest + registry) is excluded.
 constexpr std::array<BrowserTarget, 2> kBrowserTargets{{
-    {L"Chrome",
-     L"Software\\Google\\Chrome\\NativeMessagingHosts\\com.seal.fill",
-     L"chrome.exe",
-     L"chrome://extensions/"},
-    {L"Brave",
-     L"Software\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts\\com.seal.fill",
-     L"brave.exe",
-     L"brave://extensions/"},
+    {L"Chrome", L"Software\\Google\\Chrome\\NativeMessagingHosts\\com.seal.fill"},
+    {L"Brave", L"Software\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts\\com.seal.fill"},
 }};
-
-// Resolve a browser via App Paths (HKCU then HKLM); empty if uninstalled.
-std::wstring resolveAppPath(std::wstring_view exeName)
-{
-    const std::wstring keyPath =
-        std::wstring(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\") +
-        std::wstring(exeName);
-
-    for (HKEY hive : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE})
-    {
-        std::array<wchar_t, MAX_PATH> buf{};
-        DWORD bufBytes = static_cast<DWORD>(buf.size() * sizeof(wchar_t));
-        const LONG status = RegGetValueW(
-            hive, keyPath.c_str(), nullptr, RRF_RT_REG_SZ, nullptr, buf.data(), &bufBytes);
-        if (status == ERROR_SUCCESS && buf[0] != L'\0')
-        {
-            return std::wstring(buf.data());
-        }
-    }
-    return {};
-}
-
-// Launch a browser at a URL via CreateProcessW + `--new-window`.
-//
-// Why not `chrome.exe URL`: an already-running Chrome forwards bare URL
-// args via Mojo IPC; recent Chrome (>=100) filters those as a defence
-// against shortcut-hijacking (e.g. chrome://settings/passwords), so the
-// arg silently becomes a new-tab-page. `--new-window <URL>` runs through
-// a different code path that treats the URL as the initial document of a
-// freshly-created window and bypasses that filter.
-//
-// CreateProcessW (not ShellExecuteW) so command-line quoting is explicit
-// -- ShellExecuteW has been inconsistent across Windows versions for
-// args containing `://`.
-bool launchBrowserAt(const std::wstring& exePath, std::wstring_view url)
-{
-    std::wstring cmdLine;
-    cmdLine.reserve(exePath.size() + url.size() + 32);
-    cmdLine.push_back(L'"');
-    cmdLine.append(exePath);
-    cmdLine.append(L"\" --new-window \"");
-    cmdLine.append(url);
-    cmdLine.push_back(L'"');
-
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
-    PROCESS_INFORMATION pi{};
-    const BOOL ok = CreateProcessW(
-        nullptr, cmdLine.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi);
-    if (ok == 0)
-    {
-        return false;
-    }
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-    return true;
-}
 
 // Best-effort UTF-16 -> clipboard. Silent failure when locked elsewhere.
 bool copyTextToClipboard(const std::wstring& text)
@@ -773,7 +705,7 @@ int installBrowserExtensionInternal(std::string* outMessage)
         return 1;
     }
 
-    // Manifest next to seal.exe -- install layout is self-contained;
+    // Manifest next to seal.exe - install layout is self-contained;
     // registry entries use absolute paths.
     const std::filesystem::path chromeManifest = exeDir / "com.seal.fill.json";
 
@@ -810,7 +742,7 @@ int installBrowserExtensionInternal(std::string* outMessage)
     // Extension folder for sideloading. Prefer sibling extensions/ (CMake
     // install layout); fall back to the repo layout (two levels up from
     // build/bin/Release) when running from a dev tree.
-    std::filesystem::path extensionsDir = exeDir / "extensions" / "seal-browser";
+    std::filesystem::path extensionsDir = exeDir / "extensions" / "browser";
     if (!std::filesystem::exists(extensionsDir))
     {
         // Walk up from exeDir to find extensions/ at the repo root (dev
@@ -818,7 +750,7 @@ int installBrowserExtensionInternal(std::string* outMessage)
         std::filesystem::path probe = exeDir;
         for (int depth = 0; depth < 6 && probe.has_parent_path(); ++depth)
         {
-            const std::filesystem::path candidate = probe / "extensions" / "seal-browser";
+            const std::filesystem::path candidate = probe / "extensions" / "browser";
             if (std::filesystem::exists(candidate))
             {
                 extensionsDir = candidate;
@@ -831,27 +763,9 @@ int installBrowserExtensionInternal(std::string* outMessage)
     std::cout << "Native-messaging host registered for " << installedCount << " browser(s).\n";
     std::cout << "Manifest: " << chromeManifest.string() << "\n";
 
-    // Sideload UX: launch each installed browser at its extensions page
-    // and copy the extension folder path to the clipboard for paste into
-    // "Load unpacked". Failures are non-fatal -- user can use the printed
-    // paths manually.
-    std::vector<std::wstring> launched;
-    if (std::filesystem::exists(extensionsDir))
-    {
-        for (const auto& target : kBrowserTargets)
-        {
-            const std::wstring exePath = resolveAppPath(target.m_AppPathsExe);
-            if (exePath.empty())
-            {
-                continue;
-            }
-            if (launchBrowserAt(exePath, target.m_ExtensionsUrl))
-            {
-                launched.emplace_back(std::wstring(target.m_DisplayName));
-            }
-        }
-    }
-
+    // Copy the extension folder path to the clipboard so the one remaining
+    // manual step - loading the unpacked extension - is a single paste. We
+    // deliberately do NOT launch any browser.
     const bool clipboardOk =
         std::filesystem::exists(extensionsDir) && copyTextToClipboard(extensionsDir.wstring());
 
@@ -860,27 +774,23 @@ int installBrowserExtensionInternal(std::string* outMessage)
         std::cout << "\nExtension folder:\n  " << extensionsDir.string() << "\n";
         if (clipboardOk)
         {
-            std::cout << "  (copied to clipboard -- paste with Ctrl+V in the file picker)\n";
+            std::cout << "  (copied to clipboard - paste with Ctrl+V in the file picker)\n";
         }
-        if (!launched.empty())
-        {
-            std::cout << "\nLaunched browser extensions pages:\n";
-            for (const auto& name : launched)
-            {
-                std::cout << "  - " << toUtf8(name) << "\n";
-            }
-        }
-        std::cout << "\nFinish the sideload (Chrome or Brave):\n"
-                     "  1) Toggle 'Developer mode' (top-right of chrome://extensions/\n"
-                     "     or brave://extensions/).\n"
-                     "  2) Click 'Load unpacked' and paste the path above.\n"
-                     "\nThe extension ID is pre-registered in the manifest, so no further\n"
-                     "configuration is required after the unpacked load.\n";
+        // Loading an UNPACKED extension is the one step no program can do for
+        // you: Chrome does not let an external process install one (only the
+        // Web Store or an enterprise force-install policy can). Everything else
+        // - the native-messaging host + manifest - is already done above.
+        std::cout << "\nOne manual step remains (Chrome/Brave restriction on unpacked "
+                     "extensions):\n"
+                     "  1) Open chrome://extensions/ (or brave://extensions/).\n"
+                     "  2) Turn on 'Developer mode' (top-right).\n"
+                     "  3) Click 'Load unpacked' and paste the path above.\n"
+                     "The extension ID is pinned in the manifest, so nothing else is needed.\n";
     }
     else
     {
         std::cout << "\nExtension folder not found. Place the extension under:\n  "
-                  << (exeDir / "extensions" / "seal-browser").string() << "\n";
+                  << (exeDir / "extensions" / "browser").string() << "\n";
     }
 
     writeCliDiag(seal::console::Tone::Success,
@@ -922,10 +832,24 @@ int uninstallBrowserExtensionInternal(std::string* outMessage)
                   seal::diag::kv("missed", missed)});
 
     std::cout << "Native-messaging host registry entries cleared (" << removed << " removed).\n";
+
+    // The registry entries are all this command can remove. The WebExtension is
+    // loaded unpacked (developer mode), and Chrome lets only the user remove it,
+    // from the browser's extensions page. Say so plainly so "it's still there"
+    // is no surprise (mirrors the install command, which guides the load).
+    std::cout << "\nThis unregisters the native-messaging host only. The 'seal companion'\n"
+                 "extension is still loaded in your browser - seal cannot remove an\n"
+                 "unpacked extension for you (only the browser can). To finish removing it:\n"
+                 "  1) Open chrome://extensions/ (or brave://extensions/).\n"
+                 "  2) Find 'seal companion' and click Remove.\n";
+
     if (outMessage != nullptr)
     {
         std::ostringstream msg;
-        msg << "Cleared " << removed << " native-messaging host entries.";
+        msg << "Cleared " << removed
+            << " native-messaging host entries. Remove the 'seal companion' extension "
+               "yourself in chrome://extensions/ (Chrome cannot remove an unpacked "
+               "extension programmatically).";
         *outMessage = msg.str();
     }
     return 0;
