@@ -40,12 +40,14 @@ class CliPanelViewModel : public QObject
     Q_PROPERTY(QString cliOutputText READ cliOutputText NOTIFY cliOutputTextChanged)
 
 public:
-    /// @brief Construct the CLI panel ViewModel over the shared seams.
-    /// @param ws   Injected Qt-free core that owns records and session.
-    /// @param ui   Status sink for status feedback.
-    /// @param gate Password gate used to defer password-requiring commands.
-    /// @param fill Auto-fill control used by the `:fill` builtin.
-    /// @param parent Optional QObject parent.
+    /**
+     * @brief Construct the CLI panel ViewModel over the shared seams.
+     * @param ws   Injected Qt-free core that owns records and session.
+     * @param ui   Status sink for status feedback.
+     * @param gate Password gate used to defer password-requiring commands.
+     * @param fill Auto-fill control used by the `:fill` builtin.
+     * @param parent Optional QObject parent.
+     */
     CliPanelViewModel(seal::CredentialWorkspace& ws,
                       seal::IUiFeedback& ui,
                       seal::IPasswordGate& gate,
@@ -63,7 +65,7 @@ public:
      *
      * Supported input types (tried in order):
      * - **Built-in commands**: `:help`, `:open`, `:copy`, `:clear`, `:cls`,
-     *   `:gen [len]`, `:qr`, `:fill <index>`, `:hex`, `:unhex` (no password needed).
+     *   `:gen [len]`, `:qr`, `:fill <service>`, `:hex`, `:unhex` (no password needed).
      * - **File/directory paths**: encrypt or decrypt based on `.seal` extension.
      * - **Hex tokens**: decrypt and copy to clipboard.
      * - **Base64 ciphertext**: decrypt and copy to clipboard.
@@ -71,6 +73,17 @@ public:
      *
      * Commands that require the master password trigger the password dialog
      * via the password gate if the password is not yet set.
+     *
+     * @verbatim
+     *   input (trimmed, then echoed to the transcript)
+     *     |-- built-in command?    -> handled, return             (no master password)
+     *     |== master-password gate: defer via IPasswordGate if the password is unset ==
+     *     |-- directory path?      -> encrypt / decrypt every file in the folder
+     *     |-- existing file?       -> encrypt file (or decrypt a .seal)
+     *     |-- hex token(s)?        -> decrypt -> clipboard
+     *     |-- base64 ciphertext?   -> decrypt -> clipboard
+     *     `-- otherwise plain text -> encrypt -> emit hex + base64
+     * @endverbatim
      *
      * @param command The command string entered by the user.
      */
@@ -103,11 +116,13 @@ signals:
     void cliModeChanged();        ///< CLI mode toggled.
     void cliOutputTextChanged();  ///< CLI transcript text updated (line appended or cleared).
 
-    /// @brief The `:qr` builtin requested a webcam QR capture.
-    ///
-    /// The QR worker lives on AppViewModel; the composition root connects this
-    /// to AppViewModel::requestQrCapture so the capture runs there and routes
-    /// its result back via handleQrResult / handleQrFailure when isCliMode().
+    /**
+     * @brief The `:qr` builtin requested a webcam QR capture.
+     *
+     * The QR worker lives on AppViewModel; the composition root connects this
+     * to AppViewModel::requestQrCapture so the capture runs there and routes
+     * its result back via handleQrResult / handleQrFailure when isCliMode().
+     */
     void qrCaptureRequested();
 
 private:

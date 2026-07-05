@@ -93,39 +93,39 @@ const char* categoryColor(std::string_view cat)
 {
     if (cat == "backend")
     {
-        return "\x1b[95m";  // bright magenta -- QML bridge / central event hub
+        return "\x1b[95m";  // bright magenta - QML bridge / central event hub
     }
     if (cat == "vault")
     {
-        return "\x1b[93m";  // bright yellow -- vault data
+        return "\x1b[93m";  // bright yellow - vault data
     }
     if (cat == "crypto")
     {
-        return "\x1b[92m";  // bright green -- security primitives
+        return "\x1b[92m";  // bright green - security primitives
     }
     if (cat == "fill")
     {
-        return "\x1b[94m";  // bright blue -- autofill action
+        return "\x1b[94m";  // bright blue - autofill action
     }
     if (cat == "bridge")
     {
-        return "\x1b[33m";  // dark yellow -- browser bridge (distinct from vault)
+        return "\x1b[33m";  // dark yellow - browser bridge (distinct from vault)
     }
     if (cat == "file")
     {
-        return "\x1b[36m";  // cyan -- file I/O
+        return "\x1b[36m";  // cyan - file I/O
     }
     if (cat == "app")
     {
-        return "\x1b[97m";  // bright white -- application lifecycle (distinct from INF cyan)
+        return "\x1b[97m";  // bright white - application lifecycle (distinct from INF cyan)
     }
     if (cat == "camera")
     {
-        return "\x1b[91m";  // bright red -- camera enumeration
+        return "\x1b[91m";  // bright red - camera enumeration
     }
     if (cat == "qr")
     {
-        return "\x1b[35m";  // dark magenta -- QR capture
+        return "\x1b[35m";  // dark magenta - QR capture
     }
     return "\x1b[95m";  // default: bright magenta (pre-change behaviour)
 }

@@ -32,7 +32,7 @@ struct CoTaskMemGuard
     CoTaskMemGuard& operator=(const CoTaskMemGuard&) = delete;
 };
 
-// RAII wcahr buffer that wipes on scope exit. Stack-allocated for the
+// RAII wchar buffer that wipes on scope exit. Stack-allocated for the
 // user/domain/password fields unpacked from CredUI output.
 template <size_t N>
 struct SecureWCharBuffer
@@ -514,7 +514,8 @@ seal::basic_secure_string<wchar_t> readPasswordSecureDesktop(const wchar_t* capt
     CoTaskMemGuard cred;
 
     // CREDUIWIN_ENUMERATE_CURRENT_USER pre-selects the logged-in account
-    // so the user only types the password. Runs on the secure desktop.
+    // so the user only types the password. CREDUIWIN_SECURE_PROMPT is not
+    // set, so this runs on the normal desktop (no secure-desktop guard).
     HRESULT hr = CredUIPromptForWindowsCredentialsW(&ui,
                                                     0,
                                                     &authPkg,
@@ -554,7 +555,7 @@ seal::basic_secure_string<wchar_t> readPasswordSecureDesktop(const wchar_t* capt
         DWORD err = GetLastError();
         if (err == ERROR_NOT_CAPABLE || err == ERROR_NOT_SUPPORTED)
         {
-            // Reset counts -- CredUnPackAuthenticationBufferW may have clobbered them.
+            // Reset counts - CredUnPackAuthenticationBufferW may have clobbered them.
             user.count = static_cast<DWORD>(256);
             dom.count = static_cast<DWORD>(256);
             pass.count = static_cast<DWORD>(512);
@@ -637,7 +638,7 @@ seal::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt)
     }
 
     // Widen with the active console codepage (often Windows-1252), NOT
-    // CP_UTF8 -- using UTF-8 would garble non-ASCII passwords and break
+    // CP_UTF8 - using UTF-8 would garble non-ASCII passwords and break
     // key derivation.
     seal::basic_secure_string<wchar_t> result;
     if (!narrow.empty())

@@ -240,7 +240,7 @@ void CliPanelViewModel::handleQrResult(const QString& text)
                                 seal::diag::kv("payload_len", text.size()),
                                 "copied=true"}));
     seal::Cryptography::cleanseString(narrow);
-    // Mask QR text in the CLI -- value lands on the clipboard (TTL-scrubbed).
+    // Mask QR text in the CLI - value lands on the clipboard (TTL-scrubbed).
     appendCliOutput(QString("(QR captured) %1  [copied]").arg(QString(text.size(), QChar('*'))));
 }
 

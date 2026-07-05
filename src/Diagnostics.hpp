@@ -37,6 +37,28 @@ namespace seal
  *      seal::diag::kv("op", op),
  *      seal::diag::kv("duration_ms", seal::diag::elapsedMs(started))}));
  * ```
+ *
+ * @par Canonical log line
+ * @code
+ * event=<dotted.scope.phase> result=<start|ok|fail> [reason=<token>] [key=value ...]
+ *
+ * event=vault.load.ok   result=ok   op=vault_load-000042 duration_ms=12
+ * event=vault.load.fail result=fail reason=wrong_password op=vault_load-000043
+ * @endcode
+ *
+ * `event=` and `result=` are literal caller-written tokens; every dynamic
+ * value passes through kv() so the whole line round-trips a whitespace split.
+ *
+ * @par Field builders at a glance
+ * | Helper                 | Emits                                          |
+ * |------------------------|------------------------------------------------|
+ * | `nextOpId(scope)`      | `<scope>-<6-digit seq>` correlation id         |
+ * | `kv(key, value)`       | one normalised `key=value` token               |
+ * | `joinFields({...})`    | non-empty tokens joined by single spaces       |
+ * | `pathSummary(path)`    | `kind= path_len= base_len= ext=` (no raw path) |
+ * | `sanitizeAscii(text)`  | printable-ASCII, length-capped value           |
+ * | `reasonFromMessage(m)` | stable `reason=` token from error text         |
+ * | `elapsedMs(start)`     | milliseconds since `start`                     |
  */
 namespace diag
 {
@@ -82,6 +104,15 @@ std::string sanitizeAscii(std::string_view text, size_t maxLen = 96);
  * The `kind` is one of `empty`, `stdin` (for `-`), `dir_hint` (trailing
  * separator), `file_hint` (has an extension), or `opaque`.
  *
+ * @par kind classification (checked top-to-bottom, first match wins)
+ * | `kind`      | Condition                       |
+ * |-------------|---------------------------------|
+ * | `empty`     | path is empty                   |
+ * | `stdin`     | path is `-`                     |
+ * | `dir_hint`  | last char is `\` or `/`         |
+ * | `file_hint` | has a file extension            |
+ * | `opaque`    | none of the above               |
+ *
  * @param path Path to summarise. Not included verbatim in the output.
  * @return Space-separated fields describing the path metadata.
  *
@@ -108,9 +139,23 @@ std::string pathSummary(std::string_view path, std::string_view prefix);
  * @ingroup Logging
  *
  * Pattern-matches case-insensitive substrings of @p message against a
- * table of canonical reasons -- for example `"wrong password"` ->
+ * table of canonical reasons - for example `"wrong password"` ->
  * `wrong_password`, `"bad magic"` -> `corrupt_data`. Messages that
  * match nothing fall through to `exception`.
+ *
+ * @par Substring -> reason (checked top-to-bottom, first hit wins)
+ * | Matched substring (lowercased)                            | Reason token         |
+ * |-----------------------------------------------------------|----------------------|
+ * | `wrong password`                                          | `wrong_password`     |
+ * | `authentication`, `auth failed`                           | `auth_failed`        |
+ * | `timeout`                                                 | `timeout`            |
+ * | `cannot open`, `failed to open`                           | `open_failed`        |
+ * | `rename`                                                  | `rename_failed`      |
+ * | `invalid`                                                 | `invalid_input`      |
+ * | `unsupported`                                             | `unsupported_format` |
+ * | `truncated`, `corrupt`, `malformed`, `bad magic`, ...     | `corrupt_data`       |
+ * | `no data`, `empty`                                        | `empty_input`        |
+ * | (no match)                                                | `exception`          |
  *
  * @param message Free-form error text (typically from `std::exception::what()`).
  * @return One of: `wrong_password`, `auth_failed`, `timeout`,
@@ -128,7 +173,7 @@ std::string reasonFromMessage(std::string_view message);
  * restricted to `[A-Za-z0-9_.\-/:+]`; spaces become `_` and any other
  * disallowed byte becomes `?`. Empty values collapse to `none`.
  *
- * @param key   Field name (emitted verbatim -- caller must supply a safe key).
+ * @param key   Field name (emitted verbatim - caller must supply a safe key).
  * @param value Field value to normalise.
  * @return The token `key=normalised_value`.
  */

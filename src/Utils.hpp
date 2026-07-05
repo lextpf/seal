@@ -97,9 +97,9 @@ template <std::ranges::input_range R>
 /**
  * @brief Decode a hex string_view into an output iterator.
  * @ingroup Utilities
- * @param hex Hex-encoded input (must be even length).
+ * @param hex Hex-encoded input (must be non-empty and even length).
  * @param out Output iterator receiving decoded bytes.
- * @return `true` on success, `false` on odd-length or invalid hex characters.
+ * @return `true` on success, `false` on empty, odd-length, or invalid hex input.
  */
 [[nodiscard]] constexpr bool from_hex_sv(std::string_view hex,
                                          std::output_iterator<unsigned char> auto out)
@@ -131,7 +131,9 @@ template <std::ranges::input_range R>
  * @ingroup Utilities
  * @tparam Cont Contiguous byte-like container (e.g. `std::vector<unsigned char>`).
  * @param hex Hex-encoded input.
- * @param out Destination container (cleared and resized).
+ * @param out Destination container. Cleared on entry, then filled with the
+ *            decoded bytes; on failure it may retain a partial prefix (the
+ *            bytes decoded before an invalid character was reached).
  * @return `true` on success, `false` on invalid hex.
  */
 template <std::ranges::contiguous_range Cont>
@@ -157,9 +159,22 @@ template <std::ranges::contiguous_range Cont>
  * @param raw Input text potentially containing hex-encoded data.
  * @return Vector of hex token strings. Tokens shorter than the minimum
  *         AES-256-GCM framing overhead (salt + IV + tag = 88 hex chars)
- *         are discarded. Actual packets also contain a 4-byte AAD header,
- *         so the true minimum packet length is 96 hex chars; this threshold
- *         is intentionally lenient to avoid rejecting candidate tokens.
+ *         are discarded. Actual packets also contain an 8-byte AAD header
+ *         (`cfg::HDR_LEN`), so the true minimum packet length is 104 hex
+ *         chars; this threshold is intentionally lenient to avoid rejecting
+ *         candidate tokens.
+ *
+ * @par Framing overhead
+ * Byte sizes are the @c cfg constants (`SALT_LEN` 16, `IV_LEN` 12, `TAG_LEN` 16,
+ * `HDR_LEN` 8); hex encodes two chars per byte:
+ * | Component         | Bytes | Hex chars |
+ * |-------------------|-------|-----------|
+ * | Salt              | 16    | 32        |
+ * | IV                | 12    | 24        |
+ * | Tag               | 16    | 32        |
+ * | Discard threshold | 44    | 88        |
+ * | AAD header        | 8     | 16        |
+ * | True min packet   | 52    | 104       |
  */
 [[nodiscard]] std::vector<std::string> extractHexTokens(const std::string& raw);
 
@@ -282,7 +297,19 @@ template <std::ranges::range PathLike, std::ranges::contiguous_range Cont>
  * @brief Check whether a string looks like valid Base64.
  * @ingroup Utilities
  * @param s String to test.
- * @return `true` if the string contains only Base64 characters.
+ * @return `true` only when @p s is non-empty, its length is a multiple of 4,
+ *         every character is in the Base64 alphabet, and at least one character
+ *         lies outside the hex alphabet (`G`-`Z`, `g`-`z`, `+`, `/`, `=`). That
+ *         last condition makes pure-hex input return `false` so it is not
+ *         misrouted through Base64 decoding.
+ *
+ * @par Classification predicate
+ * All three checks must hold for a `true` result:
+ * | Check         | Requirement                                               |
+ * |---------------|-----------------------------------------------------------|
+ * | Length        | at least 4 and a multiple of 4                            |
+ * | Alphabet      | every char in `A`-`Z` `a`-`z` `0`-`9` `+` `/` `=`         |
+ * | Hex-ambiguity | at least one char in `G`-`Z` `g`-`z` `+` `/` `=` (non-hex)|
  */
 [[nodiscard]] bool isBase64(const std::string& s);
 

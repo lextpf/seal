@@ -18,7 +18,7 @@ namespace seal
  *
  * If the stream is not a console, or VT processing cannot be enabled
  * (redirected output, legacy terminal), all writes transparently fall
- * back to uncoloured plain text -- callers never need to branch on
+ * back to uncoloured plain text - callers never need to branch on
  * terminal capability.
  *
  * @note Only `std::cout` and `std::cerr` are tracked; any other stream
@@ -35,18 +35,31 @@ namespace console
  * that matches the *meaning* of the message (success, warning, step
  * progress) rather than a raw colour, so the palette can be retuned
  * centrally without touching call sites.
+ *
+ * @par Palette (SGR foreground code)
+ * | Tone      | SGR  | Colour             |
+ * |-----------|------|--------------------|
+ * | `Plain`   | none | (uncoloured)       |
+ * | `Debug`   | `90` | bright black / grey |
+ * | `Info`    | `36` | cyan               |
+ * | `Step`    | `94` | bright blue        |
+ * | `Success` | `92` | bright green       |
+ * | `Warning` | `93` | bright yellow      |
+ * | `Error`   | `91` | bright red         |
+ * | `Summary` | `95` | bright magenta     |
+ * | `Banner`  | `96` | bright cyan        |
  */
 enum class Tone
 {
-    Plain,    ///< No colour -- emit text unchanged.
-    Debug,    ///< Bright black / grey -- low-signal trace output.
-    Info,     ///< Cyan -- informational status.
-    Step,     ///< Bright blue -- progress step in a multi-phase operation.
-    Success,  ///< Bright green -- successful completion.
-    Warning,  ///< Bright yellow -- recoverable anomaly.
-    Error,    ///< Bright red -- failure.
-    Summary,  ///< Bright magenta -- end-of-run aggregate output.
-    Banner    ///< Bright cyan -- headers and section dividers.
+    Plain,    ///< No colour - emit text unchanged.
+    Debug,    ///< Bright black / grey - low-signal trace output.
+    Info,     ///< Cyan - informational status.
+    Step,     ///< Bright blue - progress step in a multi-phase operation.
+    Success,  ///< Bright green - successful completion.
+    Warning,  ///< Bright yellow - recoverable anomaly.
+    Error,    ///< Bright red - failure.
+    Summary,  ///< Bright magenta - end-of-run aggregate output.
+    Banner    ///< Bright cyan - headers and section dividers.
 };
 
 /**
@@ -105,8 +118,8 @@ bool ConfirmDestructive(bool force, std::istream& in, std::ostream& err, const c
 struct LogSegments
 {
     std::string_view timestamp;  ///< Formatted wall-clock timestamp (e.g. `HH:mm:ss.zzz`).
-    std::string_view level;      ///< Severity token (e.g. `DEBUG`, `WARN`, `FATAL`).
-    std::string_view category;   ///< Qt logging category (e.g. `seal.vault`).
+    std::string_view level;      ///< Severity token (e.g. `DBG`, `WRN`, `FTL`).
+    std::string_view category;   ///< Qt logging category, bare/no prefix (e.g. `vault`).
     std::string_view threadId;   ///< Originating thread identifier.
     std::string_view message;    ///< Log message body.
 };
@@ -126,6 +139,26 @@ struct LogSegments
  * full line reads as a single alert; other tones leave the message in
  * the default colour. Unrecognised categories fall back to bright
  * magenta.
+ *
+ * @par Segment emphasis
+ * @verbatim
+ * [timestamp] [level] [category] [tid=threadId] message
+ *    dim       tone     accent        dim       default (tinted on Warn/Error)
+ * @endverbatim
+ *
+ * @par Category accent (SGR foreground code)
+ * | Category  | SGR  | Colour         |
+ * |-----------|------|----------------|
+ * | `backend` | `95` | bright magenta |
+ * | `vault`   | `93` | bright yellow  |
+ * | `crypto`  | `92` | bright green   |
+ * | `fill`    | `94` | bright blue    |
+ * | `bridge`  | `33` | yellow (dark)  |
+ * | `file`    | `36` | cyan           |
+ * | `app`     | `97` | bright white   |
+ * | `camera`  | `91` | bright red     |
+ * | `qr`      | `35` | magenta (dark) |
+ * | (other)   | `95` | bright magenta |
  *
  * @param os        Destination stream (typically `std::cerr`).
  * @param levelTone Colour for the `[level]` bracket and warn/error messages.

@@ -139,7 +139,7 @@ seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> utf8ToSecure
     return result;
 }
 
-// Inverse of utf8ToSecureWide; output is NOT locked memory -- caller
+// Inverse of utf8ToSecureWide; output is NOT locked memory - caller
 // must cleanse promptly after use.
 std::string secureWideToUtf8(
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& wide)

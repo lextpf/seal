@@ -33,11 +33,27 @@ struct CliCallbacks
 
 /**
  * @brief Dispatch a CLI built-in command that does not require the master password.
- * @author Alex (https://github.com/lextpf)
  * @ingroup CliHandler
  *
  * Handles: `:help`, `:open`, `:copy`, `:clear`, `:cls`, `:gen`, `:qr`,
  * `:fill`, `:hex`, `:unhex`.
+ *
+ * @par Built-in commands
+ * | Command (aliases) | Effect |
+ * |---|---|
+ * | `:help` `:h` | Print the command list |
+ * | `:open` `:o` `:edit` | Open the seal input file in Notepad |
+ * | `:copy` `:clip` `:copyfile` `:copyinput` | Copy the seal input file to the clipboard |
+ * | `:clear` `:none` | Clear the clipboard |
+ * | `:cls` `:clear-screen` | Clear the CLI output panel |
+ * | `:gen [len]` | Generate a password (default 20, clamped 8..128), then copy |
+ * | `:qr` | Launch webcam QR capture |
+ * | `:fill <svc>` | Arm auto-fill for a service by name |
+ * | `:hex <text>` | Hex-encode text, copy to clipboard |
+ * | `:unhex <hex>` | Hex-decode to text, copy to clipboard |
+ *
+ * Any other input returns `false` (a potential secret, routed to the
+ * password-gated crypto dispatch).
  *
  * @param command Trimmed command string.
  * @param cb      Callbacks for output and AppViewModel interaction.
@@ -49,7 +65,6 @@ bool HandleCliBuiltin(const QString& command, const CliCallbacks& cb);
 
 /**
  * @brief Build the masked echo line for a CLI command.
- * @author Alex (https://github.com/lextpf)
  * @ingroup CliHandler
  *
  * Colocated with the command definitions so the set of commands that are
@@ -58,6 +73,14 @@ bool HandleCliBuiltin(const QString& command, const CliCallbacks& cb);
  * the command word (their arguments may be sensitive); everything else
  * (potential secrets: plaintext, hex, base64, file paths) echoes as
  * `[input hidden]`.
+ *
+ * @par Echo masking
+ * | Input (trimmed) | Echo line |
+ * |---|---|
+ * | a fixed non-secret command (help/open/copy/clear/cls/qr and aliases) | `seal> <command>` |
+ * | starts with `:gen` | `seal> :gen` |
+ * | starts with `:fill` | `seal> :fill` |
+ * | anything else (text, hex, base64, paths, `:hex`, `:unhex`) | `seal> [input hidden]` |
  *
  * @param command Raw command string as entered by the user.
  * @return The `seal> ...` echo line to append to the CLI transcript.

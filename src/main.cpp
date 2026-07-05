@@ -507,7 +507,7 @@ static int initializeSecurity(bool allowDynamicCode)
 {
     // Order: debugger check first (fail fast before secrets load), process
     // mitigations (CFG/DEP/ASLR/dynamic-code), then heap/access hardening,
-    // then SeLockMemoryPrivilege -- required before any secure_string
+    // then SeLockMemoryPrivilege - required before any secure_string
     // allocation hits VirtualLock.
     seal::Cryptography::detectDebugger();
 
@@ -1090,7 +1090,7 @@ static void processSealFileBatch(seal::DPAPIGuard<seal::basic_secure_string<wcha
 }
 
 // Re-read "seal" on Esc. Only fires when the file contains real paths
-// (not raw hex) -- a quick re-encrypt/re-decrypt shortcut on exit.
+// (not raw hex) - a quick re-encrypt/re-decrypt shortcut on exit.
 static bool handleEscSealFile(seal::DPAPIGuard<seal::basic_secure_string<wchar_t>>& dpapi,
                               seal::basic_secure_string<wchar_t>& password)
 {
@@ -1128,11 +1128,9 @@ static int handleCliMode()
         seal::basic_secure_string<wchar_t> password = seal::readPasswordConsole();
         seal::DPAPIGuard<seal::basic_secure_string<wchar_t>> dpapi(&password);
 
-        // CLI startup:
-        //   1. Run the "seal" file as a startup batch (if present).
-        //   2. Interactive loop: lines end with '?' (masked) or '!'
-        //      (uncensored).
-        //   3. Esc re-runs "seal" once and exits cleanly.
+        // CLI startup: 1. run the "seal" file as a startup batch (if present);
+        // 2. interactive loop, lines end with '?' (masked) or '!' (uncensored);
+        // 3. Esc re-runs "seal" once and exits cleanly.
         processSealFileBatch(dpapi, password);
 
         std::cout << "+----------------------------------------- seal - Interactive Mode "
@@ -1175,12 +1173,9 @@ static int handleCliMode()
     return 0;
 }
 
-// Entry point. Dispatches by mode:
-//   -e/-d         stream encrypt/decrypt (stdin->stdout)
-//   -u / no args  Qt GUI mode (default)
-//   --cli         interactive console
-//   --import/--export  vault import/export
-//   -h/--help     usage
+// Entry point. Dispatches by mode: -e/-d stream encrypt/decrypt (stdin->stdout);
+// -u / no args Qt GUI mode (default); --cli interactive console; --import/--export
+// vault import/export; -h/--help usage.
 int main(int argc, char* argv[])
 {
     ProgramOptions opts;

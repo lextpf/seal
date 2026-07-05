@@ -36,10 +36,28 @@ namespace seal
  *
  * ## :material-console: Console State
  *
- * On construction the console input mode is saved, and mouse input is
- * enabled for hit-testing. On destruction the original mode is restored
- * automatically (RAII). Layout adapts to the current console window
- * size; entries that exceed the visible area are clipped.
+ * Layout is computed at construction from the current console window
+ * size; entries that exceed the visible area are clipped. The interactive
+ * loop (run()) saves the console input mode, enables mouse input for
+ * hit-testing, and restores the original mode automatically on return
+ * (RAII via the `scoped_console` guard local to run()).
+ *
+ * ## :material-view-column: Masked Row & Hit Regions
+ *
+ * Each entry renders as one row; the two 8-column `********` spans
+ * (`MASKED_WIDTH` = 8) are the click zones. Because the field labels and
+ * the masked spans are both 8 columns wide, they line up exactly:
+ *
+ * @verbatim
+ * N) <service>:********:********
+ *              username password
+ * @endverbatim
+ *
+ * With `u0` = width of `"N) <service>:"`, the row's hit regions are
+ * `[u0, u0+7]` (username) and `[u0+9, u0+16]` (password), separated by the
+ * inert `:`. A click inside a span starts a `COUNTDOWN_SEC` (3 s) grace -
+ * letting the user focus the target window - then types that field via
+ * typeSecret(). Long service names are truncated with `...` to fit.
  */
 class MaskedCredentialView
 {
@@ -169,8 +187,8 @@ std::pair<std::vector<std::string>, bool> readBulkLinesDualFrom(std::istream& in
  * - **Escape** to cancel (returns `false`)
  * - **Ctrl+C** / **Ctrl+Z** to interrupt / signal EOF
  * - `?` or `!` on its own line to terminate (sets uncensored flag)
- * - `:open` / `:edit` to launch the seal file in Notepad
- * - `:copy` / `:clip` to copy the seal file to the clipboard
+ * - `:open` / `:o` / `:edit` to launch the seal file in Notepad
+ * - `:copy` / `:clip` / `:copyfile` / `:copyinput` to copy the seal file to the clipboard
  * - `:clear` / `:none` to empty the clipboard
  *
  * @param[out] out Receives the collected lines and uncensored flag on success.
@@ -186,10 +204,11 @@ bool readBulkLinesDualOrEsc(std::pair<std::vector<std::string>, bool>& out);
 /**
  * @brief Prompt for a password using the Windows Credentials UI.
  *
- * Displays the `CredUIPromptForWindowsCredentialsW` dialog, which runs on
- * the secure desktop to prevent keylogging. The password field from the
- * dialog is extracted into a `basic_secure_string<wchar_t>`, and all
- * intermediate credential buffers are securely wiped via RAII guards.
+ * Displays the `CredUIPromptForWindowsCredentialsW` dialog with
+ * `CREDUIWIN_ENUMERATE_CURRENT_USER`, pre-selecting the logged-in account
+ * so only the password need be typed. The password field from the dialog
+ * is extracted into a `basic_secure_string<wchar_t>`, and all intermediate
+ * credential buffers are securely wiped via RAII guards.
  *
  * @param caption Dialog title bar text (default `"seal AES-256-GCM"`).
  * @param message Dialog body text (default `"Enter your master password."`).
@@ -197,6 +216,11 @@ bool readBulkLinesDualOrEsc(std::pair<std::vector<std::string>, bool>& out);
  *
  * @throw std::runtime_error if the user cancels the dialog or the
  *        credential packing/unpacking API calls fail.
+ *
+ * @note This does not request the secure desktop: `CREDUIWIN_SECURE_PROMPT`
+ *       is not passed, so unless a system policy forces secure credential
+ *       prompting the dialog appears on the normal desktop and offers no
+ *       inherent protection against keyloggers.
  *
  * @post All intermediate buffers (packed credentials, username, domain,
  *       password) are scrubbed with `SecureZeroMemory`.
