@@ -2,26 +2,9 @@ pragma Singleton
 import QtQuick
 import QtCore
 
-// Centralized design token singleton. Every visual property (colors, spacing,
-// radii, fonts, icons) lives here so components never hard-code values.
-//
-// Theme switching is a single `dark` property flip: every color binding
-// re-evaluates via the pick() helper, and QML's reactive system propagates
-// the change to all consumers automatically. The `dark` preference is persisted
-// via Qt Settings so it survives application restarts.
-//
-// Color philosophy:
-//   Dark mode  = deep navy-black base with blue/purple accents
-//   Light mode = bright cool-white base with cobalt/teal accents
-// Semi-transparent fills (alpha < 1) let the background blobs bleed through
-// for a layered glass-like depth effect.
-
 QtObject {
     id: root
 
-    // HiDPI text scaling. On screens wider than 1920 physical pixels, text
-    // scales up proportionally with a 0.45 dampening factor to stay readable
-    // without becoming oversized. Clamped to [1.0, 1.5].
     function detectTextScale() {
         var screens = (Qt.application && Qt.application.screens) ? Qt.application.screens : [];
         if (!screens || screens.length === 0)
@@ -50,22 +33,15 @@ QtObject {
         return Math.max(1, Math.round(base * textScale));
     }
 
-    // Current theme mode. Bound via Settings alias so it persists to the
-    // platform's native storage (registry on Windows, plist on macOS).
-    // toggle() is called from the sun/moon icon in HeaderBar.
+    function pxf(base) {
+        return base * textScale;
+    }
+
     property bool dark: true
     function toggle() { dark = !dark }
 
-    // Palette selector: returns the dark-mode or light-mode value based on
-    // the current theme. Every color property below uses pick(darkVal, lightVal)
-    // instead of an inline ternary, keeping definitions concise and scannable.
-    // QML's binding system tracks the `dark` dependency inside the function,
-    // so all consumers re-evaluate automatically when the theme toggles.
     function pick(d, l) { return dark ? d : l }
 
-    // Persisted accounts-grid sort preference. Maps to VaultListModel::SortMode
-    // (0 = A-Z, 1 = Z-A, 2 = Grouped by brand). Stored alongside `dark` so all
-    // UI prefs share the same Settings group.
     property int sortMode: 0
 
     property Settings _settings: Settings {
@@ -73,16 +49,10 @@ QtObject {
         property alias sortMode: root.sortMode
     }
 
-    // -- Background layers --
-    // Semi-transparent bgCard lets background blobs bleed through for depth.
     property color bgDeep:            pick("#060a14", "#f4f7fb")
     property color bgSurface:         pick("#0a101c", "#eaf0f7")
     property color bgCard:            pick(Qt.rgba(0.03, 0.06, 0.12, 0.78), Qt.rgba(0.975, 0.985, 1.0, 0.95))
     property color bgCardEnd:         pick(Qt.rgba(0.02, 0.05, 0.11, 0.86), Qt.rgba(0.95, 0.965, 0.985, 0.98))
-    // The accounts-grid card sits directly over the animated background blobs,
-    // so it runs noticeably more transparent than bgCard/bgCardEnd (which back
-    // the search field and the empty-state panels). The lower alpha lets the
-    // floating blobs read through beneath the chips as moving colour.
     property color bgGrid:            pick(Qt.rgba(0.03, 0.06, 0.12, 0.50), Qt.rgba(0.975, 0.985, 1.0, 0.40))
     property color bgGridEnd:         pick(Qt.rgba(0.02, 0.05, 0.11, 0.60), Qt.rgba(0.95, 0.965, 0.985, 0.50))
     property color bgDialog:          pick("#101828", "#fafbfd")
@@ -99,9 +69,6 @@ QtObject {
 
     property color bgHeaderTop:       pick(Qt.rgba(0.04, 0.08, 0.18, 0.96), Qt.rgba(0.96, 0.975, 0.995, 0.98))
     property color bgHeaderEnd:       pick(Qt.rgba(0.03, 0.06, 0.16, 0.98), Qt.rgba(0.88, 0.91, 0.96, 0.99))
-    // Footer runs as transparent as the accounts-grid card (bgGrid/bgGridEnd)
-    // so the floating background blobs stay visible through the bottom bar; the
-    // faint top border (borderDim) still separates it from the content above.
     property color bgFooterTop:       pick(Qt.rgba(0.02, 0.05, 0.12, 0.50), Qt.rgba(0.90, 0.93, 0.97, 0.40))
     property color bgFooterEnd:       pick(Qt.rgba(0.02, 0.04, 0.10, 0.60), Qt.rgba(0.82, 0.86, 0.92, 0.50))
     property color surfaceHighlight:  pick(Qt.rgba(0.74, 0.84, 1.0, 0.16), Qt.rgba(1.0, 1.0, 1.0, 0.78))
@@ -116,11 +83,6 @@ QtObject {
     property color statusChipEnd:     pick(Qt.rgba(0.04, 0.08, 0.18, 0.90), Qt.rgba(0.88, 0.92, 0.97, 0.94))
     property color statusChipBorder:  pick(Qt.rgba(0.36, 0.50, 0.88, 0.24), Qt.rgba(0.34, 0.48, 0.72, 0.24))
     property color statusChipText:    pick("#b6c6e6", "#2a3a56")
-    // "On" state of the bridge status chip. Cool soft blue in both themes —
-    // distinct from every color already used in the button row above (Add
-    // teal-green, Edit purple, Delete red, Fill yellow-green) and a calming
-    // pairing with the green status dot. The "off" state uses the regular
-    // statusChip tokens (neutral muted gray-blue).
     property color statusChipStrongTop:
                                       pick(Qt.rgba(0.10, 0.18, 0.34, 0.88), Qt.rgba(0.84, 0.90, 0.97, 0.94))
     property color statusChipStrongEnd:
@@ -130,11 +92,6 @@ QtObject {
     property color statusChipStrongText:
                                       pick("#b8d0ff", "#1c3b78")
 
-    // -- Button palettes --
-    // Each button type carries four gradient states: rest, hover, pressed, disabled.
-    // Alpha < 1 on all fills lets the background tint show through, maintaining the
-    // layered glass aesthetic. Icon buttons (Load/Save/Unload) share a single neutral
-    // palette; CRUD buttons each have a unique semantic hue.
     property color iconBtnTop:        pick(Qt.rgba(0.04, 0.08, 0.20, 0.82), Qt.rgba(0.91, 0.94, 0.97, 0.90))
     property color iconBtnEnd:        pick(Qt.rgba(0.03, 0.06, 0.16, 0.86), Qt.rgba(0.87, 0.91, 0.96, 0.94))
     property color iconBtnHoverTop:   pick(Qt.rgba(0.08, 0.14, 0.32, 0.90), Qt.rgba(0.86, 0.91, 0.96, 0.94))
@@ -201,8 +158,6 @@ QtObject {
     property color accent2:           pick("#50d0cc", "#2e8b86")
     property color accent2Dim:        pick("#4a8a88", "#3e8a85")
 
-    // Tertiary accent (rose in dark, violet in light) completing the
-    // three-color system used across table columns and dialog labels.
     property color accent3:           pick("#d89090", "#8868a0")
     property color accent3Dim:        pick("#907070", "#6b4f8a")
 
@@ -216,10 +171,6 @@ QtObject {
     property color fillArmedDot:      pick("#c0d848", "#5a7a20")
     property color borderFillArmed:   pick(Qt.rgba(0.55, 0.72, 0.18, 0.45), Qt.rgba(0.38, 0.52, 0.12, 0.45))
 
-    // -- Text colors --
-    // Graduated hierarchy: primary > secondary > muted > disabled > subtle.
-    // Dark mode uses saturated navy-black; light mode uses cool blue-white.
-    // Grey tones are avoided in favor of hue-carrying values throughout.
     property color textPrimary:       pick("#e6ecf6", "#141c28")
     property color textSecondary:     pick("#b4c0d6", "#2f4158")
     property color textMuted:         pick("#5c70a8", "#4e637d")
@@ -236,11 +187,6 @@ QtObject {
     property color textTooltip:       pick("#c6cee6", "#e0e8f2")
     property color textBadge:         pick("#94a8d0", "#364860")
 
-    // -- Borders --
-    // Graduated alpha scale from borderDim (nearly invisible) to borderBright
-    // (clearly visible). All share the same base hue per theme so borders look
-    // cohesive regardless of intensity. Components pick the level that matches
-    // their visual weight (e.g. cards use borderSubtle, focused inputs use borderFocus).
     property color borderDim:         pick(Qt.rgba(0.35, 0.45, 0.85, 0.08), Qt.rgba(0.24, 0.36, 0.56, 0.11))
     property color borderSoft:        pick(Qt.rgba(0.35, 0.45, 0.85, 0.12), Qt.rgba(0.24, 0.36, 0.56, 0.16))
     property color borderSubtle:      pick(Qt.rgba(0.35, 0.45, 0.85, 0.15), Qt.rgba(0.24, 0.36, 0.56, 0.22))
@@ -269,27 +215,23 @@ QtObject {
 
     property color rippleColor:       pick(Qt.rgba(1.0, 1.0, 1.0, 0.25), Qt.rgba(0.0, 0.0, 0.0, 0.18))
 
-    // Background blobs: three distinct hues bleeding through the semi-transparent
-    // surfaces for layered depth. Each hue contrasts with the others (purple /
-    // teal / magenta in dark; cobalt / teal / lilac in light). Light runs a
-    // HIGHER alpha than dark: a colour glowing over the near-black dark base
-    // reads at far lower alpha than the same colour tinting the near-white light
-    // base, so to keep the blobs equally visible in both themes light needs the
-    // stronger fill. Surfaces (bgGrid/footer) sit at matched transparency in both
-    // themes so the field reads through identically.
     property color blobColor1:        pick(Qt.rgba(0.32, 0.22, 0.88, 0.084), Qt.rgba(0.20, 0.47, 0.90, 0.22))
     property color blobColor2:        pick(Qt.rgba(0.08, 0.58, 0.68, 0.078), Qt.rgba(0.12, 0.56, 0.54, 0.20))
     property color blobColor3:        pick(Qt.rgba(0.65, 0.12, 0.55, 0.070), Qt.rgba(0.54, 0.34, 0.82, 0.18))
 
-    // Drifting motes (see Main.qml): tiny plankton/snow specks. Kept fainter
-    // than the blobs so they stay a peripheral texture, not bright dots. (The
-    // Mote's own twinkle multiplies this, so the effective alpha peaks ~0.09.)
+    property color auroraIndigo:      pick(Qt.rgba(0.42, 0.34, 0.95, 1.0), Qt.rgba(0.30, 0.22, 0.78, 1.0))
+    property color auroraTeal:        pick(Qt.rgba(0.22, 0.74, 0.82, 1.0), Qt.rgba(0.08, 0.52, 0.60, 1.0))
+    property color auroraMagenta:     pick(Qt.rgba(0.82, 0.30, 0.74, 1.0), Qt.rgba(0.64, 0.16, 0.55, 1.0))
+    property color auroraGlowIndigo:  pick(Qt.rgba(0.60, 0.54, 1.00, 1.0), Qt.rgba(0.30, 0.22, 0.78, 1.0))
+    property color auroraGlowTeal:    pick(Qt.rgba(0.50, 0.90, 0.98, 1.0), Qt.rgba(0.08, 0.52, 0.60, 1.0))
+    property color auroraGlowMagenta: pick(Qt.rgba(0.98, 0.60, 0.92, 1.0), Qt.rgba(0.64, 0.16, 0.55, 1.0))
+    property color verdictSeal:       pick(Qt.rgba(0.26, 0.84, 0.55, 1.0), Qt.rgba(0.05, 0.55, 0.32, 1.0))
+    property color verdictSealFlash:  pick(Qt.rgba(0.62, 0.98, 0.80, 1.0), Qt.rgba(0.00, 0.47, 0.30, 1.0))
+    property color verdictBreak:      pick(Qt.rgba(1.00, 0.41, 0.41, 1.0), Qt.rgba(0.78, 0.19, 0.19, 1.0))
+    property color verdictBreakSoft:  pick(Qt.rgba(0.97, 0.45, 0.58, 1.0), Qt.rgba(0.80, 0.30, 0.42, 1.0))
+
     property color moteColor:    pick(Qt.rgba(0.82, 0.90, 1.0, 0.12), Qt.rgba(0.22, 0.45, 0.88, 0.20))
 
-    // Dialog background blobs: higher alpha than main-window blobs because
-    // dialogs paint on a solid bgDialog fill (not semi-transparent) and sit
-    // under a modal overlay, so colors read on top rather than bleeding
-    // through. Same three hues / order as blobColor1-3 for family cohesion.
     property color dialogBlobColor1:  pick(Qt.rgba(0.32, 0.22, 0.88, 0.14), Qt.rgba(0.20, 0.47, 0.90, 0.11))
     property color dialogBlobColor2:  pick(Qt.rgba(0.08, 0.58, 0.68, 0.13), Qt.rgba(0.12, 0.56, 0.54, 0.10))
     property color dialogBlobColor3:  pick(Qt.rgba(0.65, 0.12, 0.55, 0.12), Qt.rgba(0.54, 0.34, 0.82, 0.09))
@@ -326,12 +268,6 @@ QtObject {
     readonly property int iconSizeSmall:     px(13)
     readonly property int iconSizeMedium:    px(15)
 
-    // Chip background palette for the accounts grid. Used as the fallback when
-    // a chip has no recognized brand icon (no entry in brandColors). 8 hues
-    // chosen to read well at α=0.12 (idle fill), α=0.22 (hover), and α=1.0
-    // (monogram circle / selected). The array re-evaluates on dark/light
-    // toggle because pick() is invoked at binding time; each entry is
-    // independent.
     readonly property var chipPalette: [
         pick("#80b0ff", "#2f6fd6"),  // blue
         pick("#50d0cc", "#2e8b86"),  // teal
@@ -343,13 +279,6 @@ QtObject {
         pick("#a090d8", "#5040a0"),  // indigo
     ]
 
-    // Real brand colors keyed by the asset slug BrandIconResolver returns
-    // (the filename under assets/brands/ without the .svg suffix). Used so
-    // recognizable services (GitHub, Bitcoin, Discord, ...) read with their
-    // actual identity rather than a hash-mapped accent. Slugs not listed
-    // here fall back to chipPalette via the FNV-1a hash. Pure black/white
-    // brand colors are nudged toward a brand-adjacent hue that survives both
-    // dark and light themes (e.g. X uses Twitter cyan instead of #000000).
     readonly property var brandColors: ({
         "github":              "#6e7681",
         "square-github":       "#6e7681",
@@ -476,9 +405,6 @@ QtObject {
         "wpbeginner":          "#ed5a45",
     })
 
-    // Strip the qrc prefix/.svg suffix off a brandIconPath to recover the
-    // bare asset slug for use as a brandColors key. Returns "" if path is
-    // empty or doesn't match the expected layout.
     function brandSlugFromPath(path)
     {
         if (!path) return "";
@@ -489,10 +415,6 @@ QtObject {
         return path.substring(prefix.length, path.length - suffix.length);
     }
 
-    // Chip color resolver. If we recognize the brand (icon resolved AND the
-    // slug has a curated brand color), use the brand identity. Otherwise hash
-    // the platform name into a chipPalette slot so unbranded chips still get
-    // a deterministic-but-arbitrary hue.
     function chipColorFor(name, brandSlug)
     {
         if (brandSlug && brandSlug.length > 0) {
@@ -508,21 +430,12 @@ QtObject {
         return chipPalette[h % chipPalette.length];
     }
 
-    // Return a readable foreground color (white or near-black) for text /
-    // glyphs that sit on top of `color` at full alpha — used on the selected
-    // chip background and on the monogram-circle letter so bright brand hues
-    // (Snapchat yellow, Linux yellow, ...) don't end up with white-on-white.
     function chipTextOn(color)
     {
         var lum = 0.299 * color.r + 0.587 * color.g + 0.114 * color.b;
         return lum > 0.55 ? "#15171d" : "#ffffff";
     }
 
-    // SVG icon paths. SvgIcon.qml wraps IconImage for runtime recoloring.
-    // The new duotone/ asset set uses FA's "alt" suffix convention (lock-alt,
-    // pen-alt, trash-alt, ...) rather than bare names, and substitutes some
-    // icons entirely. Mappings below choose the closest-meaning available
-    // filename — see git history for the previous svgs/ paths.
     readonly property string iconLock:         "qrc:/qt/qml/seal/assets/duotone/lock-alt.svg"
     readonly property string iconLockOpen:     "qrc:/qt/qml/seal/assets/duotone/lock-keyhole-open.svg"
     readonly property string iconPlus:         "qrc:/qt/qml/seal/assets/duotone/plus.svg"
