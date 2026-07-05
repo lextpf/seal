@@ -167,7 +167,7 @@ std::string pathSummary(std::string_view path)
     {
         kind = "stdin";
     }
-    else if (!path.empty() && (path.back() == '\\' || path.back() == '/'))
+    else if (path.back() == '\\' || path.back() == '/')
     {
         kind = "dir_hint";
     }
@@ -194,7 +194,7 @@ std::string pathSummary(std::string_view path, std::string_view prefix)
     {
         kind = "stdin";
     }
-    else if (!path.empty() && (path.back() == '\\' || path.back() == '/'))
+    else if (path.back() == '\\' || path.back() == '/')
     {
         kind = "dir_hint";
     }
