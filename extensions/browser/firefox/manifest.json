@@ -9,7 +9,7 @@
       "strict_min_version": "115.0"
     }
   },
-  "permissions": ["nativeMessaging"],
+  "permissions": ["nativeMessaging", "alarms"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "scripts": ["../background.js"],
