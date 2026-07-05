@@ -22,9 +22,19 @@ namespace seal
  *       reasons unrelated to secrecy (numeric inputs, MAC-address
  *       fields). So an absent IME context is a lean, not a decision;
  *       the probe's confidence 0.3 with weight 0.3 means it
- *       contributes 0.09 to a Tier-2 score on a positive -- enough to
- *       break a 0.5/0.5 tie in favour of password, not enough to
- *       drive a fill on its own.
+ *       contributes just 0.09 to the Tier-2 password score on a
+ *       positive - only enough to tip a lead another probe has already
+ *       carried to within ~0.09 of the 0.7 commit margin, and never
+ *       enough to reach that margin on its own.
+ *
+ * @par Tier-2 contribution
+ * On a positive (IME context absent) the contribution to the password
+ * side of the weighted vote is
+ * @f[
+ *   w \cdot c = 0.3 \times 0.3 = 0.09,
+ * @f]
+ * far below the @f$ 0.7 @f$ commit margin: this probe can only nudge a
+ * lead another probe already carries, never decide on its own.
  */
 class ImeStateProbe : public IProbe
 {

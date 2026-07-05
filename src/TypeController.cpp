@@ -272,14 +272,10 @@ void TypeController::scheduleTypingAction(int index, TypingMode mode, const QStr
 
                 QString service = QString::fromUtf8(m_Workspace.records()[index].platform.c_str());
 
-                // Run the typing sequence on a worker so the GUI loop stays
-                // responsive across the Sleep() calls between keystrokes.
-                // Snapshot record and password into the worker's captures
-                // because the GUI thread may mutate the records / the master key
-                // while we run. The master-key clone happens inside a tight
-                // unlock() window; the session is re-protected before the worker
-                // starts. basic_secure_string is move-only, hence the explicit
-                // element copy.
+                // Run typing on a worker so the GUI loop stays responsive across the
+                // Sleep()s between keystrokes. Snapshot record + password into the
+                // worker's captures (the GUI thread may mutate them meanwhile); the
+                // clone is taken in a tight unlock() window. basic_secure_string is move-only.
                 auto record = m_Workspace.records()[index];
                 seal::basic_secure_string<wchar_t> clonedPw;
                 {

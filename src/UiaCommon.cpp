@@ -105,7 +105,7 @@ bool containsUsernameHint(const QString& rawText)
     if (text.isEmpty())
         return false;
 
-    // Compound forms only -- bare "user" would false-positive on user-agent,
+    // Compound forms only - bare "user" would false-positive on user-agent,
     // user-profile-pic, etc. Multi-word entries contain-match the full
     // lowercased property value.
     static const std::array<QStringView, 28> kUsernameHints = {
@@ -345,7 +345,7 @@ UiaHintObservation inspectElementPasswordState(IUIAutomationElement* element,
 
 UiaHintObservation inspectElementUsernameState(IUIAutomationElement* element)
 {
-    // No UIA IsUsername property -- metadata-keyword-only. Permissive
+    // No UIA IsUsername property - metadata-keyword-only. Permissive
     // control type because form callers may pass non-Edit wrappers.
     return inspectUsernameHintMetadata(element, /*skipControlTypeGate=*/true);
 }

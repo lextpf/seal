@@ -14,8 +14,9 @@ namespace seal
  * @author Alex (https://github.com/lextpf)
  * @ingroup FillController
  *
- * Runs the lower-confidence detection paths that the existing
- * FillController::probeIsPassword and probeFormContext together cover:
+ * Runs the lower-confidence detection paths that the former
+ * FillController::probeIsPassword and probeFormContext methods together
+ * covered before that logic was consolidated here:
  *   - MSAA accName / accDescription matched against the password hint table
  *   - UIA metadata properties (AutomationId, Name, HelpText, ...) scanned
  *     for password / username keywords in 17+ languages
@@ -25,8 +26,17 @@ namespace seal
  *     searchDescendantsForPassword
  *   - Form-context peer inference via findFormAncestor + enumerateFormInputs
  *
+ * @par Detection paths (first match wins; Unknown -> "all_signals_unknown")
+ * | Phase | Path                    | Verdict             | Conf | Evidence stem        |
+ * |-------|-------------------------|---------------------|------|----------------------|
+ * | 1     | MSAA name / description | Password            | 0.65 | msaa_*_match         |
+ * | 2a    | Hit-element metadata    | Password / Username | 0.70 | uia_meta_*           |
+ * | 2b    | Ancestor walk           | Password / Username | 0.65 | uia_ancestor_*       |
+ * | 2c    | Descendant DFS          | Password            | 0.70 | uia_descendant_match |
+ * | 2d    | Form-context peers      | Password / Username | 0.40 | form_*               |
+ *
  * Tier-1 strong signals (UIA IsPassword, LegacyIAccessible state, MSAA
- * STATE_SYSTEM_PROTECTED) are NOT handled here -- see UiaIsPasswordProbe for
+ * STATE_SYSTEM_PROTECTED) are NOT handled here - see UiaIsPasswordProbe for
  * those.
  *
  * The UIA singleton is lazy-initialised on first run() and cached for the
@@ -34,7 +44,7 @@ namespace seal
  *
  * @note **Why Tier-2?** Each individual signal here (a name match, a
  *       single ancestor's class string, an IME hint) is too weak on its
- *       own to drive a fill -- and any one of them can be falsified by
+ *       own to drive a fill - and any one of them can be falsified by
  *       a malicious page that names a button `signinForm` or sticks
  *       `aria-label="password"` on a benign element. The probe earns
  *       its keep by aggregating MULTIPLE such signals, but the result
@@ -68,12 +78,15 @@ public:
      * matched so weight-tuning telemetry can attribute confidence to
      * specific signals.
      *
-     * @param ctx Click-site context. m_TargetWindow seeds the UIA tree
-     *            walk; m_ClickPoint is used for bounding-rect filtering.
-     * @return Verdict::Password / Verdict::Username at confidence
-     *         ~0.6-0.7 when a signal fires (Tier-2 threshold), or
-     *         Verdict::Unknown when none of the five paths produced a
-     *         match.
+     * @param ctx Click-site context. m_ClickPoint drives every path: it
+     *            seeds the UIA ElementFromPoint hit and the MSAA lookup,
+     *            and its x/y feed the ancestor / descendant bounding-rect
+     *            filtering. m_TargetWindow is not read by this probe.
+     * @return Verdict::Password / Verdict::Username when a signal fires,
+     *         at confidence ~0.4-0.7 depending on the path (form-context
+     *         peer inference is weakest at 0.4; hit-element and descendant
+     *         metadata are strongest at 0.7), or Verdict::Unknown when
+     *         none of the five paths produced a match.
      */
     ProbeResult run(const ProbeContext& ctx) override;
 

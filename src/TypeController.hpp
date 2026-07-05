@@ -42,13 +42,15 @@ class TypeController : public QObject, public seal::IFillControl
         int fillCountdownSeconds READ fillCountdownSeconds NOTIFY fillCountdownSecondsChanged)
 
 public:
-    /// @brief Construct the controller and relay the engine's fill signals.
-    /// @param workspace    Injected Qt-free core that owns records and session.
-    /// @param ui           Status sink for busy/countdown/status feedback.
-    /// @param gate         Password gate used to defer arming until the password is set.
-    /// @param engine       Borrowed fill engine owned by the composition root.
-    /// @param asyncRunner  Async runner (held for future worker migration).
-    /// @param parent       Optional QObject parent.
+    /**
+     * @brief Construct the controller and relay the engine's fill signals.
+     * @param workspace    Injected Qt-free core that owns records and session.
+     * @param ui           Status sink for busy/countdown/status feedback.
+     * @param gate         Password gate used to defer arming until the password is set.
+     * @param engine       Borrowed fill engine owned by the composition root.
+     * @param asyncRunner  Async runner used to run the typing worker off the GUI thread.
+     * @param parent       Optional QObject parent.
+     */
     TypeController(seal::CredentialWorkspace& workspace,
                    seal::IUiFeedback& ui,
                    seal::IPasswordGate& gate,
@@ -72,6 +74,18 @@ public:
      * keystrokes (`SendInput`), sends a Tab key to advance focus, then types
      * the password. A 3-second countdown gives the user time to focus the
      * target field before typing begins.
+     *
+     * @verbatim
+     *   t = 0      3 s countdown (QTimer, 1 s ticks) - focus the target field
+     *   t = 3 s    type username      (SendInput UNICODE)
+     *              wait 200 ms        (field registers the username)
+     *              Tab down + up      (SendInput VK_TAB - advance focus)
+     *              wait 100 ms        (focus settles on the password field)
+     *              type password      (SendInput UNICODE)
+     * @endverbatim
+     *
+     * typePassword() shares the 3 s countdown but types the password only -
+     * no username and no Tab.
      *
      * @param index Row index of the record.
      */
@@ -100,8 +114,11 @@ public:
      *
      * Self-gating: defers the arm via the password gate if the master password
      * is not yet set, otherwise arms the engine immediately. Installs global
-     * mouse and keyboard hooks; the user then Ctrl+Clicks in an external window
-     * to type the username, and Ctrl+Clicks again for the password.
+     * mouse and keyboard hooks; each Ctrl+Click in an external window then
+     * auto-detects the field under the cursor via the probe pipeline and types
+     * whichever credential fits, in either order, until both are filled.
+     * Ctrl+Shift+Click forces the username and Ctrl+Alt+Click forces the
+     * password when the auto-detection needs overriding.
      *
      * @param recordIndex Row index of the credential to fill.
      */
@@ -119,9 +136,11 @@ signals:
     void fillStatusTextChanged();        ///< Auto-fill status message updated.
     void fillCountdownSecondsChanged();  ///< Auto-fill countdown tick.
 
-    /// @brief A fill error occurred that should be shown to the user.
-    /// @param title   Dialog title.
-    /// @param message Error description.
+    /**
+     * @brief A fill error occurred that should be shown to the user.
+     * @param title   Dialog title.
+     * @param message Error description.
+     */
     void errorOccurred(const QString& title, const QString& message);
 
 private:
@@ -159,7 +178,7 @@ private:
     seal::IUiFeedback& m_Ui;                 ///< Status/busy/countdown sink.
     seal::IPasswordGate& m_Gate;             ///< Defers arming until password set.
     seal::FillController& m_Engine;          ///< Borrowed auto-fill engine.
-    seal::AsyncRunner& m_Async;              ///< Async runner (held for future worker migration).
+    seal::AsyncRunner& m_Async;              ///< Runs the typing sequence on a worker thread.
 };
 
 }  // namespace seal

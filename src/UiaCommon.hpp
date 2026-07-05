@@ -5,27 +5,42 @@
  * @author Alex (https://github.com/lextpf)
  * @ingroup FillController
  *
- * UiaIsPasswordProbe, UiaMetadataProbe, and the form-context fallback
- * in FillController all walk the same UIA tree with the same depth /
- * node-count budgets, look at the same string properties, and need the
- * same BSTR <-> QString plumbing. This header is the single source for
- * those primitives so behaviour can be tuned in one place.
+ * UiaIsPasswordProbe and UiaMetadataProbe (including the latter's
+ * form-context fallback path) all walk the same UIA tree with the same
+ * depth / node-count budgets, look at the same string properties, and
+ * need the same BSTR <-> QString plumbing. This header is the single
+ * source for those primitives so behaviour can be tuned in one place.
  *
  * ## :material-tree: Tree-walk budgets
  *
- * - **kMaxUiaAncestorDepth** -- ancestor walk stops at 8 levels.
+ * - **kMaxUiaAncestorDepth** - ancestor walk stops at 8 levels.
  *   Modern web login pages bury inputs ~3-5 deep; 8 covers the long
  *   tail without letting a pathological tree run away.
- * - **kMaxUiaDescendantDepth** -- descendant DFS recursion cap (6).
- * - **kMaxUiaDescendantNodes** -- hard cap of 64 inspected descendants
+ * - **kMaxUiaDescendantDepth** - descendant DFS recursion cap (6).
+ * - **kMaxUiaDescendantNodes** - hard cap of 64 inspected descendants
  *   per probe call. UIA queries can stall on heavyweight elements
  *   (large iframes, custom-control hosts); this is the failsafe that
  *   keeps the probe budget bounded even when the tree is hostile.
  *
+ * @verbatim
+ *   How the budgets bound the walk around the click's hit element:
+ *
+ *        ( up to kMaxUiaAncestorDepth = 8 parents; each parent is
+ *          probed only while its rect still contains the click )
+ *                              ^  ancestor walk
+ *                              |
+ *              +--------------------------------+
+ *              |  UIA hit element under click   |  <- ElementFromPoint
+ *              +--------------------------------+
+ *                              |
+ *                              v  descendant DFS
+ *        ( kMaxUiaDescendantDepth = 6 levels deep, at most
+ *          kMaxUiaDescendantNodes = 64 nodes inspected in total )
+ * @endverbatim
+ *
  * ## :material-magnify: Hint observation
  *
- * @ref UiaHintObservation distinguishes three states the orchestrator
- * cares about:
+ * @ref UiaHintObservation distinguishes three states:
  *   - Observed = false: no UIA data was readable for this element.
  *     The probe should fall through to another signal.
  *   - Observed = true, Matched = false: UIA was readable but the
@@ -34,9 +49,12 @@
  *   - Observed = true, Matched = true: positive identification with a
  *     specific source (Name / HelpText / metadata label).
  *
- * @note The three-state shape matters: a confident negative
- *       suppresses the form-context fallback so the orchestrator
- *       doesn't keep searching after UIA already said "no."
+ * @note The three-state shape lets a caller tell "no UIA data" apart
+ *       from a confident negative; searchDescendantsForPassword threads
+ *       that distinction out via its observedAny out-parameter. That
+ *       signal is currently advisory - UiaMetadataProbe runs its
+ *       form-context fallback regardless - so it is not yet a
+ *       suppression gate.
  */
 
 #ifdef USE_QT_UI
@@ -51,21 +69,18 @@ namespace seal
 
 /**
  * @brief Maximum number of ancestor levels walked when searching for a password field.
- * @author Alex (https://github.com/lextpf)
  * @ingroup FillController
  */
 inline constexpr int kMaxUiaAncestorDepth = 8;
 
 /**
  * @brief Maximum recursion depth for the bounded descendant DFS.
- * @author Alex (https://github.com/lextpf)
  * @ingroup FillController
  */
 inline constexpr int kMaxUiaDescendantDepth = 6;
 
 /**
  * @brief Hard cap on the number of descendant nodes inspected per probe.
- * @author Alex (https://github.com/lextpf)
  * @ingroup FillController
  */
 inline constexpr int kMaxUiaDescendantNodes = 64;
@@ -78,6 +93,13 @@ inline constexpr int kMaxUiaDescendantNodes = 64;
  * can tell "no UIA data at all" from "UIA data present but negative");
  * m_Matched becomes true only when the observation positively identifies the
  * field type.
+ *
+ * @par State combinations (m_Observed / m_Matched)
+ * | m_Observed | m_Matched | Meaning                                              |
+ * |------------|-----------|------------------------------------------------------|
+ * | false      | false     | No UIA data readable; fall through to next signal.   |
+ * | true       | false     | UIA readable but not the target: confident negative. |
+ * | true       | true      | Positive match; m_Source names the property.         |
  */
 struct UiaHintObservation
 {

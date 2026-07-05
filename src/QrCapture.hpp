@@ -34,7 +34,7 @@ namespace seal
  * 1. A DirectShow camera is selected via priority scoring.
  * 2. A live preview window opens while auto-exposure settles.
  * 3. `cv::QRCodeDetector` scans each frame (grayscale + downscale).
- * 4. On first decode the text is moved into `secure_string` and the
+ * 4. On first decode the text is copied into `secure_string` and the
  *    OpenCV `std::string` is wiped with `SecureZeroMemory`.
  * 5. The user can press Escape to cancel at any point.
  *
@@ -62,6 +62,34 @@ namespace seal
  * - `SEAL_CAMERA_WARMUP_MS` - auto-exposure warm-up period (default: 250 ms, range 0-5000)
  * - `SEAL_CAPTURE_TIMEOUT_SEC` - detection loop timeout (default: 60 s, range 5-300)
  * - `SEAL_CAMERA_INDEX` - force a specific camera index instead of auto-selection
+ *
+ * @par Security Caps
+ * | Guard                 | Source                     | Value                        |
+ * |-----------------------|----------------------------|------------------------------|
+ * | Process memory cap    | `kCaptureMemoryLimitBytes` | 1 GiB (`1ULL << 30`)         |
+ * | Max frame dimension   | `kMaxFrameDimension`       | 3840 px (width or height)    |
+ * | Max decoded payload   | `kMaxQrDataBytes`          | 4096 bytes                   |
+ * | Detection timeout     | `SEAL_CAPTURE_TIMEOUT_SEC` | 60 s default, clamp 5-300    |
+ * | Auto-exposure warm-up | `SEAL_CAMERA_WARMUP_MS`    | 250 ms default, clamp 0-5000 |
+ *
+ * @par Plaintext Exposure Window
+ * The decoded text lives in a pageable OpenCV `std::string` for exactly one
+ * copy before it is moved into locked pages and the pageable copy is wiped:
+ * @verbatim
+ * webcam frame (BGR cv::Mat, pageable)
+ *      | cvtColor BGR->GRAY, resize to <= 480 px wide
+ *      v
+ * grayscale cv::Mat
+ *      | QRCodeDetector::detectAndDecode (retried once on inverted image)
+ *      v
+ * std::string data   <-- pageable plaintext: the ONLY unlocked window
+ *      | result.assign(begin, end)   copy into locked, guard-paged storage
+ *      v
+ * secure_string<> result
+ *      | SecureZeroMemory(data)      wipe the pageable copy
+ *      v
+ * returned secret
+ * @endverbatim
  */
 
 /**

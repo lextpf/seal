@@ -49,7 +49,7 @@ ProbeResult BrowserBridgeProbe::run(const ProbeContext& ctx)
 
     // entry->m_UrlHost is deliberately omitted: it's privacy-sensitive
     // (browsing pattern leak) and FillController reads it directly via
-    // BrowserBridge::lookup() -- no need on the probe evidence channel.
+    // BrowserBridge::lookup() - no need on the probe evidence channel.
     result.m_Evidence = "bridge_match";
     return result;
 }

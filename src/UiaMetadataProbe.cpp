@@ -300,7 +300,7 @@ ProbeResult UiaMetadataProbe::run(const ProbeContext& ctx)
     }
 
     // Phase 2a: hit-element metadata. Filter out Tier-1 sources
-    // ("IsPassword", "LegacyState") -- those belong to UiaIsPasswordProbe.
+    // ("IsPassword", "LegacyState") - those belong to UiaIsPasswordProbe.
     {
         const UiaHintObservation passwordObs =
             inspectElementPasswordState(element, /*skipControlTypeGate=*/true);

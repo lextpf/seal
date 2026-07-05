@@ -22,12 +22,19 @@ namespace seal
  *  - UIA `LegacyIAccessiblePattern` state has `STATE_SYSTEM_PROTECTED`
  *    (Tier-1 confidence 0.95)
  *
+ * @par Ranked signals (first hit wins)
+ * | # | Signal                       | Verdict  | Conf | Evidence token             |
+ * |---|------------------------------|----------|------|----------------------------|
+ * | 1 | MSAA state protected         | Password | 0.97 | msaa_state_protected       |
+ * | 2 | UIA IsPassword == true       | Password | 0.96 | uia_is_password=true       |
+ * | 3 | Legacy IAccessible protected | Password | 0.95 | uia_legacy_state_protected |
+ *
  * If none fire, returns Verdict::Unknown with confidence 0; the caller's
  * FusionDecider then falls through to weaker probes (UiaMetadataProbe,
  * ImeStateProbe).
  *
  * Metadata-based signals (name / description / aria hint matching) are
- * intentionally excluded here -- UiaMetadataProbe owns Tier-2 metadata logic.
+ * intentionally excluded here - UiaMetadataProbe owns Tier-2 metadata logic.
  *
  * The UIA singleton is lazy-initialised on first run() and cached for the
  * probe's lifetime; the first call pays the CoCreateInstance cost.
@@ -54,9 +61,10 @@ public:
      * so a positive result here is near-ground-truth ("the OS itself
      * says this is a password field").
      *
-     * @param ctx Click-site context. m_TargetWindow and m_ClickPoint are
-     *            both used (MSAA needs the screen point; UIA walks from
-     *            the HWND).
+     * @param ctx Click-site context. Only m_ClickPoint is read: both the
+     *            MSAA AccessibleObjectFromPoint warm-up and the UIA
+     *            ElementFromPoint lookup work from the screen point.
+     *            m_TargetWindow is not used by this probe.
      * @return Verdict::Password at confidence 0.95-0.97 on a hit, or
      *         Verdict::Unknown when none of the indicators are present
      *         (so the orchestrator falls through to UiaMetadataProbe

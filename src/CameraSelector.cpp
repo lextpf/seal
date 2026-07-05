@@ -182,11 +182,9 @@ std::vector<std::wstring> EnumerateVideoDeviceNamesDShow()
     return names;
 }
 
-// Priority cascade:
-//   1. SEAL_CAMERA_INDEX env override.
-//   2. Preferred keyword match (e.g. "razer kiyo").
-//   3. First non-virtual camera (skips OBS, Camo, DroidCam, ...).
-//   4. Index 0 as last-resort fallback.
+// Priority cascade: (1) SEAL_CAMERA_INDEX env override; (2) SEAL_PREFERRED_CAMERA
+// keyword match (e.g. "razer kiyo"); (3) first non-virtual camera (skips OBS,
+// Camo, DroidCam, ...); (4) index 0 as last-resort fallback.
 int ChooseCameraIndexFromNames(const std::vector<std::wstring>& names, bool log)
 {
     // Priority 1: env override.

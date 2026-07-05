@@ -28,7 +28,7 @@ ProbeResult ImeStateProbe::run(const ProbeContext& ctx)
 
     if (!hasContext)
     {
-        // Field has explicitly disabled IME -- mild Password signal.
+        // Field has explicitly disabled IME - mild Password signal.
         result.m_Verdict = Verdict::Password;
         result.m_Confidence = 0.3F;
         result.m_Evidence = "ime_context=disabled";

@@ -77,12 +77,15 @@ struct ProbeResult
  * @author Alex (https://github.com/lextpf)
  * @ingroup FillController
  *
- * Built once in FillController::runProbeRegistry() so probes share a
- * consistent HWND/PID view even if the foreground window changes mid-run.
- * Probes MUST NOT call WindowFromPoint() themselves -- using the shared
+ * Built once per fusion pass in FillController::runProbeRegistryDetailed()
+ * so probes share a consistent HWND/PID view even if the foreground window
+ * changes mid-run. Probes should read `m_TargetWindow` from this snapshot
+ * rather than re-resolving the top-level window themselves - the shared
  * snapshot guarantees every probe in a single fusion pass agrees on what
  * window the user clicked on, even when an Esc dismisses a tooltip or a
- * focus-stealing dialog races the click.
+ * focus-stealing dialog races the click. A probe may fall back to
+ * `WindowFromPoint(m_ClickPoint)` only when `m_TargetWindow` is null (as
+ * `Win32StyleProbe` does), since that re-resolves the same click point.
  */
 struct ProbeContext
 {
@@ -122,11 +125,11 @@ struct ProbeContext
  *
  * ## :material-format-list-bulleted: Concrete probes
  *
- * - `BrowserBridgeProbe` (Tier-1) -- consults the WebExtension bridge map.
- * - `Win32StyleProbe`     (Tier-1) -- inspects GWL_STYLE / EM_GETPASSWORDCHAR.
- * - `UiaIsPasswordProbe`  (Tier-1) -- MSAA STATE_SYSTEM_PROTECTED + UIA IsPassword.
- * - `UiaMetadataProbe`    (Tier-2) -- UIA name / metadata / form-context heuristics.
- * - `ImeStateProbe`       (Tier-2) -- IME context absent => weak password lean.
+ * - `BrowserBridgeProbe`   (Tier-1) - consults the WebExtension bridge map.
+ * - `Win32StyleProbe`      (Tier-1) - inspects GWL_STYLE / EM_GETPASSWORDCHAR.
+ * - `UiaIsPasswordProbe`   (Tier-1) - MSAA STATE_SYSTEM_PROTECTED + UIA IsPassword.
+ * - `UiaMetadataProbe`     (Tier-2) - UIA name / metadata / form-context heuristics.
+ * - `ImeStateProbe`        (Tier-2) - IME context absent => weak password lean.
  *
  * Tier-1 probes can short-circuit fusion when they hit at confidence >= 0.95.
  * Tier-2 probes contribute to the weighted vote regardless. See
@@ -141,7 +144,7 @@ public:
      * @brief Inspect the click site and emit a verdict.
      *
      * Called once per Ctrl+Click target. Implementations should:
-     *   - Read the shared ProbeContext (never re-call WindowFromPoint).
+     *   - Read the shared ProbeContext (prefer `m_TargetWindow` over re-resolving).
      *   - Bail early with `Verdict::Unknown` if the context is unusable
      *     (no target window, hostile integrity level, etc.).
      *   - Populate `m_ProbeName` with the same string `name()` returns,
@@ -151,7 +154,7 @@ public:
      * @return Populated ProbeResult; never throws.
      *
      * @note This is the only hot-path method on the interface. Keep it
-     *       inside `budget()` -- the orchestrator may cancel a probe
+     *       inside `budget()` - the orchestrator may cancel a probe
      *       that overshoots its declared budget on a future revision,
      *       and even today the synchronous probe loop blocks the fill
      *       from starting until every probe returns.

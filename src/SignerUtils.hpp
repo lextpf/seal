@@ -30,20 +30,20 @@
  * The helpers exist to defeat three impersonation classes on a single
  * Windows account:
  *
- * - **Pipe-name impersonation** -- a same-user process pre-creates a
+ * - **Pipe-name impersonation** - a same-user process pre-creates a
  *   `\\.\pipe\seal-fill-<bogus-hex>` and accepts the connection from
  *   `seal-browser.exe`. Mitigation: the host queries the pipe
  *   server's PID via `GetNamedPipeServerProcessId` and demands that
  *   the server's binary share seal.exe's SPKI thumbprint. The
  *   attacker can't produce a signed seal.exe.
- * - **Signed-host puppeting** -- malware runs the real signed
+ * - **Signed-host puppeting** - malware runs the real signed
  *   `seal-browser.exe` as a subprocess with attacker-owned
  *   stdin/stdout, forwarding crafted JSON to the bridge. Mitigation:
  *   the bridge resolves the host's parent process via the chain
  *   walker and demands the immediate (or shell-traversal) ancestor be
  *   a known signed browser image. Malware's not a signed browser, so
  *   the bridge disconnects before any payload is parsed.
- * - **Re-parented puppet** -- malware uses
+ * - **Re-parented puppet** - malware uses
  *   `UpdateProcThreadAttribute(PROC_THREAD_ATTRIBUTE_PARENT_PROCESS)`
  *   to make the host's parent appear to be chrome.exe even though
  *   malware created the stdio pipes. Mitigation: the host queries the
@@ -148,7 +148,7 @@ inline wchar_t asciiLower(wchar_t c) noexcept
  *     refresh).
  *   - We never stall the accept loop on a network round trip; on a machine
  *     that has never seen the relevant CRL, the result is "trust" rather
- *     than "stall" -- matching how SmartScreen/AppLocker behave for the
+ *     than "stall" - matching how SmartScreen/AppLocker behave for the
  *     same reason.
  *
  * Returns true only when the signature chain validates against an OS-trusted
@@ -226,7 +226,7 @@ inline std::string hexEncode(const unsigned char* data, std::size_t len)
  * key (e.g., after a key compromise) do NOT match.
  *
  * Returns an empty string on any failure. Callers treat "no identity" as
- * "dev/unsigned mode" -- the surrounding policy decides whether to fail
+ * "dev/unsigned mode" - the surrounding policy decides whether to fail
  * open or closed.
  */
 inline std::string extractSignerIdentityFromFile(const std::wstring& path)
@@ -321,7 +321,7 @@ inline std::string extractSignerIdentityFromFile(const std::wstring& path)
 /**
  * @brief Build the SPKI thumbprint for the calling module (this exe).
  *
- * Returns empty when the exe is unsigned, untrusted, or revoked -- callers
+ * Returns empty when the exe is unsigned, untrusted, or revoked - callers
  * degrade gracefully (dev-mode tolerance) instead of refusing to function.
  */
 inline std::string readOwnSignerIdentity()
@@ -453,6 +453,25 @@ inline bool isKnownBrowserImage(const std::wstring& imagePath)
  * `Unknown` is index 0 and `Count` is the sentinel size (used to dimension a
  * per-kind array). Keep the set in sync with identifyBrowser() and
  * isKnownBrowserImage().
+ *
+ * @par Kind / image / logfmt token
+ * The enum, @ref identifyBrowser, @ref isKnownBrowserImage, and
+ * @ref browserKindToken carry the same 12 launchers and must move in lockstep;
+ * `Unknown` and `Count` both map to token `"unknown"`.
+ * | BrowserKind | Image basename  | logfmt token |
+ * |-------------|-----------------|--------------|
+ * | Chrome      | `chrome.exe`    | `chrome`     |
+ * | Edge        | `msedge.exe`    | `edge`       |
+ * | Brave       | `brave.exe`     | `brave`      |
+ * | Opera       | `opera.exe`     | `opera`      |
+ * | Vivaldi     | `vivaldi.exe`   | `vivaldi`    |
+ * | Thorium     | `thorium.exe`   | `thorium`    |
+ * | Chromium    | `chromium.exe`  | `chromium`   |
+ * | Firefox     | `firefox.exe`   | `firefox`    |
+ * | LibreWolf   | `librewolf.exe` | `librewolf`  |
+ * | Waterfox    | `waterfox.exe`  | `waterfox`   |
+ * | Floorp      | `floorp.exe`    | `floorp`     |
+ * | Zen         | `zen.exe`       | `zen`        |
  */
 enum class BrowserKind
 {
@@ -571,7 +590,7 @@ inline std::string_view browserKindToken(BrowserKind kind) noexcept
  *
  * Chromium on Windows occasionally wraps native-messaging host launches
  * in cmd.exe (depends on Chrome version, manifest layout, and
- * intermediate path quoting -- the bridge sees the host's parent as
+ * intermediate path quoting - the bridge sees the host's parent as
  * cmd.exe and the real browser as the grandparent). The accept loop
  * walks the chain through these allow-listed shells looking for a
  * signed-browser ancestor.
