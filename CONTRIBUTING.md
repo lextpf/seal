@@ -1,6 +1,6 @@
 # Contributing Guide
 
-This guide defines contribution standards for the project's authors and co-authors, with or without AI assistance.
+This guide defines contribution standards for the project’s human authors, co-authors, and AI agents acting as contributing entities.
 
 Formatting is enforced by `.clang-format`. Contributors should run the formatter instead of manually debating whitespace, wrapping, brace placement, pointer alignment, or similar layout rules.
 
@@ -11,7 +11,7 @@ Formatting is enforced by `.clang-format`. Contributors should run the formatter
 1. Fork the repository on GitHub.
 2. Clone your fork locally.
 3. Build the project with `.\build.bat`.
-4. Before submitting changes, format modified C++ files and run the test suite.
+4. Before submitting changes, format modified C++ files.
 
 ---
 
@@ -58,35 +58,39 @@ Do not restate or fight these rules in review. Run the formatter and move on.
 
 ## Naming Conventions
 
-|                Element |          Style              | Examples                                 |
-|------------------------|-----------------------------|------------------------------------------|
-|                  Files |         PascalCase          | `Logger.hpp`, `Utils.cpp`                  |
-|      Classes / Structs |         PascalCase          | `Logger`, `BackgroundJob`                |
-|                  Enums |         PascalCase          | `enum class PluginType`                  |
-|            Enum values |         PascalCase          | `PluginType::Required`                   |
-|    Functions / Methods |         snake_case          | `normalize_path()`, `to_lower()`         |
-|             Namespaces |    snake_case or PascalCase | `mo2core`, `CApi`                        |
-|        Local variables |         snake_case          | `file_path`, `dep_met`                   |
-|             Parameters |         snake_case          | `const std::string& archive_path`        |
-|       Member variables | snake_case + trailing `_`   | `callback_`, `mutex_`                    |
-|       Static variables |         snake_case          | `plugin_type_map`                        |
-|       Global variables |       `g_` prefix           | `g_result`                               |
-|     Constants / Macros |      UPPER_SNAKE_CASE       | `MO2_API`, `MAX_DISTANCE`                |
-| Compile-time constants |     `static constexpr`      | `static constexpr int SIZE = 16;`        |
-|           Type aliases |   PascalCase with `using`   | `using Result = std::expected<>;`        |
+| Element                          | Style                                       | Examples                                                  |
+|----------------------------------|---------------------------------------------|-----------------------------------------------------------|
+| Files                            | PascalCase                                  | `Logger.hpp`, `RingBuffer.cpp`                            |
+| Classes                          | PascalCase                                  | `Logger`, `Texture`, `ResourceManager`                    |
+| Structs (plain data)             | PascalCase                                  | `Color`, `Vec2`, `Particle`                               |
+| Enums                            | PascalCase                                  | `enum class LogLevel`, `enum class BlendMode`             |
+| Enum values                      | PascalCase                                  | `LogLevel::Warning`, `BlendMode::Additive`                |
+| Functions / Methods              | PascalCase                                  | `LoadTexture()`, `Logger::Write()`                        |
+| Namespaces                       | PascalCase                                  | `Rendering`, `MathUtils`                                  |
+| Local variables                  | camelCase                                   | `itemCount`, `deltaTime`, `isReady`                       |
+| Parameters                       | camelCase                                   | `int itemCount`, `const std::string& filePath`           |
+| Class member variables           | `m_` + PascalCase                           | `m_Buffer`, `m_Window`, `m_ItemCount`                     |
+| Struct fields (plain data)       | camelCase, no prefix                        | `position`, `velocity`, `lifetime`                        |
+| Macros / constants               | UPPER_SNAKE_CASE                            | `MAX_RETRIES`, `DEFAULT_TIMEOUT`                          |
+| File-local constants             | UPPER_SNAKE_CASE, in an anonymous namespace | `constexpr int MAX_CONNECTIONS = 64;`                     |
+| Compile-time constants           | `static constexpr`                          | `static constexpr int MAX_ITEMS = 256;`                   |
+| Type aliases                     | PascalCase via `using`                      | `using EntityId = std::uint32_t;`                         |
+| Global mutable state             | avoided (no `g_` prefix)                    | prefer file-local `constexpr`; see **Scoping & Lifetime** |
 
-### Struct members
+### Struct fields (plain data)
 
-Plain structs used as passive data holders use `snake_case` with no prefix:
+Plain structs used as passive data holders (value types, POD aggregates) use **unprefixed `camelCase`** fields (no `m_`, no methods, no invariants):
 
 ```cpp
 struct Particle
 {
-    glm::vec2 start_position;
-    glm::vec2 move_direction;
-    float max_lifetime;
+    Vec2 position{};       ///< Current world position.
+    Vec2 velocity{};       ///< Units moved per second.
+    float lifetime{1.0f};  ///< Seconds of life remaining.
 };
 ```
+
+The `m_` prefix is reserved for the private members of behavior-bearing **classes**; plain-data structs never use it.
 
 ### Prefer named data over positional data
 
@@ -344,11 +348,19 @@ An assertion should mean: if this fails, the code is wrong.
 
 ## Comments & Documentation
 
+Documentation comments are written for a **Doxygen-style documentation generator** (e.g. Doxygen or Doxide) that parses `@`-command Javadoc comments. The house style is deliberately **split between headers and sources**; follow it consistently, because a de-sync is easy to introduce. `clang-format` does **not** reflow comment text, so keep every comment body within the project's column limit yourself.
+
+### The header/source split (the core rule)
+
+|                       | `.hpp`                                                  | `.cpp`                                            |
+|-----------------------|---------------------------------------------------------|---------------------------------------------------|
+| Doc-comment styles    | `/** … */` blocks, `///` one-liners, `///<` trailing    | plain `//` only                                   |
+| Doxygen commands      | yes (`@brief`, `@param`, `@ingroup`, …)                 | **no** — with a single exception: `@author`       |
+| `@author`             | file/type-level, `[NAME] (https://github.com/[USER])`   | optional `// @author <Name> (<url>)` line         |
+
 ### General comment rule
 
-Comment the reason, constraint, or non-obvious behavior.
-
-Do not comment what the code already says plainly.
+Comment the reason, constraint, or non-obvious behavior. Do not comment what the code already says plainly. Preserve ASCII diagrams and worked-example traces in algorithm-heavy code — they are house style, not clutter.
 
 Bad:
 
@@ -364,75 +376,171 @@ count++; // Includes the sentinel slot reserved during parsing.
 
 ### Where documentation lives
 
-* Header files: documentation for public-facing APIs
-* Source files: implementation notes for non-obvious logic only
+* Header files: documentation for the public-facing API (types, functions, members).
+* Source files: implementation notes for non-obvious logic.
 
-### Public API documentation
+---
 
-Document public classes, enums, functions, and non-trivial members in headers.
+### Header (`.hpp`) documentation
 
-Prefer concise, useful documentation over boilerplate.
+#### Block vs. one-line form
 
-Document:
-
-* purpose
-* important parameters
-* return value when non-obvious
-* preconditions/postconditions when relevant
-* ownership or lifetime expectations when relevant
-
-### Documentation style
-
-Supported comment styles in headers:
+* A doc comment that spans **more than one line** is a Javadoc **block**: `/**` on its own line, a leading ` * ` on every continuation line, a bare ` *` for blank separator lines, and ` */` to close.
+* A doc comment that fits on **one physical line** uses `///` (e.g. a lone `/// @brief …` above a simple declaration, or a group marker).
+* Use only these two styles in headers. Do **not** use the `//!` or `/*! */` "bang" variants.
 
 ```cpp
-/** ... */
-/*! ... */
-/// ...
-//! ...
+/// @brief Reset the buffer to its empty state.
+void Clear();
+
+/**
+ * @brief Resize the buffer, preserving existing contents.
+ * @param newSize   Desired capacity, in elements.
+ * @param zeroFill  Whether newly added slots are zero-initialized.
+ */
+void Resize(std::size_t newSize, bool zeroFill);
 ```
 
-Trailing member/enum docs:
+#### File / type header block
+
+The block documenting a header's primary type (or namespace) uses a **fixed tag order**:
+
+1. **Kind tag** — `@struct Name`, `@class Name`, or `@enum Name`. Present when the header defines one primary type; **omit** it for namespace / free-function headers, which lead with `@brief`.
+2. `@brief` — a one-line summary ending in a period.
+3. `@author [NAME] (https://github.com/[USER])` — the same attribution string everywhere. **File / type-level only**; never repeated on a function, method, or member.
+4. `@ingroup <Module>` — one of the modules your project defines (see below).
+5. a blank ` *`, then prose.
 
 ```cpp
-/**< ... */
-/*!< ... */
-///< ...
-//!< ...
+/**
+ * @struct Color
+ * @brief 8-bit RGBA color.
+ * @author [NAME] (https://github.com/[USER])
+ * @ingroup <Module>
+ *
+ * Plain data struct: a flat aggregate with no invariants, usable directly as
+ * a value type. Blending helpers live in the free functions in ColorMath.hpp.
+ *
+ * @see ColorMath
+ */
 ```
 
-In `.cpp` files, use `//` comments only.
-
-### Doxide guidance
-
-Use Markdown freely inside documentation comments.
-
-Prefer these commands where useful:
-
-* `@param`
-* `@tparam`
-* `@return`
-* `@pre`
-* `@post`
-* `@throw`
-* `@see`
-* `@ingroup`
-
-We still use `@brief`, `@class`, `@struct`, `@union`, `@enum`, `@namespace`, and `@author` for readability and forward-compatibility.
-
-Do not use: `@short`, `@file`, `@defgroup`, `@def`, `@fn`, `@var`, `@internal`.
-
-### Enum/member documentation
-
-Use trailing documentation for short enum/member notes:
+A namespace / free-function header drops the kind tag and leads with `@brief`:
 
 ```cpp
-enum class ParticleStyle
+/**
+ * @brief Pure, dependency-free 2D vector math helpers.
+ * @author [NAME] (https://github.com/[USER])
+ * @ingroup <Module>
+ *
+ * Each function is a stateless free function operating on plain values, with
+ * no global or GPU state.
+ */
+```
+
+Do **not** use `@file` — leave file identity implicit.
+
+#### Modules (`@ingroup`)
+
+Every documented entity is grouped under a module with `@ingroup <Module>`. Modules are declared **once** — each as an `@addtogroup <Id> <Title>` block in a single group-definitions header — and every other file only *references* them with `@ingroup`. Never add a new `@addtogroup` outside that one header.
+
+Choose the module by **subsystem role, not filename**: a rendering helper belongs to the rendering module even when its filename names the feature it serves rather than the module.
+
+#### Function / method documentation
+
+A `/** */` block: `@brief` first (it may reference `@p param` / `@ref Symbol`), a blank line, prose, then `@param` (name + description, continuation lines aligned under the description) and `@return`. **No `@author`.** The spelling is `@return`, never `@returns`.
+
+```cpp
+/**
+ * @brief Linearly interpolate between @p a and @p b by @p t.
+ *
+ * @p t is clamped to [0, 1], so values outside that range saturate to the
+ * nearest endpoint.
+ *
+ * @param a  Start value, returned when @p t is 0.
+ * @param b  End value, returned when @p t is 1.
+ * @param t  Blend factor in [0, 1].
+ * @return   The interpolated value.
+ */
+float Lerp(float a, float b, float t);
+```
+
+#### Members and enum values
+
+Document a struct field or enumerator **inline with a trailing `///<`** when the text fits on the member's line. `///<` is the **only** trailing style this guide uses — not `/**< */`, `//!<`, or `/*!< */`.
+
+```cpp
+struct Color
 {
-    Stars,   ///< Twinkling star points
-    Sparks,  ///< Fast, erratic fire-like sparks
-    Wisps,   ///< Slow, flowing ethereal wisps
+    std::uint8_t r{0};    ///< Red channel.
+    std::uint8_t g{0};    ///< Green channel.
+    std::uint8_t b{0};    ///< Blue channel.
+    std::uint8_t a{255};  ///< Alpha channel (255 = opaque).
 };
+
+enum class LogLevel
+{
+    Debug,    ///< Verbose developer diagnostics.
+    Info,     ///< Normal operational messages.
+    Warning,  ///< Recoverable problems worth attention.
+    Error     ///< Failures that abort the current operation.
+};
+```
+
+When a field description is too long for a trailing `///<`, use **leading `///` lines** above the member instead. This is the one place a `///` comment may span multiple lines; never put a `/** */` block on an individual field or enumerator.
+
+```cpp
+/// Master enable flag. When false the renderer skips the entire post-processing
+/// chain (blur, bloom, tone-mapping) and presents the raw scene texture
+/// unmodified. Toggled at runtime from the developer console.
+bool postProcessEnabled{true};
+```
+
+#### Grouping related members
+
+Group members with a `@name` section fenced by `@{` … `@}`. The **opener** is either a `/** … @{ */` block (when it carries `@name`/`@brief`) or two one-line `/// @name` + `/// @{` lines. The **closer** is always a single physical line — `/// @}` (a one-line `/** @} */` is also acceptable). Never expand a closer into a multi-line block, and balance every `@{` with a `@}`.
+
+```cpp
+/**
+ * @name Window state
+ * @{
+ */
+Window* m_Window = nullptr;  ///< Owned OS window handle.
+int m_Width = 1280;          ///< Client-area width, in pixels.
+int m_Height = 720;          ///< Client-area height, in pixels.
+bool m_Initialized = false;  ///< Whether creation succeeded (for safe teardown).
+/// @}
+```
+
+#### Command vocabulary
+
+Documentation commands to use where useful:
+
+`@brief`, `@author`, `@ingroup` (plus `@addtogroup` in the group-definitions header only), `@struct` / `@class` / `@enum`, `@param`, `@return`, `@tparam`, `@pre` / `@post`, `@note` / `@warning`, `@p` / `@c` / `@ref` / `@see`, `@par <Title>`, `@name` / `@{` / `@}`, `@code` / `@endcode` (and `@code{.cpp}`), `@verbatim` / `@endverbatim` for ASCII diagrams, and LaTeX math `@f[ … @f]` / inline `@f$ … @f$`.
+
+Do **not** use: `@file`, `@returns`, `@union`, `@short`, `@defgroup`, `@def`, `@fn`, `@var`, `@internal`.
+
+---
+
+### Source (`.cpp`) documentation
+
+* **`//` line comments only.** No `/** */` blocks, no `///` (not even trailing `///<`), and no Doxygen commands (`@brief`, `@param`, `@return`, `@ingroup`, `@par`, `@note`, …).
+* The **one exception** is an authorship line, written as a plain `// @author <Name> (<url>)` (e.g. `// @author [NAME] (https://github.com/[USER])`). Keep existing attributions as-is; don't rewrite them.
+* When moving header prose into a `.cpp`, **strip the Doxygen markup**: `@p name` → `name` (or backtick-quote it: `` `name` ``), `@c Buffer{}` → plain `Buffer{}`, `@ref Foo` → `Foo`. Backtick-quoting an identifier is the house substitute for `@c` / `@p` inside `//` comments.
+* A file-header contract block is optional: complex files (algorithms, pipelines) carry a top-of-file `//` summary — often with an ASCII diagram or worked example — while simpler files go straight from includes to code. Either way, add a one-line `//` intent comment above a function whenever its purpose isn't self-evident.
+
+```cpp
+// RingBuffer - fixed-capacity FIFO used by the audio mixer.
+//
+// @author [NAME] (https://github.com/[USER])
+// Reads and writes advance independent cursors modulo the capacity. The
+// buffer is treated as full when the write cursor sits one slot behind the
+// read cursor, so exactly one slot is always reserved to tell full from empty.
+```
+
+```cpp
+// Clamp the requested gain to [0, 1] before applying the fade curve.
+void SetGain(Channel& channel, float gain)
 ```
 
 ### TODO comments
@@ -442,7 +550,7 @@ Use `TODO` only for real follow-up work, not vague reminders.
 Make them specific and actionable:
 
 ```cpp
-// TODO: Replace with spatial hash once tile count exceeds 10k.
+// TODO: Replace with a spatial hash once the element count exceeds 10k.
 ```
 
 ---
