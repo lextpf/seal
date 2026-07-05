@@ -2,25 +2,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Master password entry dialog.
-//
-// Close policy is Escape-only (NoAutoClose): clicking outside does NOT dismiss
-// the dialog. This prevents accidental closure that would leave the user stuck
-// without a password (the AppViewModel has a pending action waiting for it).
-//
-// Lifecycle:
-//   1. AppViewModel emits passwordRequired() -> Main.qml opens this dialog
-//   2. User types password or clicks QR to scan from webcam
-//   3. QR scan: AppViewModel captures text, emits qrTextReady() -> fillPassword()
-//      populates the field (user can hover eye to verify before confirming)
-//   4. Manual entry: User presses OK or Enter -> dialog closes, accepted(password) fires,
-//      Main.qml calls AppViewModel.submitPassword() which resumes the pending action
-//   5. If wrong password: AppViewModel emits passwordRetryRequired() with error text,
-//      Main.qml re-opens this dialog with errorMessage set
-//
-// The dialog closes BEFORE accepted() fires so it's gone during the potentially
-// slow scrypt key derivation (avoids a frozen-looking UI).
-
 Popup {
     id: root
 
@@ -30,8 +11,6 @@ Popup {
     signal accepted(string password)
     signal qrRequested()
 
-    /// Fill the password field from a QR scan (no auto-submit so the user
-    /// can hover the eye icon to verify before pressing OK or Enter).
     function fillPassword(text) {
         if (text.length > 0) {
             passwordField.text = text;
@@ -39,7 +18,8 @@ Popup {
         }
     }
 
-    modal: true
+    modal: false
+    focus: true
     anchors.centerIn: parent
     width: 420
     padding: 0
@@ -48,7 +28,11 @@ Popup {
     enter: Transition {
         ParallelAnimation {
             NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 175; easing.type: Easing.OutCubic }
-            NumberAnimation { property: "scale"; from: 0.94; to: 1; duration: 190; easing.type: Easing.OutBack; easing.overshoot: 1.15 }
+            NumberAnimation {
+                property: "scale"; from: 0.94; to: 1; duration: 190
+                easing.type: root.errorMessage === "" ? Easing.OutBack : Easing.OutCubic
+                easing.overshoot: 1.15
+            }
         }
     }
     exit: Transition {
@@ -58,24 +42,7 @@ Popup {
         }
     }
 
-    // No card. The field, title, and buttons float bare at the centre of the
-    // live "unseal" sonar (LoadingOverlay, raised behind this dialog by Main):
-    // password entry IS the heart of the instrument, not a panel sitting over a
-    // spinner. The field keeps its own input fill for legibility; everything
-    // else reads directly on the sonar's deep scrim. Containment comes from that
-    // scrim, so the dialog's background and modal dim are both transparent.
     background: Item {}
-
-    Overlay.modal: Rectangle {
-        color: "transparent"
-        // The bare field has no title bar, so the dimmed area around it doubles
-        // as the window's drag handle -- the prompt stays repositionable. Presses
-        // on the field/buttons render above this and are unaffected.
-        MouseArea {
-            anchors.fill: parent
-            onPressed: function(mouse) { WindowVM.startWindowDrag() }
-        }
-    }
 
     // Clear stale password on open.
     onAboutToShow: {
@@ -83,20 +50,25 @@ Popup {
         passwordField.forceActiveFocus();
     }
 
-    // Best-effort scrub: QML strings are immutable and GC-managed, so they cannot be SecureZero'd.
-    // We clear the visible field and drop references; the authoritative secret lifetime is governed
-    // C++-side by CredentialSession.
     onClosed: passwordField.text = ""
+
+    SequentialAnimation {
+        id: shakeAnim
+        NumberAnimation { target: shakeOffset; property: "x"; to: -Theme.px(8); duration: 70; easing.type: Easing.OutQuad }
+        NumberAnimation { target: shakeOffset; property: "x"; to: Theme.px(6); duration: 70; easing.type: Easing.InOutQuad }
+        NumberAnimation { target: shakeOffset; property: "x"; to: -Theme.px(3); duration: 70; easing.type: Easing.InOutQuad }
+        NumberAnimation { target: shakeOffset; property: "x"; to: Theme.px(1); duration: 70; easing.type: Easing.InOutQuad }
+        NumberAnimation { target: shakeOffset; property: "x"; to: 0; duration: 60; easing.type: Easing.OutQuad }
+    }
+    onOpened: if (errorMessage !== "" && !WindowVM.reduceMotion) shakeAnim.restart()
 
     contentItem: ColumnLayout {
         spacing: 0
+        transform: Translate { id: shakeOffset; x: 0 }
 
-        // Title row with a semantic badge matching the dialog tone.
         RowLayout {
-            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignHCenter
             Layout.topMargin: 24
-            Layout.leftMargin: 24
-            Layout.rightMargin: 24
             spacing: 10
 
             Item {
@@ -130,17 +102,17 @@ Popup {
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeMedium
             color: Theme.textSecondary
+            horizontalAlignment: Text.AlignHCenter
             wrapMode: Text.WordWrap
         }
 
-        // Error feedback after failed attempt.
         Text {
             Layout.fillWidth: true
             Layout.topMargin: 6
             Layout.leftMargin: 24
             Layout.rightMargin: 24
-            visible: root.errorMessage !== ""
-            text: root.errorMessage
+            opacity: root.errorMessage !== "" ? 1.0 : 0.0
+            text: root.errorMessage === "" ? " " : root.errorMessage
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeMedium
             font.weight: Font.Medium
@@ -195,9 +167,6 @@ Popup {
                 }
             }
 
-            // Close the dialog before emitting accepted() so it's already gone
-            // during the potentially slow scrypt key derivation. Otherwise the
-            // dialog would appear frozen/unresponsive while the CPU works.
             Keys.onReturnPressed: {
                 if (passwordField.text.length > 0) {
                     var pw = passwordField.text;
@@ -216,7 +185,6 @@ Popup {
             }
         }
 
-        // Buttons
         RowLayout {
             Layout.fillWidth: true
             Layout.topMargin: 24
@@ -227,9 +195,6 @@ Popup {
 
             Item { Layout.fillWidth: true }
 
-            // QR button. Clicking triggers a webcam capture (AppViewModel::requestQrCapture).
-            // The dialog stays open during capture; on success the AppViewModel emits
-            // qrTextReady() which calls fillPassword() to populate the field.
             Button {
                 id: qrButton
                 onClicked: {
@@ -288,9 +253,6 @@ Popup {
                 onPressed: qrRipple.trigger(qrHover.point.position.x, qrHover.point.position.y)
             }
 
-            // OK button. Disabled when the field is empty to prevent submitting
-            // a blank password, which would cause a pointless scrypt derivation
-            // and guaranteed decryption failure.
             Button {
                 id: okButton
                 text: "Unlock"
@@ -337,6 +299,8 @@ Popup {
                 }
                 onPressed: pwOkRipple.trigger(pwOkHover.point.position.x, pwOkHover.point.position.y)
             }
+
+            Item { Layout.fillWidth: true }
         }
     }
 }
