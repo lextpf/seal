@@ -16,10 +16,31 @@ namespace seal
  * @author Alex (https://github.com/lextpf)
  * @ingroup Vault
  *
- * All domain operations (add, edit, delete, load, save, rekey, decrypt) open
- * their own CredentialSession::Access window, throw std::runtime_error on
- * access failure or crypto error, and bump the generation counter on any
- * change so consumers can detect staleness.
+ * Domain operations that need the master key (addRecord, editRecord, decrypt,
+ * load, save) open their own short-lived CredentialSession::Access window and
+ * throw std::runtime_error on access failure or crypto error.  markDeleted and
+ * clearRecords need no key; rekey() takes both the current and next passwords
+ * as parameters and never opens the session at all.
+ *
+ * The mutators addRecord, editRecord, markDeleted, clearRecords and
+ * replaceRecords bump the monotonic generation counter so borrowed-pointer
+ * consumers (VaultListModel, FillController) can detect staleness without
+ * locks.  save() and rekey() deliberately do not: save() only prunes
+ * already-hidden soft-deleted records and clears dirty flags, and rekey()
+ * rewrites the on-disk vault without touching the loaded records.
+ *
+ * @par Access window and generation counter per operation
+ * | Operation      | Opens Access | Bumps generation         |
+ * |----------------|--------------|--------------------------|
+ * | addRecord      | yes          | yes                      |
+ * | editRecord     | yes          | yes                      |
+ * | decrypt        | yes          | no (logically const)     |
+ * | markDeleted    | no           | yes                      |
+ * | clearRecords   | no           | yes                      |
+ * | replaceRecords | no           | yes                      |
+ * | load           | yes          | yes (via replaceRecords) |
+ * | save           | yes          | no                       |
+ * | rekey          | no           | no                       |
  *
  * This class is not internally synchronised.  All calls must occur on the
  * owning thread.
@@ -74,11 +95,23 @@ public:
     const std::vector<VaultRecord>& records() const noexcept;
 
     /**
-     * @brief Monotonically increasing counter, bumped on every mutating operation.
+     * @brief Monotonically increasing counter, bumped on each successful mutation.
      *
      * Returns a reference to the live counter so borrowed-pointer holders
      * (VaultListModel, FillController) can observe mutations through a stable
      * `const uint64_t*`.
+     *
+     * @par Staleness check (owning thread)
+     * @code{.cpp}
+     * const uint64_t* gen = &workspace.generation();  // stable address
+     * uint64_t seen = *gen;
+     * // ... after any mutator runs on the owning thread ...
+     * if (*gen != seen)  // a mutation happened: rebuild the borrowed view
+     * {
+     *     seen = *gen;
+     *     refreshFrom(workspace.records());
+     * }
+     * @endcode
      *
      * @return Const reference to the current generation number.
      */
@@ -231,10 +264,12 @@ public:
                  const SecureWide& next);
 
 private:
-    std::vector<VaultRecord> m_Records;
+    std::vector<VaultRecord> m_Records;  ///< All records, soft-deleted ones included.
+    /// Mutable: the DPAPI unprotect/reprotect cycle mutates the buffer even on
+    /// the logically-const decrypt() path.
     mutable seal::CredentialSession m_Session;
-    uint64_t m_Generation = 0;
-    std::filesystem::path m_VaultPath;
+    uint64_t m_Generation = 0;          ///< Monotonic mutation counter; never bumped on failure.
+    std::filesystem::path m_VaultPath;  ///< Target file for load() and save().
 };
 
 }  // namespace seal

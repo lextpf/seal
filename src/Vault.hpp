@@ -24,6 +24,18 @@ namespace seal
  * wrong the function throws immediately rather than attempting remaining
  * records, preventing a timing side-channel that would reveal the record count.
  *
+ * An empty or whitespace-only file is treated as an empty vault and yields an
+ * empty vector rather than throwing.
+ *
+ * @par Decode pipeline
+ * @code
+ * on-disk text  --strip ws-->  compact hex  --hex-decode-->  binary frame
+ * binary frame  --parse-->     magic "SVH2" | version 1 | record count (BE u32)
+ * per record    --decrypt-->   platform name only; credential blob stays sealed
+ * first bad decrypt         ->  throw "Wrong password"  (no record-count leak)
+ * all bytes consumed?       ->  else "Corrupted vault file"
+ * @endcode
+ *
  * @param vaultPath Path to the `.seal` vault file.
  * @param password  Master password for key derivation.
  * @return Vector of vault records with decrypted platform names.
@@ -36,16 +48,25 @@ std::vector<VaultRecord> loadVaultIndex(
 /**
  * @brief Save vault with fully-encrypted records.
  *
- * Writes a single framed hex blob (same format as loadVaultIndex()).
- * Deleted records are omitted. Untouched records reuse their existing
- * encrypted platform packet (no re-encryption).
+ * Writes a single framed hex blob (same format as loadVaultIndex()) via an
+ * atomic temp+flush+rename. Deleted records are omitted. A record's
+ * platform-name packet is reused verbatim unless the record is dirty or has
+ * no existing packet, in which case the name is re-encrypted under @p kdf.
+ *
+ * @warning Credential packets (`encryptedBlob`) are **always copied verbatim**;
+ * this function never re-encrypts them. New or edited credentials must already
+ * be encrypted via encryptCredential() before saving, and changing the master
+ * password requires rekeyVault(), not saveVault().
  *
  * @param vaultPath Path to the `.seal` vault file.
  * @param records   Records to save (deleted records are skipped).
- * @param password  Master password for key derivation.
- * @param kdf       KDF parameters for newly-encrypted (dirty) records.
- *                  Defaults to DEFAULT_KDF; existing callers are unaffected.
- * @return `true` on success, `false` on I/O error.
+ * @param password  Master password used to (re)encrypt dirty platform names.
+ * @param kdf       KDF parameters for platform-name packets that must be
+ *                  (re)encrypted. Defaults to DEFAULT_KDF; credential packets
+ *                  are unaffected.
+ * @return `true` on success; `false` on I/O error, or when a field length or a
+ *         record count exceeds the 32-bit on-disk limits.
+ * @see rekeyVault, encryptCredential
  */
 bool saveVault(const std::filesystem::path& vaultPath,
                const std::vector<VaultRecord>& records,
@@ -61,6 +82,20 @@ bool saveVault(const std::filesystem::path& vaultPath,
  * verifies the temp file by reloading it with the new password, then
  * atomically replaces the original. On any failure the original file is
  * untouched and the temp file is removed.
+ *
+ * Soft-deleted records are dropped from the rekeyed vault and excluded from
+ * the returned count.
+ *
+ * @par Rekey flow
+ * @code
+ * load(current key)  ->  fail-fast "Wrong password" on a bad current key
+ *   for each non-deleted record:
+ *     decrypt (current key)  ->  re-encrypt (new key)  ->  cleanse plaintext
+ *   write <vault>.rekey.tmp
+ *   reload+verify (new key): record count and platform names must match
+ *   flush temp  ->  atomic swap (ReplaceFileW; MoveFileExW cross-volume fallback)
+ *   any failure: remove temp, original untouched, rethrow
+ * @endcode
  *
  * @param vaultPath       Path to the `.seal` vault file.
  * @param currentPassword Current master password.
@@ -96,7 +131,17 @@ struct PlatformMatch
  * @brief Resolve a platform query against a list of platform names.
  *
  * Case-insensitive exact match wins; otherwise a unique case-insensitive
- * prefix matches; multiple prefix hits are Ambiguous with candidates.
+ * prefix matches; multiple prefix hits are Ambiguous with candidates. An
+ * empty @p query yields NotFound.
+ *
+ * @par Resolution order
+ * @code
+ * empty query              ->  NotFound
+ * case-insensitive exact   ->  Found (index)
+ * exactly one CI prefix    ->  Found (index)
+ * two or more CI prefixes  ->  Ambiguous (candidates)
+ * otherwise                ->  NotFound
+ * @endcode
  *
  * @param names Platform names in record order.
  * @param query User-supplied platform query.
@@ -108,8 +153,8 @@ PlatformMatch matchPlatform(const std::vector<std::string>& names, std::string_v
  * @brief Locate the default vault file.
  *
  * Priority: `SEAL_VAULT` environment variable (used verbatim when the file
- * exists) -> first `*.seal` in the executable's directory -> current working
- * directory -> user home (`USERPROFILE`).
+ * exists) -> alphabetically first `*.seal` in the executable's directory ->
+ * current working directory -> user home (`USERPROFILE`).
  *
  * @return Path to the vault, or an empty path when none is found.
  */
@@ -120,6 +165,9 @@ std::filesystem::path findDefaultVault();
  *
  * Only the requested record's blob is decrypted.  The caller must call
  * cleanse() on the result (or let it destruct) immediately after use.
+ *
+ * The credential packet's plaintext is `username\0password` (a single NUL
+ * separator); a blob with no separator is rejected as malformed.
  *
  * @param record   The vault record whose credential to decrypt.
  * @param password Master password for key derivation.
@@ -133,7 +181,9 @@ DecryptedCredential decryptCredentialOnDemand(
 /**
  * @brief Encrypt a credential pair into a new VaultRecord.
  *
- * The record is marked dirty so the next save writes it.
+ * The record is marked dirty so the next save writes it. The username and
+ * password are joined as `username\0password` and encrypted as one packet,
+ * mirroring the layout decryptCredentialOnDemand() splits on.
  *
  * @param platform       Cleartext platform/service name (UTF-8).
  * @param username       Username in secure wide string.

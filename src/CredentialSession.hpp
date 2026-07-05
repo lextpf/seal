@@ -17,6 +17,21 @@ namespace seal
  * The master key is held in locked memory and kept DPAPI-protected while idle;
  * @ref unlock returns an RAII window during which the key is plaintext.
  *
+ * @par Master-key lifecycle
+ * @verbatim
+ *   States:  unset - no key held
+ *            idle  - key held, DPAPI-protected  (the resting state)
+ *            open  - Access alive and ok(): key is plaintext-readable
+ *
+ *   Transitions:
+ *     unset  --adopt(pw)--------------------->  idle
+ *     idle   --adopt(pw)  (clear + re-adopt)-->  idle
+ *     idle   --clear()---------------------->  unset
+ *     idle   --unlock()  [key held]-------->  open
+ *     open   --~Access: reprotect()-------->  idle   (best-effort)
+ *     unset  --unlock()--------------------->  unset  (ok() == false)
+ * @endverbatim
+ *
  * @note Not internally synchronised. All calls must occur on the owning
  *       (GUI) thread; background workers must receive an owned SecureWide
  *       copy taken inside an unlock() window, never a CredentialSession&.
@@ -24,6 +39,7 @@ namespace seal
 class CredentialSession
 {
 public:
+    /// Master-password buffer type: a wide secure string in locked memory.
     using SecureWide = basic_secure_string<wchar_t, locked_allocator<wchar_t>>;
 
     /// @brief Construct an empty (unset) session.
@@ -40,12 +56,14 @@ public:
     /// @brief Whether a master password is currently held.
     bool isSet() const noexcept;
 
-    /// @brief Adopt a new master password (sole acquire path).
-    ///
-    /// Wipes any previous key, takes ownership of @p password, rebuilds the
-    /// DPAPI guard over the new buffer, and leaves it protected (idle).
-    ///
-    /// @param password Master password to take ownership of.
+    /**
+     * @brief Adopt a new master password (sole acquire path).
+     *
+     * Wipes any previous key, takes ownership of @p password, rebuilds the
+     * DPAPI guard over the new buffer, and leaves it protected (idle).
+     *
+     * @param password Master password to take ownership of.
+     */
     void adopt(SecureWide&& password);
 
     /// @brief Wipe the master key and return to the unset state (sole release).
@@ -59,6 +77,20 @@ public:
      * Unprotects on construction and re-protects on destruction. @ref ok
      * reports whether the buffer is actually readable; callers MUST check it
      * before calling @ref password.
+     *
+     * @par Canonical usage
+     * @code{.cpp}
+     * auto access = session.unlock();  // ctor: unprotect() when a key is held
+     * if (!access.ok())                // false: unset session or unprotect failed
+     * {
+     *     // master key unavailable - do not read
+     * }
+     * else
+     * {
+     *     use(access.password());      // valid only within this scope
+     * }
+     * // ~access here: reprotect() (best-effort; exceptions swallowed)
+     * @endcode
      */
     class [[nodiscard]] Access
     {
@@ -75,9 +107,11 @@ public:
         /// @brief Whether the key is plaintext and readable in this window.
         bool ok() const noexcept;
 
-        /// @brief The plaintext master password.
-        /// @return Reference to the locked-memory buffer; valid only while ok().
-        /// @throw std::logic_error if called when !ok().
+        /**
+         * @brief The plaintext master password.
+         * @return Reference to the locked-memory buffer; valid only while ok().
+         * @throw std::logic_error if called when !ok().
+         */
         const SecureWide& password() const;
 
     private:
@@ -85,9 +119,11 @@ public:
         bool m_Ok = false;
     };
 
-    /// @brief Open a scoped plaintext window over the master key.
-    /// @return An Access whose ok() is false when the session is unset or the
-    ///         DPAPI unprotect failed.
+    /**
+     * @brief Open a scoped plaintext window over the master key.
+     * @return An Access whose ok() is false when the session is unset or the
+     *         DPAPI unprotect failed.
+     */
     [[nodiscard]] Access unlock() noexcept;
 
 private:

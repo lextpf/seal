@@ -29,6 +29,19 @@ namespace seal
  * decryptLine() do the same for hex-encoded text strings, returning the
  * result rather than writing to disk.
  *
+ * @par Atomic write sequence
+ * Every disk-writing path (single-file and streaming) commits through a
+ * temp-then-rename, so a crash can never leave a half-written destination:
+ * @verbatim
+ *   src  (read-only; never modified by encrypt/decrypt)
+ *     |
+ *     v  transform (AES-256-GCM)
+ *   <dst>.tmp  --- out.flush() ---> FlushFileBuffers()   (bytes durable)
+ *     |
+ *     v  MoveFileEx(<dst>.tmp -> <dst>, MOVEFILE_REPLACE_EXISTING)
+ *   <dst>  (replaced atomically; on crash <dst> is fully old or fully new)
+ * @endverbatim
+ *
  * ## :material-folder-lock: Directory & Batch Processing
  *
  * processDirectory() walks a directory tree with `FindFirstFileA`,
@@ -62,7 +75,7 @@ public:
      *
      * Reads the source file, encrypts with AES-256-GCM, and writes the result
      * atomically to @p dstPath (via a `.tmp` intermediate). The source file at
-     * @p srcPath is never modified -- the caller should delete it only after
+     * @p srcPath is never modified - the caller should delete it only after
      * this method returns `true`.
      *
      * @tparam SecurePwd Secure password container.
@@ -129,7 +142,9 @@ public:
      * chunks and feeds them incrementally to AES-256-GCM via `EVP_EncryptUpdate`,
      * avoiding loading the entire file into memory. The wire format is identical
      * to `encryptPacket` so the output is interoperable with all existing decrypt
-     * paths. For small files, delegates to the single-shot `encryptFileTo` path.
+     * paths. `encryptFileTo` dispatches here for sources larger than
+     * `cfg::FILE_CHUNK` and keeps smaller files on its single-shot path; there is
+     * no size gate inside this function - called directly it always streams.
      *
      * @tparam SecurePwd Secure password container.
      * @param srcPath Source file to read (left unmodified).
@@ -148,8 +163,10 @@ public:
      * For files larger than `cfg::FILE_CHUNK` (1 MiB) plus framing overhead,
      * reads the ciphertext in chunks and feeds them incrementally to
      * `EVP_DecryptUpdate`. The GCM authentication tag is read from the end of
-     * the file before the streaming pass begins. For small files, delegates to
-     * the single-shot `decryptFileTo` path.
+     * the file before the streaming pass begins. `decryptFileTo` dispatches here
+     * for sources larger than `cfg::FILE_CHUNK` plus framing overhead and keeps
+     * smaller files on its single-shot path; there is no size gate inside this
+     * function - called directly it always streams.
      *
      * @tparam SecurePwd Secure password container.
      * @param srcPath Encrypted source file to read (left unmodified).
@@ -203,12 +220,12 @@ public:
      * Walks the directory with `FindFirstFileA`, skipping `.exe` and the
      * `seal` binary itself. Each file is encrypted or decrypted based on
      * its `.seal` extension and renamed in place after successful I/O.
-     * Subdirectory recursion is parallelised via a fixed-size worker pool
-     * (`min(hardware_concurrency, 8)` threads, bounded task queue); files
-     * within a single directory are processed sequentially.
+     * Leaf files are encrypted/decrypted in parallel via a fixed-size worker
+     * pool (`max(1, min(hardware_concurrency, 8))` threads, bounded task
+     * queue); subdirectory recursion runs inline on the calling thread.
      *
      * @note This is the CLI-mode directory processor. The GUI-mode
-     *       seal::encryptDirectory() / seal::decryptDirectory() in Vault.h
+     *       seal::encryptDirectory() / seal::decryptDirectory() in Vault.hpp
      *       use `std::filesystem::recursive_directory_iterator` in a single
      *       thread and have different skip-lists.
      *

@@ -18,27 +18,31 @@ namespace seal
  * as separate AES-256-GCM packets.  The cleartext platform is held
  * in memory only (decrypted on load) so the UI can list accounts.
  *
- * Binary format:
+ * On-disk framing (this struct is one record; a vault frame wraps N of them):
  *
- * ```mermaid
- * ---
- * config:
- *   theme: dark
- * ---
- * block-beta
- *   columns 8
- *   magic["magic(4)"]:1
- *   ver["ver(1)"]:1
- *   count["count(4)"]:1
- *   pLen["platLen(4)"]:1
- *   pBlob["platform packet"]:1
- *   cLen["credLen(4)"]:1
- *   cBlob["credential packet"]:1
- *   more["..."]:1
- * ```
+ * @verbatim
+ * File frame, hex-encoded to a single text line on disk:
+ *   +---------+---------+---------+-----------+-----------+-----+
+ *   | magic   | version | count   | record[0] | record[1] | ... |
+ *   | (4)     | (1)     | (4,BE)  |           |           |     |
+ *   +---------+---------+---------+-----------+-----------+-----+
  *
- * The binary payload is hex-encoded as a single line when stored on disk;
- * loadVaultIndex() decodes the hex before parsing the binary framing.
+ * One record (what this struct serializes to):
+ *   +------------+-----------------+------------+-------------------+
+ *   | platLen(4) | platform packet | credLen(4) | credential packet |
+ *   | BE         | AES-256-GCM     | BE         | AES-256-GCM       |
+ *   +------------+-----------------+------------+-------------------+
+ * @endverbatim
+ *
+ * The frame magic "SVH2" is distinct from the per-packet AAD magic "seal"
+ * carried inside each AES-256-GCM packet. loadVaultIndex() strips whitespace
+ * and hex-decodes the blob before parsing this framing; saveVault() writes it.
+ *
+ * @par Two-tier decryption lifecycle
+ * @code
+ * loadVaultIndex()            -> decrypts platform name; leaves credential sealed
+ * decryptCredentialOnDemand() -> decrypts credential   -> DecryptedCredential
+ * @endcode
  *
  * @see loadVaultIndex, encryptCredential
  */
@@ -63,6 +67,16 @@ struct VaultRecord
  *
  * Both fields live in locked, guarded memory.  Call cleanse() or let the
  * destructor run to wipe them immediately after use.
+ *
+ * @par Credential packet plaintext (inside the AES-256-GCM blob)
+ * @verbatim
+ *   +-------------------+------+-------------------+
+ *   | username (UTF-8)  | 0x00 | password (UTF-8)  |
+ *   +-------------------+------+-------------------+
+ *                        one NUL separator
+ * @endverbatim
+ * A blob with no NUL is rejected as malformed; a NUL at the very end yields
+ * an empty password field.
  *
  * @see decryptCredentialOnDemand
  */

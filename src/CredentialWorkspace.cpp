@@ -117,7 +117,7 @@ void CredentialWorkspace::editRecord(size_t index,
     const auto& finalUsername = username ? *username : existing.username;
     const auto& finalPassword = password ? *password : existing.password;
 
-    // Replace the record entirely -- fresh salt/IV on re-encrypt.
+    // Replace the record entirely - fresh salt/IV on re-encrypt.
     m_Records[index] =
         seal::encryptCredential(platform, finalUsername, finalPassword, access.password());
     ++m_Generation;

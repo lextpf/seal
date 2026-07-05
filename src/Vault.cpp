@@ -45,11 +45,10 @@ void wipeStdString(std::string& s)
     s.shrink_to_fit();
 }
 
-// FlushFileBuffers on a path so the temp file's data blocks reach stable
-// storage before the rename commits. A rename persists directory metadata,
-// not the new file's contents, so without this a power loss in the window
-// after the rename can leave a renamed-but-empty vault = total loss. Mirrors
-// flushFileToDisk in FileOperations.cpp (wide variant for the vault's paths).
+// FlushFileBuffers a path so the temp file's data blocks reach stable storage
+// before the rename commits: rename persists directory metadata, not file data,
+// so a power loss after it could leave a renamed-but-empty vault (total loss).
+// Mirrors flushFileToDisk in FileOperations.cpp (wide variant for vault paths).
 bool flushPathToDisk(const std::filesystem::path& path)
 {
     HANDLE h = CreateFileW(path.c_str(),
@@ -739,7 +738,7 @@ DecryptedCredential decryptCredentialOnDemand(
          seal::diag::kv("platform_len", record.platform.size()),
          seal::diag::kv("encrypted_blob_len", record.encryptedBlob.size())}));
 #endif
-    // Credential blob plaintext is "username\0password" -- one NUL separator.
+    // Credential blob plaintext is "username\0password" - one NUL separator.
     auto plainBytes = seal::Cryptography::decryptPacket(
         std::span<const unsigned char>(record.encryptedBlob), password);
 
@@ -813,7 +812,7 @@ VaultRecord encryptCredential(
     std::string userUtf8 = seal::utils::secureWideToUtf8(username);
     std::string passUtf8 = seal::utils::secureWideToUtf8(password);
 
-    // Plaintext format: "username\0password" -- mirrors what
+    // Plaintext format: "username\0password" - mirrors what
     // decryptCredentialOnDemand splits on.
     std::string credPlain;
     credPlain.reserve(userUtf8.size() + 1 + passUtf8.size());

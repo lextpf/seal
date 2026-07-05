@@ -703,12 +703,10 @@ static void displayTriplesUncensored(const std::vector<std::string>& allHexToken
     seal::Cryptography::cleanseString(ossBuf);
 }
 
-// Three-tier line dispatch:
-//   1. File/dir path -- en-/de-crypt on disk (wins over hex if both match).
-//   2. Hex tokens -- decrypt and display/copy.
-//   3. Anything else -- encrypt to hex.
-// Censored mode decrypts credentials on-demand at click time to keep the
-// plaintext exposure window minimal.
+// Three-tier line dispatch: (1) file/dir path - en-/de-crypt on disk (wins over
+// hex if both match); (2) hex tokens - decrypt and display/copy; (3) anything else
+// - encrypt to hex. Censored mode decrypts credentials on-demand at click time to
+// keep the plaintext exposure window minimal.
 template <secure_password SecurePwd>
 void FileOperations::processBatch(const std::vector<std::string>& lines,
                                   bool uncensored,
@@ -896,7 +894,7 @@ bool FileOperations::shredFile(const std::string& path)
     if (!GetFileSizeEx(hFile, &liSize) || std::bit_cast<long long>(liSize) <= 0)
     {
         CloseHandle(hFile);
-        // Empty / unreadable -- just delete.
+        // Empty / unreadable - just delete.
         return DeleteFileA(path.c_str()) != 0;
     }
 
@@ -1127,14 +1125,10 @@ bool FileOperations::encryptFileStreaming(const std::string& srcPath,
     return false;
 }
 
-// Streaming decrypt with two-pass authentication.
-//   Pass 1: stream the whole ciphertext through GCM into a scratch buffer
-//           (wiped) and check the tag. Nothing written to disk. Tag fail
-//           -> return false; no file is ever created.
-//   Pass 2: re-read and decrypt to a temp file. Pass-1 authenticity makes
-//           the bytes safe to write; we then flush, rename, wipe key.
-// Costs one extra read + decrypt to guarantee tampered ciphertext can
-// never produce recoverable plaintext on disk.
+// Two-pass streaming decrypt; the extra read+decrypt guarantees tampered input never
+// yields recoverable plaintext on disk. Pass 1 streams all ciphertext through GCM into
+// a wiped scratch buffer to verify the tag (nothing on disk; tag fail -> false, no file).
+// Pass 2 re-reads/decrypts to a temp file once authenticated, then flush/rename/wipe key.
 template <secure_password SecurePwd>
 bool FileOperations::decryptFileStreaming(const std::string& srcPath,
                                           const std::string& dstPath,
