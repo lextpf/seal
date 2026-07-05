@@ -156,6 +156,7 @@ set(SEAL_SOURCES
     src/TypeController.cpp
     src/QrCapture.cpp
     src/FillController.cpp
+    src/StagingController.cpp
     src/VaultModel.cpp
     src/QmlMain.cpp
     src/Vault.cpp
@@ -342,18 +343,43 @@ if(NOT VCPKG_TARGET_TRIPLET MATCHES "static")
     )
 endif()
 
-# Native-messaging host: tiny standalone exe spawned by the browser to
-# bridge between Chrome's native-messaging stdio protocol and the seal
-# named pipe. Built as a separate target so it can be signed independently.
+# Native-messaging host: a tiny standalone exe the browser spawns to relay
+# length-prefixed JSON between Chrome's native-messaging stdio and the seal
+# named pipe. Its own target - Qt-free, console subsystem - so it can be signed
+# and packaged independently; it inherits this file's hardening flags.
 option(ENABLE_BROWSER_HOST "Build seal-browser.exe alongside seal" ON)
 if(ENABLE_BROWSER_HOST)
-    add_subdirectory(host/seal-browser)
+    add_executable(seal_browser
+        host/browser/main.cpp
+        host/browser/BridgePipe.cpp
+        host/browser/ExitLog.cpp
+        host/browser/HandleVerification.cpp
+        host/browser/LaunchOrigin.cpp
+        host/browser/MessageFraming.cpp
+    )
+
+    set_target_properties(seal_browser PROPERTIES OUTPUT_NAME "seal-browser")
+
+    target_compile_definitions(seal_browser PRIVATE
+        NOMINMAX
+        _WIN32_WINNT=0x0A00
+    )
+
+    # Console subsystem: the browser pipes stdin/stdout, so we need a console
+    # entry point (wmain), not WinMain.
+    if(MSVC)
+        set_target_properties(seal_browser PROPERTIES
+            LINK_FLAGS "/SUBSYSTEM:CONSOLE /ENTRY:wmainCRTStartup"
+        )
+    endif()
+
+    install(TARGETS seal_browser RUNTIME DESTINATION bin)
 endif()
 
 # Bundle the WebExtension folder into the install layout so the user can
 # point chrome://extensions / about:debugging at it after running
 # `seal --install-browser-extension`.
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/extensions/seal-browser"
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/extensions/browser"
     DESTINATION extensions
     FILES_MATCHING
         PATTERN "*.json"
@@ -390,6 +416,7 @@ if(ENABLE_TESTS)
         tests/test_vault_roundtrip.cpp
         tests/test_credential_csv.cpp
         tests/test_autolock_policy.cpp
+        tests/test_autostage_policy.cpp
         tests/test_credential_session.cpp
         tests/test_credential_workspace.cpp
         tests/test_cancellation_token.cpp
