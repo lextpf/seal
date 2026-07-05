@@ -10,6 +10,7 @@
 #include "FillController.hpp"
 #include "IUiFeedback.hpp"
 #include "Logging.hpp"
+#include "StagingController.hpp"
 #include "TypeController.hpp"
 #include "WindowController.hpp"
 
@@ -84,6 +85,11 @@ int RunQMLMode(int argc, char* argv[])
     // Bridge borrows fillEngine (must outlive it) and routes its status messages
     // through appViewModel's IUiFeedback::setStatus so the shared footer updates.
     seal::BridgeViewModel bridge(&fillEngine);
+    // Zero-gesture staged auto-fill. Owned collaborator (NOT a context
+    // property): polls the bridge's nav snapshot and auto-arms fillEngine on a
+    // unique host match. Borrows workspace/fillEngine/appViewModel (all declared
+    // earlier, so they outlive it).
+    seal::StagingController staging(workspace, fillEngine, appViewModel);
     seal::WindowController window;
     // The embedded-CLI surface (the "Cli" context property). Declared last so it
     // destructs first: it borrows workspace, appViewModel (as IUiFeedback +
@@ -113,6 +119,17 @@ int RunQMLMode(int argc, char* argv[])
                      &appViewModel,
                      [p = static_cast<seal::IUiFeedback*>(&appViewModel)](const QString& t)
                      { p->setStatus(t); });
+    // Staged auto-fill: highlight the auto-armed record, and follow the
+    // Bridge.autoStageEnabled master switch. StagingController is not exposed
+    // to QML; the toggle rides the existing Bridge context property.
+    QObject::connect(&staging,
+                     &seal::StagingController::autoArmedForRecord,
+                     &appViewModel,
+                     &seal::AppViewModel::onAutoArmed);
+    QObject::connect(&bridge,
+                     &seal::BridgeViewModel::autoStageEnabledChanged,
+                     &staging,
+                     [&staging, &bridge] { staging.setEnabled(bridge.autoStageEnabled()); });
     // Surface the TypeController's fill errors through the same error dialog that
     // AppViewModel's vault errors use, so the QML Connections target stays single.
     QObject::connect(&fill,

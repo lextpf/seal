@@ -46,13 +46,17 @@ class BridgeViewModel : public QObject
     Q_PROPERTY(
         bool bridgeBraveConnected READ bridgeBraveConnected NOTIFY bridgeBraveConnectedChanged)
     Q_PROPERTY(QString bridgeStatusText READ bridgeStatusText NOTIFY bridgeStatusTextChanged)
+    Q_PROPERTY(bool autoStageEnabled READ autoStageEnabled WRITE setAutoStageEnabled NOTIFY
+                   autoStageEnabledChanged)
 
 public:
-    /// @brief Construct the ViewModel, restore the persisted enable state, and
-    ///        start the 1 Hz peer-connected poll.
-    /// @param fillController Borrowed (non-owning) controller that owns the
-    ///        actual BrowserBridge; must outlive this presenter.
-    /// @param parent QObject parent (typically the owning AppViewModel).
+    /**
+     * @brief Construct the ViewModel, restore the persisted enable state, and
+     *        start the 1 Hz peer-connected poll.
+     * @param fillController Borrowed (non-owning) controller that owns the
+     *        actual BrowserBridge; must outlive this presenter.
+     * @param parent QObject parent (typically the owning AppViewModel).
+     */
     explicit BridgeViewModel(FillController* fillController, QObject* parent = nullptr);
 
     /// @brief Whether the browser bridge is enabled (M8 panic-mode off).
@@ -70,9 +74,22 @@ public:
     /// @brief Human-readable bridge status for the settings panel.
     QString bridgeStatusText() const;
 
-    /// @brief Toggle the browser bridge on/off (M8 panic mode) and persist it.
-    /// @param enabled true to allow extension reports, false to disable.
+    /**
+     * @brief Toggle the browser bridge on/off (M8 panic mode) and persist it.
+     * @param enabled true to allow extension reports, false to disable.
+     */
     Q_INVOKABLE void setBridgeEnabled(bool enabled);
+
+    /// @brief Whether zero-gesture staged auto-fill is enabled (default false).
+    bool autoStageEnabled() const;
+
+    /**
+     * @brief Enable/disable staged auto-fill and persist it. The actual
+     *        staging behaviour lives in StagingController, wired to this
+     *        property's change signal in the composition root.
+     * @param enabled true to auto-arm on matching navigation.
+     */
+    Q_INVOKABLE void setAutoStageEnabled(bool enabled);
 
     /// @brief Install the browser-companion native-messaging manifest (HKCU).
     Q_INVOKABLE void runInstallBrowserExtension();
@@ -89,6 +106,7 @@ signals:
     void bridgeChromeConnectedChanged();  ///< Chrome-peer connect/disconnect edge.
     void bridgeBraveConnectedChanged();   ///< Brave-peer connect/disconnect edge.
     void bridgeStatusTextChanged();       ///< Bridge status text updated.
+    void autoStageEnabledChanged();       ///< Staged auto-fill toggled on/off.
 
     /// @brief Diagnose dry-run finished; @p summary holds the per-probe breakdown.
     void bridgeDiagnoseReady(const QString& summary);

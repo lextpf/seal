@@ -341,6 +341,68 @@ TEST(FillPlaintextWindow, NarrowedToDecryptInstant)
     EXPECT_EQ(tcSrc.find("singleShot"), std::string::npos);
 }
 
+TEST(StagedAutofillBoundary, StagingNeverDecryptsAndReleaseFailsClosed)
+{
+    const std::string scSrc = readSourceFile("src/StagingController.cpp");
+    const std::string fcSrc = readSourceFile("src/FillController.cpp");
+    const std::string bvmSrc = readSourceFile("src/BridgeViewModel.cpp");
+    const std::string qm = readSourceFile("src/QmlMain.cpp");
+
+    // Staging only selects + arms; it never decrypts, unlocks, or prompts for
+    // the master password. The plaintext window stays at the click-time
+    // decrypt in FillController, so these must be absent from the poll.
+    expectAbsent(scSrc, "decryptCredentialOnDemand");
+    expectAbsent(scSrc, "unlock()");
+    expectAbsent(scSrc, "ensurePassword");
+    // The nav poll is a repeating timer, never a one-shot reprotect net.
+    expectAbsent(scSrc, "singleShot");
+
+    // The auto-fill release path is hardened: injected clicks are rejected,
+    // the fused verdict must be on-disk corroborated (decideDetailed), and the
+    // classification / host / foreground gates fail closed.
+    expectPresent(fcSrc, "LLMHF_INJECTED");
+    expectPresent(fcSrc, "decideDetailed");
+    expectPresent(fcSrc, "reason=no_bridge_entry");
+    expectPresent(fcSrc, "reason=host_mismatch");
+    expectPresent(fcSrc, "reason=foreground_pid_mismatch");
+    // Nav-mode host binding goes through the shared tiered matcher (strict for
+    // domain records, fuzzy for bare labels) that the selector also uses, so
+    // the release gate and the selector can never diverge.
+    expectPresent(fcSrc, "url::platformMatchesHost(record.platform, pageHost)");
+    // armAuto is a distinct entry (keeps the manual arm() call string intact).
+    expectPresent(fcSrc, "armAuto");
+
+    // Staged auto-fill is opt-in: the master switch defaults to false.
+    expectPresent(bvmSrc, "\"bridge/autostage\", false");
+
+    // StagingController is an owned collaborator, NOT a 6th context property.
+    expectAbsent(qm, "setContextProperty(\"Staging\"");
+
+    // --- Zero-click username injection (reverse channel) invariants ---
+
+    const std::string bbSrc = readSourceFile("src/BrowserBridge.cpp");
+    const std::string contentJs = readSourceFile("extensions/browser/content.js");
+
+    // The username decrypt+send lives in FillController (JIT), NOT in the
+    // decrypt-free StagingController.
+    expectAbsent(scSrc, "sendFillUsername");
+    expectPresent(fcSrc, "injectUsername");
+    // Username injection binds the host via the shared tiered matcher (same
+    // predicate as the selector + password gate): strict for domain records,
+    // fuzzy/TLD-blind for bare labels (the user-chosen relaxation).
+    expectPresent(fcSrc, "platformMatchesHost(record.platform, host)");
+    // Only the USERNAME crosses the reverse channel; the password is never sent
+    // to the browser (no such method exists).
+    expectPresent(fcSrc, "sendFillUsername");
+    expectAbsent(fcSrc, "sendFillPassword");
+    expectAbsent(bbSrc, "sendFillPassword");
+    // The bridge wipes the plaintext username wire buffer after sending.
+    expectPresent(bbSrc, "SecureZeroMemory(json.data()");
+    // The content script re-verifies its own host before injecting, so a stale
+    // route can only fail closed, never leak to the wrong site.
+    expectPresent(contentJs, "msg.url_host !== location.hostname");
+}
+
 TEST(Phase2aBoundaryTest, AppViewModelImplementsSeams)
 {
     const std::string hpp = readSourceFile("src/AppViewModel.hpp");

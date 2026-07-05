@@ -150,11 +150,20 @@ int VaultListModel::recordIndexForRow(int row) const
     return m_FilteredIndices[row];
 }
 
-// Collect indices of non-deleted, filter-matching records into
-// m_FilteredIndices (the row->record map QML sees), then reorder per
-// m_SortMode. Alphabetical sorts are case-insensitive; grouped-by-brand
-// partitions on BrandIconResolver and sorts alphabetically within each
-// partition.
+int VaultListModel::rowForRecordIndex(int recordIndex) const
+{
+    for (int row = 0; row < (int)m_FilteredIndices.size(); ++row)
+    {
+        if (m_FilteredIndices[row] == recordIndex)
+            return row;
+    }
+    return -1;
+}
+
+// Collect non-deleted, filter-matching record indices into m_FilteredIndices
+// (the row->record map QML sees), then reorder per m_SortMode. Alphabetical
+// sorts are case-insensitive; grouped-by-brand partitions on BrandIconResolver,
+// sorting alphabetically within each partition.
 void VaultListModel::rebuildFilteredIndices()
 {
     m_FilteredIndices.clear();

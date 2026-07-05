@@ -28,11 +28,10 @@ namespace seal
 namespace
 {
 
-// Short, one-way fingerprint for logs: correlate repeated URL-binding
-// mismatches against the same site without echoing the user's hostname
-// (= browsing history) into shared log files. 8 hex chars (32 bits of
-// SHA-256 prefix) is plenty for correlation; the goal is privacy of the
-// log artifact, not unforgeability against a brute-force replay.
+// One-way fingerprint for logs: correlate repeated URL-binding mismatches on
+// the same site without echoing the user's hostname (= browsing history) into
+// shared logs. 8 hex chars (32-bit SHA-256 prefix) suffices for correlation;
+// the goal is log-artifact privacy, not unforgeability against brute-force.
 std::string hostLogFingerprint(std::string_view host)
 {
     if (host.empty())
@@ -58,6 +57,31 @@ std::string hostLogFingerprint(std::string_view host)
         out[2 * i] = kHex[(digest[i] >> 4) & 0x0F];
         out[2 * i + 1] = kHex[digest[i] & 0x0F];
     }
+    return out;
+}
+
+// Bounded wait for the async bridge entry for a nav-armed plain click. The
+// content.js report for the click travels browser -> SW -> host -> pipe
+// (~75 ms observed); cap at ~5x that, then fail closed. Polled at 20 ms on
+// the GUI thread (never a blocking Sleep).
+constexpr int kAutoBridgeWaitMs = 400;
+
+// Convert a wide (UTF-16) secret span to a UTF-8 std::string for the wire.
+// The result is a TRANSIENT plaintext copy the caller wipes after sending.
+std::string wideToUtf8(const wchar_t* data, std::size_t len)
+{
+    if (data == nullptr || len == 0)
+    {
+        return {};
+    }
+    const int wideLen = static_cast<int>(len);
+    const int need = WideCharToMultiByte(CP_UTF8, 0, data, wideLen, nullptr, 0, nullptr, nullptr);
+    if (need <= 0)
+    {
+        return {};
+    }
+    std::string out(static_cast<std::size_t>(need), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, data, wideLen, out.data(), need, nullptr, nullptr);
     return out;
 }
 
@@ -91,14 +115,10 @@ void FillController::disableBridge()
 void FillController::enableBridge()
 {
     m_BrowserBridge.enable();
-    // Start the bridge unconditionally when enabled, not only on
-    // arm/armDiagnose. The extension's connectNative establishes a
-    // persistent port at browser load time; if our named pipe doesn't
-    // exist yet, every retry hits an exponential backoff that grows to
-    // tens of seconds before the next attempt. Pre-starting the pipe
-    // means the extension can connect once and stay connected for the
-    // app's lifetime, so the first Ctrl+Click after seal launch already
-    // has a live channel to populate the verdict map.
+    // Start the bridge unconditionally when enabled, not just on arm/
+    // armDiagnose: the extension's connectNative opens a persistent port at
+    // browser load, so an absent pipe forces retries into exponential backoff
+    // (tens of s); pre-starting keeps one channel live for the first Ctrl+Click.
     if (!m_BrowserBridge.isRunning())
     {
         (void)m_BrowserBridge.start();
@@ -127,7 +147,8 @@ bool FillController::isBridgeBraveConnected() const
 
 bool FillController::isArmed() const
 {
-    return m_State.load() == State::Armed;
+    const State s = m_State.load();
+    return s == State::Armed || s == State::AutoArmed;
 }
 
 QString FillController::fillStatusText() const
@@ -157,6 +178,8 @@ static const char* stateToString(FillController::State s)
             return "Typing";
         case FillController::State::Diagnose:
             return "Diagnose";
+        case FillController::State::AutoArmed:
+            return "AutoArmed";
         default:
             return "Unknown";
     }
@@ -202,6 +225,12 @@ void FillController::updateStatusText()
         case State::Diagnose:
             m_StatusText = QStringLiteral("Ctrl+Click any field to test detection");
             break;
+        case State::AutoArmed:
+            if (m_TypedFields & TypedUsername)
+                m_StatusText = QStringLiteral("Click the password field to fill");
+            else
+                m_StatusText = QStringLiteral("Click the login field to fill");
+            break;
     }
     if (m_StatusText != prev)
         emit fillStatusTextChanged();
@@ -212,21 +241,35 @@ bool FillController::arm(int recordIndex,
                          seal::CredentialSession& session,
                          const uint64_t& ownerGeneration)
 {
-    // If already armed (user clicked a different record), tear down first.
+    return armInternal(recordIndex, records, session, ownerGeneration, State::Armed);
+}
+
+bool FillController::armAuto(int recordIndex,
+                             const std::vector<seal::VaultRecord>& records,
+                             seal::CredentialSession& session,
+                             const uint64_t& ownerGeneration)
+{
+    return armInternal(recordIndex, records, session, ownerGeneration, State::AutoArmed);
+}
+
+bool FillController::armInternal(int recordIndex,
+                                 const std::vector<seal::VaultRecord>& records,
+                                 seal::CredentialSession& session,
+                                 const uint64_t& ownerGeneration,
+                                 State targetState)
+{
+    // If already armed (user clicked a different record, or a nav re-staged),
+    // tear down first. This also enforces manual/auto mutual exclusion: the
+    // two never share a live armed window.
     if (m_State.load() != State::Idle)
         cancel();
 
-    // Borrow (no copy): records can be huge -- copying would double the
-    // SeLockMemoryPrivilege quota and force double-cleanse on cancel. The
-    // session stays DPAPI-protected while armed; performType() opens its own
-    // scoped unlock() only around the decrypt, so the master key is plaintext
-    // for the decrypt instant rather than the whole armed window. Caller
-    // (AppViewModel) keeps records + session alive until fillCompleted /
-    // fillCancelled / fillError.
-    //
-    // Borrowing races with vault mutations between Ctrl+Click and keystroke
-    // send. We snapshot ownerGeneration here; performType() bails via
-    // fillError() if the live counter has moved.
+    m_AutoMode.store(targetState == State::AutoArmed);
+
+    // Borrow (no copy): records can be huge - a copy doubles the SeLockMemoryPrivilege
+    // quota + double-cleanse on cancel. Session stays DPAPI-protected while armed
+    // (performType() unlocks only around the decrypt); caller keeps records+session alive
+    // until fill completes. Snapshot ownerGeneration; performType() bails if it moved (race).
     m_RecordIndex = recordIndex;
     m_Records = &records;
     m_Session = &session;
@@ -242,7 +285,7 @@ bool FillController::arm(int recordIndex,
         (void)m_BrowserBridge.start();
     }
 
-    // Singleton registration -- static hook callbacks dispatch through it.
+    // Singleton registration - static hook callbacks dispatch through it.
     s_instance.store(this);
     installHooks();
 
@@ -258,13 +301,93 @@ bool FillController::arm(int recordIndex,
         return false;
     }
 
-    transitionTo(State::Armed);
+    transitionTo(targetState);
 
-    qCInfo(logFill) << "armed: recordIndex=" << m_RecordIndex << "timeout=" << FILL_TIMEOUT_SECONDS
-                    << "s";
+    qCInfo(logFill) << "armed: recordIndex=" << m_RecordIndex
+                    << "mode=" << (targetState == State::AutoArmed ? "auto" : "manual")
+                    << "timeout=" << FILL_TIMEOUT_SECONDS << "s";
     emit countdownSecondsChanged();
     m_TimeoutTimer.start();
     return true;
+}
+
+std::optional<seal::NavSnapshot> FillController::takeNavSince(std::uint64_t& lastSeenSeq)
+{
+    return m_BrowserBridge.takeNavSince(lastSeenSeq);
+}
+
+bool FillController::injectUsername(int recordIndex,
+                                    const std::vector<seal::VaultRecord>& records,
+                                    seal::CredentialSession& session,
+                                    const std::string& host,
+                                    DWORD browserPid)
+{
+    if (recordIndex < 0 || recordIndex >= static_cast<int>(records.size()))
+    {
+        return false;
+    }
+    const seal::VaultRecord& record = records[recordIndex];
+    if (record.deleted)
+    {
+        return false;
+    }
+    // Host binding (fail-closed): same tiered matcher as selector + password gate -
+    // strict for a domain record ("paypal.com"), fuzzy/TLD-blind for a bare label.
+    // User-chosen relaxation: a bare label is TLD-blind, so a lookalike-TLD page
+    // (paypal.co) gets the low-sensitivity email with no click - never the password.
+    if (!seal::url::platformMatchesHost(record.platform, host))
+    {
+        qCInfo(logFill).noquote() << QString::fromStdString(seal::diag::joinFields(
+            {"event=fill.autostage.username", "result=skip", "reason=host_mismatch"}));
+        return false;
+    }
+    if (m_BrowserBridge.isDisabled())
+    {
+        return false;  // M8.
+    }
+
+    // JIT-decrypt the username into locked memory; the master key is plaintext
+    // only for this decrypt. Then convert to a transient UTF-8 copy for the
+    // wire and wipe it after the send.
+    seal::DecryptedCredential cred;
+    try
+    {
+        auto access = session.unlock();
+        if (!access.ok())
+        {
+            qCWarning(logFill).noquote() << QString::fromStdString(seal::diag::joinFields(
+                {"event=fill.autostage.username", "result=fail", "reason=dpapi_unprotect"}));
+            return false;
+        }
+        cred = seal::decryptCredentialOnDemand(record, access.password());
+    }
+    catch (const std::exception& e)
+    {
+        qCWarning(logFill) << "injectUsername: decrypt failed:" << e.what();
+        return false;
+    }
+    catch (...)
+    {
+        qCWarning(logFill) << "injectUsername: decrypt failed (unknown)";
+        return false;
+    }
+
+    std::string usernameUtf8 = wideToUtf8(cred.username.data(), cred.username.size());
+    cred.cleanse();
+    seal::Cryptography::trimWorkingSet();
+
+    const bool sent =
+        !usernameUtf8.empty() && m_BrowserBridge.sendFillUsername(browserPid, host, usernameUtf8);
+    if (!usernameUtf8.empty())
+    {
+        SecureZeroMemory(usernameUtf8.data(), usernameUtf8.size());
+    }
+
+    qCInfo(logFill).noquote() << QString::fromStdString(seal::diag::joinFields(
+        {"event=fill.autostage.username",
+         seal::diag::kv("result", std::string_view(sent ? "ok" : "fail")),
+         seal::diag::kv("host_len", static_cast<unsigned int>(host.size()))}));
+    return sent;
 }
 
 void FillController::cancel()
@@ -286,6 +409,8 @@ void FillController::cancel()
     m_SnapshotGeneration = 0;
     m_TypedFields = TypedNone;
     m_RemainingSeconds = 0;
+    m_AutoMode.store(false);
+    m_AutoFillInFlight.store(false);
     emit countdownSecondsChanged();
     // Route cancellation by mode: diagnose never bound a credential, so
     // fillCancelled would confuse the "fill aborted" UI toast.
@@ -416,7 +541,7 @@ LRESULT CALLBACK FillController::mouseHookProc(int nCode, WPARAM wParam, LPARAM 
             QMetaObject::invokeMethod(self, "performType", Qt::QueuedConnection);
 
             // Return 1 swallows the click so the target app never sees the
-            // WM_LBUTTONDOWN -- otherwise Ctrl+Click would activate whatever
+            // WM_LBUTTONDOWN - otherwise Ctrl+Click would activate whatever
             // is under the cursor.
             return 1;
         }
@@ -431,6 +556,30 @@ LRESULT CALLBACK FillController::mouseHookProc(int nCode, WPARAM wParam, LPARAM 
             qCInfo(logFill) << "Ctrl+Click detected: diagnose dry-run";
             QMetaObject::invokeMethod(self, "performDiagnose", Qt::QueuedConnection);
             return 1;
+        }
+
+        // Staged auto-fill: a PLAIN left click (no Ctrl) while AutoArmed. A
+        // Ctrl-held click in this state falls through to CallNextHookEx, so a
+        // user mid-manual-flow is never double-triggered.
+        if (!ctrlDown && curState == State::AutoArmed)
+        {
+            auto* mhs = reinterpret_cast<MSLLHOOKSTRUCT*>(lParam);
+            // Reject synthetic/injected input: a web page cannot forge a real
+            // hardware click, but a local process's SendInput can. An injected
+            // click must never release a staged secret.
+            if ((mhs->flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED)) != 0)
+            {
+                return CallNextHookEx(nullptr, nCode, wParam, lParam);
+            }
+            self->m_ClickX.store(mhs->pt.x);
+            self->m_ClickY.store(mhs->pt.y);
+            self->m_PendingTarget.store(TypeTarget::Auto);
+            QMetaObject::invokeMethod(self, "performTypeAuto", Qt::QueuedConnection);
+            // Do NOT swallow (unlike Ctrl+Click, which returns 1): the plain
+            // click must focus the field normally. performTypeAuto validates
+            // the fail-closed gates and is a silent no-op if this click did
+            // not land on a bridge-classified login field.
+            return CallNextHookEx(nullptr, nCode, wParam, lParam);
         }
     }
     return CallNextHookEx(nullptr, nCode, wParam, lParam);
@@ -447,7 +596,8 @@ LRESULT CALLBACK FillController::keyboardHookProc(int nCode, WPARAM wParam, LPAR
         // Esc while waiting -> queued cancel (same hook-dispatcher reason
         // as mouseHookProc). Armed and Diagnose share this UX.
         const State curState = self->m_State.load();
-        if (khs->vkCode == VK_ESCAPE && (curState == State::Armed || curState == State::Diagnose))
+        if (khs->vkCode == VK_ESCAPE && (curState == State::Armed || curState == State::Diagnose ||
+                                         curState == State::AutoArmed))
         {
             QMetaObject::invokeMethod(self, "cancel", Qt::QueuedConnection);
             return 1;
@@ -465,7 +615,7 @@ void FillController::performType()
     transitionTo(State::Typing);
     m_TimeoutTimer.stop();
 
-    // Wait for Ctrl release before typing -- otherwise keystrokes register
+    // Wait for Ctrl release before typing - otherwise keystrokes register
     // as Ctrl-shortcuts (Ctrl+A = select-all). 2 s cap for a stuck key
     // (jammed physical key, RDP weirdness); we proceed anyway after that.
     auto* poll = new QTimer(this);
@@ -532,9 +682,7 @@ void FillController::performType()
                 return;
             }
 
-            // On-demand decrypt into VirtualLock'd memory; plaintext wiped
-            // immediately after typing (cred.cleanse + trimWorkingSet below).
-            seal::DecryptedCredential cred;
+            // Validate the borrowed record before the shared decrypt/type.
             const auto* records = m_Records;
             const int recordIndex = m_RecordIndex;
             if (!records || !m_Session || recordIndex < 0 ||
@@ -555,16 +703,10 @@ void FillController::performType()
                 return;
             }
 
-            // URL/platform binding -- phishing resistance. Compare the
-            // bridge-reported page host against the record's platform
-            // label via extractKey's fuzzy reduction (TLD/case/stop-word
-            // strip): "PayPal", "paypal.com", "https://login.paypal.com",
-            // "My PayPal" all collapse to "paypal". A mismatch CANCELS the
-            // fill, so a record labelled "Paypal" cannot type into a
-            // typosquat. Skipped silently when no bridge entry exists for
-            // the click, or when the platform reduces to an empty key
-            // (caller fails open). The check runs BEFORE on-demand
-            // decryption so a phishing mismatch never produces plaintext.
+            // URL/platform binding (phishing resistance): bridge-reported host vs
+            // record platform via extractKey's fuzzy reduction ("paypal.com"/"My
+            // PayPal" -> "paypal"). A mismatch CANCELS the fill BEFORE decrypt (no
+            // plaintext); skipped when no bridge entry or key reduces to empty (fail open).
             const POINT urlClickPoint{m_ClickX.load(), m_ClickY.load()};
             HWND urlFocusWindow = WindowFromPoint(urlClickPoint);
             DWORD urlFocusPid = 0;
@@ -583,11 +725,10 @@ void FillController::performType()
                     if (!recordKey.empty() && !pageKey.empty() &&
                         !seal::url::keysMatch(recordKey, pageKey))
                     {
-                        // Keys are already privacy-friendly (no TLD, path,
-                        // or subdomain noise); the log line still uses
-                        // SHA-256 fingerprints for shared bug reports. The
-                        // user-facing message keeps human-readable keys
-                        // so the operator can see what tried where.
+                        // Keys are already privacy-friendly (no TLD/path/subdomain
+                        // noise), but the log still uses SHA-256 fingerprints for
+                        // shared bug reports; the user-facing message keeps readable
+                        // keys so the operator sees what tried where.
                         qCWarning(logFill).noquote()
                             << QString::fromStdString(seal::diag::joinFields(
                                    {"event=fill.url_mismatch_block",
@@ -603,104 +744,294 @@ void FillController::performType()
                 }
             }
 
-            try
+            decryptAndTypeField(record, target);
+        });
+    poll->start();
+}
+
+void FillController::decryptAndTypeField(const seal::VaultRecord& record, TypeTarget target)
+{
+    // On-demand decrypt into VirtualLock'd memory; plaintext wiped immediately
+    // after typing (cred.cleanse + trimWorkingSet below). Callers have already
+    // validated the record (and, for the auto path, the fail-closed gates).
+    seal::DecryptedCredential cred;
+    try
+    {
+        // Master key is plaintext ONLY for this decrypt; the Access window
+        // re-protects on scope exit, before cred is typed and cleansed below.
+        auto access = m_Session->unlock();
+        if (!access.ok())
+        {
+            qCWarning(logFill).noquote() << QString::fromStdString(seal::diag::joinFields(
+                {"event=auth.unlock", "result=fail", "reason=dpapi_unprotect"}));
+            emit fillError(QStringLiteral("Could not access the master key."));
+            cancel();
+            return;
+        }
+        cred = seal::decryptCredentialOnDemand(record, access.password());
+    }
+    catch (const std::exception& e)
+    {
+        qCWarning(logFill) << "decryptAndTypeField: decrypt failed:" << e.what();
+        emit fillError(QString("Decrypt failed: %1").arg(e.what()));
+        cancel();
+        return;
+    }
+    catch (...)
+    {
+        qCWarning(logFill) << "decryptAndTypeField: decrypt failed (unknown)";
+        emit fillError(QStringLiteral("Decrypt failed"));
+        cancel();
+        return;
+    }
+
+    // Warn: SendInput keystrokes pass through every global hook in the chain,
+    // so a third-party keylogger could intercept the credential. The master-
+    // password dialog uses the secure desktop, but the fill path is exposed.
+    qCDebug(logFill) << "decryptAndTypeField: note - keystrokes pass through global hook chain";
+
+    // Send the selected field via SendInput.
+    bool success = false;
+    if (target == TypeTarget::Username)
+        success = seal::typeSecret(cred.username.data(), (int)cred.username.size(), 0);
+    else
+        success = seal::typeSecret(cred.password.data(), (int)cred.password.size(), 0);
+
+    // Wipe immediately: cleanse() zeros the decrypted buffers and
+    // trimWorkingSet() (SetProcessWorkingSetSize(-1,-1)) flushes the dirty
+    // pages so a dump or swap file can't recover plaintext.
+    cred.cleanse();
+    seal::Cryptography::trimWorkingSet();
+
+    if (!success)
+    {
+        qCWarning(logFill) << "decryptAndTypeField: SendInput failed";
+        emit fillError(QStringLiteral("Failed to send keystrokes"));
+        cancel();
+        return;
+    }
+
+    QString service = QString::fromUtf8(record.platform.c_str());
+
+    // Track which field was typed.
+    if (target == TypeTarget::Username)
+        m_TypedFields |= TypedUsername;
+    else
+        m_TypedFields |= TypedPassword;
+
+    qCInfo(logFill) << "fill: " << (target == TypeTarget::Username ? "username" : "password")
+                    << "typed for" << service << "(typedFields=" << m_TypedFields << ")";
+
+    // Staged (auto) mode is one-click-one-fill: after the clicked field is
+    // filled it DISARMS - a later click never re-arms or re-types. Manual
+    // Ctrl+Click mode keeps its two-field flow (stay armed for the other field
+    // until both are typed).
+    const bool complete = (m_TypedFields == TypedBoth) || m_AutoMode.load();
+    if (complete)
+    {
+        // Done: tear down hooks; backend restores window.
+        m_TimeoutTimer.stop();
+        removeHooks();
+        transitionTo(State::Idle);
+        m_RecordIndex = -1;
+        m_Records = nullptr;
+        m_Session = nullptr;
+        m_TypedFields = TypedNone;
+        m_RemainingSeconds = 0;
+        m_AutoMode.store(false);
+        m_AutoFillInFlight.store(false);
+        emit countdownSecondsChanged();
+        emit fillCompleted(QString("Filled credentials for '%1'").arg(service));
+    }
+    else
+    {
+        // Manual mode, one field remains: reset countdown, stay Armed for the
+        // other field's Ctrl+Click.
+        m_RemainingSeconds = FILL_TIMEOUT_SECONDS;
+        m_AutoFillInFlight.store(false);
+        emit countdownSecondsChanged();
+        transitionTo(State::Armed);
+        m_TimeoutTimer.start();
+    }
+}
+
+void FillController::performTypeAuto()
+{
+    if (m_State.load() != State::AutoArmed)
+        return;
+    // Single-flight: ignore overlapping clicks while one completion runs.
+    if (m_AutoFillInFlight.exchange(true))
+        return;
+
+    // The content.js report for THIS click travels async (browser -> SW ->
+    // host -> pipe), so the bridge entry is usually not in the map at
+    // physical-click time. Poll briefly for it, then validate. Never Sleep the
+    // GUI thread (matches performType's Ctrl-release poll pattern).
+    auto* poll = new QTimer(this);
+    poll->setInterval(20);
+    connect(
+        poll,
+        &QTimer::timeout,
+        this,
+        [this, poll, elapsedMs = 0]() mutable
+        {
+            elapsedMs += 20;
+
+            // Cancelled (Esc / timeout / re-stage) during the wait.
+            if (m_State.load() != State::AutoArmed)
             {
-                // Master key is plaintext ONLY for this decrypt; the Access
-                // window re-protects on scope exit, before cred is typed and
-                // cleansed below. m_Session non-null was checked above.
-                auto access = m_Session->unlock();
-                if (!access.ok())
-                {
-                    qCWarning(logFill).noquote() << QString::fromStdString(seal::diag::joinFields(
-                        {"event=auth.unlock", "result=fail", "reason=dpapi_unprotect"}));
-                    emit fillError(QStringLiteral("Could not access the master key."));
-                    cancel();
-                    return;
-                }
-                cred = seal::decryptCredentialOnDemand(record, access.password());
+                poll->stop();
+                poll->deleteLater();
+                m_AutoFillInFlight.store(false);
+                return;
             }
-            catch (const std::exception& e)
+
+            const POINT clickPoint{m_ClickX.load(), m_ClickY.load()};
+            HWND clickWindow = WindowFromPoint(clickPoint);
+            DWORD clickPid = 0;
+            if (clickWindow != nullptr)
+                GetWindowThreadProcessId(clickWindow, &clickPid);
+
+            std::optional<seal::BridgeEntry> entry;
+            if (clickPid != 0)
+                entry = m_BrowserBridge.lookup(clickPid, clickPoint);
+
+            // G-classification: no bridge entry means the click did not land on
+            // a bridge-classified login field (text/other are never inserted).
+            if (!entry.has_value())
             {
-                qCWarning(logFill) << "performType: decrypt failed:" << e.what();
-                emit fillError(QString("Decrypt failed: %1").arg(e.what()));
+                if (elapsedMs < kAutoBridgeWaitMs)
+                    return;  // Keep waiting for the async report.
+                poll->stop();
+                poll->deleteLater();
+                qCInfo(logFill).noquote() << QString::fromStdString(seal::diag::joinFields(
+                    {"event=fill.autostage.release", "result=blocked", "reason=no_bridge_entry"}));
+                m_AutoFillInFlight.store(false);
+                return;  // Silent no-op; stay AutoArmed for a real login click.
+            }
+
+            poll->stop();
+            poll->deleteLater();
+
+            // G-foreground (dual-PID): the click window AND the foreground
+            // window must both belong to the same, bridge-validated browser
+            // PID. SendInput targets the focused window, so a focus-steal
+            // between click and type is refused here.
+            DWORD fgPid = 0;
+            HWND fg = GetForegroundWindow();
+            if (fg != nullptr)
+                GetWindowThreadProcessId(fg, &fgPid);
+            if (fgPid == 0 || fgPid != clickPid)
+            {
+                qCWarning(logFill).noquote() << QString::fromStdString(
+                    seal::diag::joinFields({"event=fill.autostage.release",
+                                            "result=blocked",
+                                            "reason=foreground_pid_mismatch"}));
+                m_AutoFillInFlight.store(false);
+                return;  // Stay AutoArmed; no secret released.
+            }
+
+            // Validate the borrowed record.
+            const auto* records = m_Records;
+            const int recordIndex = m_RecordIndex;
+            if (!records || !m_Session || recordIndex < 0 ||
+                recordIndex >= static_cast<int>(records->size()))
+            {
+                emit fillError(QStringLiteral("Selected credential is no longer available"));
                 cancel();
                 return;
             }
-            catch (...)
+            const seal::VaultRecord& record = (*records)[recordIndex];
+            if (record.deleted)
             {
-                qCWarning(logFill) << "performType: decrypt failed (unknown)";
-                emit fillError(QStringLiteral("Decrypt failed"));
+                emit fillError(QStringLiteral("Selected credential was deleted"));
                 cancel();
                 return;
             }
 
-            // Warn: SendInput keystrokes pass through every global hook in
-            // the chain, so a third-party keylogger could intercept the
-            // credential. The master-password dialog uses the secure
-            // desktop, but the fill path itself is inherently exposed.
-            qCDebug(logFill)
-                << "performType: note - auto-fill keystrokes pass through global hook chain";
-
-            // Send the selected field via SendInput.
-            bool success = false;
-            if (target == TypeTarget::Username)
-                success = seal::typeSecret(cred.username.data(), (int)cred.username.size(), 0);
-            else
-                success = seal::typeSecret(cred.password.data(), (int)cred.password.size(), 0);
-
-            // Wipe immediately: cleanse() zeros the decrypted buffers and
-            // trimWorkingSet() (SetProcessWorkingSetSize(-1,-1)) flushes the
-            // dirty pages so a dump or swap file can't recover plaintext.
-            cred.cleanse();
-            seal::Cryptography::trimWorkingSet();
-
-            if (!success)
+            // G-URL (fail-closed): the fresh entry's host must bind to the staged record
+            // under the SAME tiered seal::url::platformMatchesHost the selector uses (strict
+            // domains, fuzzy/TLD-blind bare labels). Unlike the manual fail-open veto, no
+            // match => abort before decrypt (no plaintext); shared fn keeps both in lockstep.
+            const std::string pageHost =
+                entry->m_UrlHost.isEmpty() ? std::string() : entry->m_UrlHost.toStdString();
+            if (pageHost.empty() || !seal::url::platformMatchesHost(record.platform, pageHost))
             {
-                qCWarning(logFill) << "performType: SendInput failed";
-                emit fillError(QStringLiteral("Failed to send keystrokes"));
+                qCWarning(logFill).noquote() << QString::fromStdString(seal::diag::joinFields(
+                    {"event=fill.autostage.release",
+                     "result=blocked",
+                     "reason=host_mismatch",
+                     seal::diag::kv("record_fp",
+                                    hostLogFingerprint(seal::url::extractHost(record.platform))),
+                     seal::diag::kv("page_fp",
+                                    hostLogFingerprint(seal::url::extractHost(pageHost)))}));
+                emit fillError(
+                    QStringLiteral("Site mismatch: the staged record does not match this site."));
                 cancel();
                 return;
             }
 
-            QString service = QString::fromUtf8(record.platform.c_str());
-
-            // Track which field was typed.
-            if (target == TypeTarget::Username)
-                m_TypedFields |= TypedUsername;
-            else
-                m_TypedFields |= TypedPassword;
-
-            qCInfo(logFill) << "performType:"
-                            << (target == TypeTarget::Username ? "username" : "password")
-                            << "typed for" << service << "(typedFields=" << m_TypedFields << ")";
-
-            if (m_TypedFields == TypedBoth)
+            // Generation abort: any owner mutation since arm may have
+            // reallocated or freed the borrowed pointers.
+            if (m_OwnerGeneration && *m_OwnerGeneration != m_SnapshotGeneration)
             {
-                // Both fields typed: tear down hooks; backend restores window.
-                m_TimeoutTimer.stop();
-                removeHooks();
-                transitionTo(State::Idle);
-                m_RecordIndex = -1;
-                m_Records = nullptr;
-                m_Session = nullptr;
-                m_TypedFields = TypedNone;
-                m_RemainingSeconds = 0;
-                emit countdownSecondsChanged();
-                emit fillCompleted(QString("Filled credentials for '%1'").arg(service));
+                emit fillError(QStringLiteral("Credential data was modified while fill was armed"));
+                cancel();
+                return;
             }
-            else
+
+            // G-corroborate: the fused verdict must be decisive AND on-disk
+            // corroborated (M5). Bridge-alone (e.g. a planted Password entry aliasing
+            // a metadata-stripped text field) is refused: the password releases only
+            // when UIA independently confirms the field. No untyped-field fallback here.
+            transitionTo(State::Typing);
+            const seal::FusionOutcome outcome =
+                runProbeRegistryDetailed(clickPoint.x, clickPoint.y);
+            if (outcome.m_Verdict == seal::Verdict::Unknown ||
+                !(outcome.m_Tier1ShortCircuit && outcome.m_BridgeCorroborated))
             {
-                // One field remains: reset countdown, stay armed.
+                qCInfo(logFill).noquote() << QString::fromStdString(seal::diag::joinFields(
+                    {"event=fill.autostage.release", "result=blocked", "reason=weak_fusion"}));
+                // No secret released; return to AutoArmed to allow a retry.
+                m_AutoFillInFlight.store(false);
                 m_RemainingSeconds = FILL_TIMEOUT_SECONDS;
                 emit countdownSecondsChanged();
-                transitionTo(State::Armed);
+                transitionTo(State::AutoArmed);
                 m_TimeoutTimer.start();
+                return;
             }
+
+            // Staged mode releases the PASSWORD only; the username half is the DOM
+            // injection (once per visit, via StagingController). Typing it here would
+            // double-fill and burn the one staged click on the wrong credential, so a
+            // Username fuse is a silent no-op (stay AutoArmed). Manual still types either.
+            if (outcome.m_Verdict != seal::Verdict::Password)
+            {
+                qCInfo(logFill).noquote() << QString::fromStdString(
+                    seal::diag::joinFields({"event=fill.autostage.release",
+                                            "result=blocked",
+                                            "reason=not_password_field"}));
+                m_AutoFillInFlight.store(false);
+                m_RemainingSeconds = FILL_TIMEOUT_SECONDS;
+                emit countdownSecondsChanged();
+                transitionTo(State::AutoArmed);
+                m_TimeoutTimer.start();
+                return;
+            }
+            qCInfo(logFill).noquote() << QString::fromStdString(
+                seal::diag::joinFields({"event=fill.autostage.release", "result=ok"}));
+            // decryptAndTypeField clears m_AutoFillInFlight on every exit path.
+            decryptAndTypeField(record, TypeTarget::Password);
         });
     poll->start();
 }
 
 seal::Verdict FillController::runProbeRegistry(LONG x, LONG y)
+{
+    return runProbeRegistryDetailed(x, y).m_Verdict;
+}
+
+seal::FusionOutcome FillController::runProbeRegistryDetailed(LONG x, LONG y)
 {
     using seal::ProbeContext;
     using seal::ProbeResult;
@@ -723,14 +1054,17 @@ seal::Verdict FillController::runProbeRegistry(LONG x, LONG y)
         m_ImeStateProbe.run(ctx),
     };
 
-    const Verdict verdict = m_FusionDecider.decide(results);
+    const seal::FusionOutcome outcome = m_FusionDecider.decideDetailed(results);
 
-    // One summary line per Ctrl+Click; per-probe fields let weight tuning
-    // be driven from logFill telemetry.
-    QString line = QStringLiteral("event=fill.decide chosen=%1")
-                       .arg(verdict == Verdict::Password   ? QStringLiteral("password")
-                            : verdict == Verdict::Username ? QStringLiteral("username")
-                                                           : QStringLiteral("unknown"));
+    // One summary line per click; per-probe fields let weight tuning be driven
+    // from logFill telemetry. corroborated= lets the auto path's refusals be
+    // read from the same line.
+    QString line =
+        QStringLiteral("event=fill.decide chosen=%1 corroborated=%2")
+            .arg(outcome.m_Verdict == Verdict::Password   ? QStringLiteral("password")
+                 : outcome.m_Verdict == Verdict::Username ? QStringLiteral("username")
+                                                          : QStringLiteral("unknown"))
+            .arg(outcome.m_BridgeCorroborated ? QStringLiteral("1") : QStringLiteral("0"));
     for (const ProbeResult& r : results)
     {
         const QString verdictText = r.m_Verdict == Verdict::Password   ? QStringLiteral("password")
@@ -749,7 +1083,7 @@ seal::Verdict FillController::runProbeRegistry(LONG x, LONG y)
     }
     qCInfo(logFill).noquote() << line;
 
-    return verdict;
+    return outcome;
 }
 
 void FillController::performDiagnose()
@@ -787,12 +1121,10 @@ void FillController::performDiagnose()
 
     auto [ctx, results] = runOnce();
 
-    // Race-mitigation: only the browser_extension probe (index 0) depends
-    // on async content.js -> SW -> host -> bridge delivery, and a busy or
-    // just-woken SW can land that report AFTER the Ctrl+Click. If we have
-    // a live peer but Unknown, give it ~75 ms and re-probe. The fill path
-    // doesn't need this -- its Ctrl-release poll already adds delay --
-    // but diagnose probes immediately and would lose the race.
+    // Race-mitigation: only the browser_extension probe (index 0) rides the async
+    // content.js -> SW -> host -> bridge path, which a busy/just-woken SW can land
+    // AFTER the Ctrl+Click. On a live peer but Unknown, wait ~75 ms and re-probe.
+    // The fill path's Ctrl-release poll already absorbs this; diagnose probes now.
     if (results[0].m_Verdict == Verdict::Unknown && m_BrowserBridge.isPeerConnected())
     {
         Sleep(75);  // synchronous on the Qt thread; trivially short.
@@ -810,14 +1142,14 @@ void FillController::performDiagnose()
                                         : QStringLiteral("unknown");
     };
 
-    // User-facing summary -- one line per probe, free-form (the QML popup
+    // User-facing summary - one line per probe, free-form (the QML popup
     // renders this as a <pre>; nothing downstream parses it).
     QString summary;
     summary += QStringLiteral("Fused verdict: %1\n").arg(verdictText(verdict));
     summary += QStringLiteral("Click point: (%1, %2)\n").arg(clickPoint.x).arg(clickPoint.y);
     summary += QStringLiteral("Target window PID: %1\n").arg(ctx.m_TargetProcessId);
 
-    // Bridge connectivity / cache state -- key for triaging a
+    // Bridge connectivity / cache state - key for triaging a
     // "browser_extension: unknown": disambiguates "no host ever connected"
     // vs "connected but didn't report this click" vs "reported elsewhere".
     summary += QStringLiteral("\nBridge:\n");
@@ -843,7 +1175,7 @@ void FillController::performDiagnose()
     }
 
     // URL host is privacy-sensitive, but diagnose is user-initiated for
-    // one specific click -- showing the host in the popup is appropriate.
+    // one specific click - showing the host in the popup is appropriate.
     // Logs still get the redacted form via the probe's bridge_match.
     if (ctx.m_TargetProcessId != 0)
     {
@@ -856,7 +1188,7 @@ void FillController::performDiagnose()
 
     // Redacted logfmt mirror so operators see the diagnose event without
     // leaking the URL host. Includes raw click_x/y + target_pid for cross-
-    // reference against fill.bridge.msg's x/y/qx/qy -- mismatches there
+    // reference against fill.bridge.msg's x/y/qx/qy - mismatches there
     // diagnose "report arrived but lookup missed" situations.
     QString line =
         QStringLiteral("event=fill.diagnose chosen=%1 click_x=%2 click_y=%3 target_pid=%4")

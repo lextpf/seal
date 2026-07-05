@@ -36,11 +36,10 @@ BridgeViewModel::BridgeViewModel(FillController* fillController, QObject* parent
                 emit bridgeDiagnoseCancelled();
             });
 
-    // Restore persisted bridge enablement (M8). Default true; QSettings
-    // resolves to HKCU\Software\seal\seal via QmlMain. enableBridge() starts
-    // the pipe immediately (not only on arm) so the extension can connect at
-    // launch -- otherwise its reconnect backoff can stall the first fill by
-    // ~60 s.
+    // Restore persisted bridge enablement (M8; default true, QSettings ->
+    // HKCU\Software\seal\seal via QmlMain). enableBridge() starts the pipe
+    // immediately (not only on arm) so the extension can connect at launch,
+    // else its reconnect backoff can stall the first fill by ~60 s.
     QSettings settings;
     const bool bridgeEnabledPref = settings.value("bridge/enabled", true).toBool();
     if (bridgeEnabledPref)
@@ -52,11 +51,10 @@ BridgeViewModel::BridgeViewModel(FillController* fillController, QObject* parent
         m_FillController->disableBridge();
     }
 
-    // BrowserBridge isn't a QObject, so poll its per-browser connected state at
-    // 1 Hz and convert level changes into the matching *Changed signals. The
-    // QML dots light green only after a real handshake; the underlying atomics
-    // still flip immediately on connect/disconnect. The aggregate
-    // bridgePeerConnected is kept (chrome || brave) for existing bindings.
+    // BrowserBridge isn't a QObject, so poll per-browser connected state at 1 Hz
+    // and convert level changes into *Changed signals. QML dots turn green only
+    // after a real handshake, though atomics flip immediately on connect/disconnect;
+    // aggregate bridgePeerConnected (chrome||brave) kept for existing bindings.
     m_LastPeerConnected = m_FillController->isBridgePeerConnected();
     m_LastChromeConnected = m_FillController->isBridgeChromeConnected();
     m_LastBraveConnected = m_FillController->isBridgeBraveConnected();
@@ -124,7 +122,7 @@ void BridgeViewModel::setBridgeEnabled(bool enabled)
         m_FillController->disableBridge();
     }
 
-    // Persist preference -- QSettings resolves to HKCU\Software\seal\seal
+    // Persist preference - QSettings resolves to HKCU\Software\seal\seal
     // (org/app names set in QmlMain).
     QSettings settings;
     settings.setValue("bridge/enabled", enabled);
@@ -135,6 +133,26 @@ void BridgeViewModel::setBridgeEnabled(bool enabled)
 QString BridgeViewModel::bridgeStatusText() const
 {
     return m_BridgeStatusText;
+}
+
+bool BridgeViewModel::autoStageEnabled() const
+{
+    // Default false: zero-gesture staged auto-fill is opt-in. QSettings
+    // resolves to HKCU\Software\seal\seal. StagingController reads the same
+    // key for its initial state and follows this property's change signal.
+    const QSettings settings;
+    return settings.value("bridge/autostage", false).toBool();
+}
+
+void BridgeViewModel::setAutoStageEnabled(bool enabled)
+{
+    if (autoStageEnabled() == enabled)
+    {
+        return;
+    }
+    QSettings settings;
+    settings.setValue("bridge/autostage", enabled);
+    emit autoStageEnabledChanged();
 }
 
 void BridgeViewModel::runInstallBrowserExtension()
@@ -172,7 +190,7 @@ void BridgeViewModel::runUninstallBrowserExtension()
 void BridgeViewModel::runBridgeDiagnose()
 {
     // Diagnose never touches the master password, so deliberately skip
-    // any password gate -- user can run this with a locked vault.
+    // any password gate - user can run this with a locked vault.
     if (!m_FillController->armDiagnose())
     {
         emit errorOccurred(QStringLiteral("Bridge diagnose"),

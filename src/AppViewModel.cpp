@@ -416,11 +416,10 @@ void AppViewModel::loadVaultFromPath(const QString& filePath, bool isAutoLoad)
                                 seal::diag::kv("auto", isAutoLoad),
                                 pathMeta}));
 
-    // Clone the master password into a worker-owned secure string. The copy
-    // happens inside a tight unlock() window on the GUI thread, so the session
-    // is re-protected before the worker starts and is never touched off-thread.
-    // basic_secure_string is move-only by design, hence the explicit element
-    // copy.
+    // Clone the master password into a worker-owned secure string inside a
+    // tight GUI-thread unlock() window, so the session is re-protected before
+    // the worker starts and never touched off-thread. basic_secure_string is
+    // move-only, hence the explicit element copy.
     seal::basic_secure_string<wchar_t> workerPassword;
     {
         auto access = m_Workspace.session().unlock();
@@ -690,7 +689,7 @@ void AppViewModel::addAccount(const QString& service,
         if (!ensurePassword(
                 [this, service, secUser, secPass]()
                 {
-                    // Encrypt directly from locked memory -- no pageable-QString
+                    // Encrypt directly from locked memory - no pageable-QString
                     // round-trip. shared_ptrs keep the secrets alive across the
                     // std::function copy boundary.
                     cancelFillIfArmed();
@@ -1074,6 +1073,19 @@ void AppViewModel::armFillForSelection()
     }
 }
 
+void AppViewModel::onAutoArmed(int recordIndex, const QString& platform)
+{
+    // Display only: select the auto-armed record's row so the user sees which
+    // credential is staged, and show a non-secret hint. StagingController owns
+    // the actual arming; AppViewModel never touches the fill engine here.
+    const int row = m_Model->rowForRecordIndex(recordIndex);
+    if (row >= 0)
+    {
+        setSelectedIndex(row);
+    }
+    setStatus(QStringLiteral("Auto-armed for %1 - click the login field to fill").arg(platform));
+}
+
 void AppViewModel::cleanup()
 {
     // Cooperatively cancel any in-flight QR capture first so its token-polling
@@ -1222,9 +1234,8 @@ void AppViewModel::rekeyVault(QString currentPassword, QString newPassword)
             {
                 // Session still active: adopt the new password (submitPassword's
                 // exact dance) and reload from disk so the workspace holds
-                // new-password packets. The reload owns the loading cover from
-                // here, switching the caption to "Decrypting vault..." and
-                // clearing it on completion.
+                // new-password packets. The reload owns the loading cover,
+                // switching its caption to "Decrypting vault..." then clearing it.
                 m_Workspace.adoptPassword(std::move(*adopt));
                 emit passwordSetChanged();
                 loadVaultFromPath(m_CurrentVaultPath, false);

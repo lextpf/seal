@@ -65,6 +65,38 @@ namespace seal
  *   be typed in any order. Bit flags track which fields have been filled.
  * - **Typing** - keystrokes being sent, hooks still installed.
  *
+ * Two auxiliary modes reuse the same hook machinery and timeout:
+ * - **AutoArmed** - staged on navigation (armAuto()); a plain (no-Ctrl) click
+ *   into a bridge-classified login field completes the fill through the
+ *   fail-closed auto gates. Placed by StagingController, never by the user.
+ * - **Diagnose** - like Armed, but a Ctrl+Click runs the probe pipeline as a
+ *   dry run (no decrypt, no keystrokes) and emits diagnoseCompleted with the
+ *   per-probe verdict. Entered via armDiagnose().
+ *
+ * ## Complete state machine (ASCII)
+ *
+ * The Mermaid above shows only the manual Ctrl+Click lane; the full machine
+ * has five states across three entry points. @ref State::Typing is transient -
+ * it always resolves back to its lane's armed state or to @ref State::Idle.
+ *
+ * @verbatim
+ *  MANUAL    Idle --arm()--> Armed
+ *            Armed --Ctrl+Click--> Typing
+ *            Typing --one field typed (manual)--> Armed     (2-field flow)
+ *            Typing --both fields typed--> Idle
+ *
+ *  AUTO      Idle --armAuto()--> AutoArmed         (staged by StagingController)
+ *            AutoArmed --plain click--> Typing
+ *            Typing --weak fusion / non-password--> AutoArmed   (retry)
+ *            Typing --password typed--> Idle
+ *
+ *  DIAGNOSE  Idle --armDiagnose()--> Diagnose
+ *            Diagnose --Ctrl+Click--> [dry-run probes] --> Idle
+ *
+ *  CANCEL    Esc:     Armed | AutoArmed | Diagnose         --> Idle
+ *            timeout: Armed | Diagnose  (30 s, Auto has none) --> Idle
+ * @endverbatim
+ *
  * ## :material-keyboard: Modifier Keys
  *
  * While armed, the user can override which field gets typed:
@@ -72,6 +104,14 @@ namespace seal
  * - **Ctrl+Shift+Click** - force type password regardless of state
  * - **Ctrl+Alt+Click** - force type username regardless of state
  * - **Esc** - cancel and remove hooks
+ *
+ * @par Gesture map
+ * | Gesture          | Field typed                                             |
+ * |------------------|---------------------------------------------------------|
+ * | Ctrl+Click       | Auto: the probe pipeline decides (username vs password) |
+ * | Ctrl+Shift+Click | Password (forced, overrides detection)                  |
+ * | Ctrl+Alt+Click   | Username (forced, overrides detection)                  |
+ * | Esc              | Cancel the fill and remove hooks                        |
  *
  * ## :material-format-list-bulleted: Properties
  *
@@ -105,10 +145,11 @@ public:
     /// @brief Fill controller state machine states.
     enum class State
     {
-        Idle,      ///< No hooks, waiting for arm() or armDiagnose().
-        Armed,     ///< Hooks active, waiting for Ctrl+Click to type either field.
-        Typing,    ///< Keystrokes being sent to target window.
-        Diagnose,  ///< Hooks active, waiting for Ctrl+Click to dry-run probes only.
+        Idle,       ///< No hooks, waiting for arm() or armDiagnose().
+        Armed,      ///< Hooks active, waiting for Ctrl+Click to type either field.
+        Typing,     ///< Keystrokes being sent to target window.
+        Diagnose,   ///< Hooks active, waiting for Ctrl+Click to dry-run probes only.
+        AutoArmed,  ///< Staged on navigation; a plain (no-Ctrl) click completes the fill.
     };
     Q_ENUM(State)
 
@@ -164,6 +205,68 @@ public:
                            const uint64_t& ownerGeneration);
 
     /**
+     * @brief Arm the controller for zero-gesture staged auto-fill.
+     *
+     * Identical borrowing / generation-snapshot / hook-install semantics to
+     * @ref arm, but transitions to @ref State::AutoArmed. In that state a
+     * plain left click (NO Ctrl) into a bridge-classified login field
+     * completes the fill through the fail-closed auto gates (tiered host
+     * match, dual-PID foreground check, on-disk-corroborated fusion). The
+     * click is never swallowed, so it focuses the field normally; a click
+     * that isn't on a classified login field is a silent no-op.
+     *
+     * Called by StagingController when a navigation report uniquely matched a
+     * record. Same parameters as @ref arm.
+     * @return true if hooks installed and auto-arming succeeded.
+     */
+    [[nodiscard]] bool armAuto(int recordIndex,
+                               const std::vector<seal::VaultRecord>& records,
+                               seal::CredentialSession& session,
+                               const uint64_t& ownerGeneration);
+
+    /**
+     * @brief Consume the latest bridge navigation snapshot (GUI-thread poll).
+     *
+     * Thin passthrough to @ref BrowserBridge::takeNavSince so StagingController
+     * (which does not own the bridge) can poll it. Returns nullopt when the
+     * bridge is disabled, nothing new arrived, or the snapshot aged out.
+     *
+     * @param lastSeenSeq In/out cursor owned by the caller.
+     */
+    std::optional<seal::NavSnapshot> takeNavSince(std::uint64_t& lastSeenSeq);
+
+    /**
+     * @brief Decrypt a record's username and push it to the browser for
+     *        zero-click DOM injection by the extension.
+     *
+     * The higher-risk half of staged auto-fill (the username value crosses into
+     * the browser). Host-bound via @ref seal::url::platformMatchesHost, the same
+     * tiered matcher the selector and the password click-gate use: a record
+     * storing a real domain ("paypal.com") binds strictly (TLD-sensitive), while
+     * a bare brand label ("PayPal") falls back to a fuzzy, TLD-blind match. That
+     * fallback is a deliberate relaxation -- a lookalike-TLD page ("paypal.co")
+     * could receive the low-sensitivity username with no click -- but the
+     * PASSWORD is never sent this way, only typed locally on a real click.
+     * Decryption is JIT in a tight unlock() window here (StagingController stays
+     * decrypt-free); the plaintext UTF-8 copy is wiped after the reverse-channel
+     * send.
+     *
+     * @param recordIndex Record to read.
+     * @param records     Borrowed vault records (must outlive the call).
+     * @param session     Borrowed session; unlocked only for the decrypt.
+     * @param host        The navigated host (strict-matched, echoed to the peer).
+     * @param browserPid  The validated browser PID whose peer receives it.
+     * @return true iff the directive was written to a live peer - the signal
+     *         StagingController uses to latch its once-per-visit guarantee
+     *         (a failed send may be retried on a later nav of the same visit).
+     */
+    [[nodiscard]] bool injectUsername(int recordIndex,
+                                      const std::vector<seal::VaultRecord>& records,
+                                      seal::CredentialSession& session,
+                                      const std::string& host,
+                                      DWORD browserPid);
+
+    /**
      * @brief Arm the controller in dry-run "diagnose" mode.
      *
      * Like @ref arm but without binding a credential. Installs the same
@@ -193,7 +296,7 @@ public:
     Q_INVOKABLE void cancel();
 
     /**
-     * @brief Panic mode -- disable the browser bridge (M8).
+     * @brief Panic mode - disable the browser bridge (M8).
      *
      * Drops the pipe handle, refuses further messages, and clears the in-memory
      * bridge map. Safe to call from any state. Re-enable with enableBridge().
@@ -237,20 +340,26 @@ signals:
     void fillStatusTextChanged();    ///< Status text updated.
     void countdownSecondsChanged();  ///< Countdown tick or reset.
 
-    /// @brief Both credentials were typed successfully.
-    /// @param statusMessage Summary for the status bar (e.g. "Filled credentials for 'GitHub'").
+    /**
+     * @brief Both credentials were typed successfully.
+     * @param statusMessage Summary for the status bar (e.g. "Filled credentials for 'GitHub'").
+     */
     void fillCompleted(const QString& statusMessage);
 
-    /// @brief A decrypt or keystroke error occurred during fill.
-    /// @param errorMessage Description of the failure.
+    /**
+     * @brief A decrypt or keystroke error occurred during fill.
+     * @param errorMessage Description of the failure.
+     */
     void fillError(const QString& errorMessage);
 
     /// @brief Fill was cancelled by user (Esc) or timeout.
     void fillCancelled();
 
-    /// @brief Dry-run probe completed; @p summary is a multi-line human-
-    /// readable breakdown of per-probe verdicts (one line per probe with
-    /// verdict + confidence + evidence).
+    /**
+     * @brief Dry-run probe completed; @p summary is a multi-line human-
+     * readable breakdown of per-probe verdicts (one line per probe with
+     * verdict + confidence + evidence).
+     */
     void diagnoseCompleted(const QString& summary);
 
     /// @brief Dry-run probe was cancelled (Esc or timeout) before any click.
@@ -272,6 +381,20 @@ private slots:
     void performType();
 
     /**
+     * @brief Queued from the mouse hook on a plain click while AutoArmed.
+     *
+     * The zero-gesture completion path. Validates a strict, fail-closed gate
+     * set BEFORE any decrypt: a fresh bridge entry for this click must exist
+     * (proving the click hit a classified login field), its host must bind to
+     * the staged record under the tiered @ref seal::url::platformMatchesHost, the
+     * foreground and click windows must both belong to the bridge-validated
+     * browser PID, and the fused verdict must be on-disk corroborated
+     * (@ref FusionOutcome). Any failure aborts without producing plaintext.
+     * On success it types via the shared @ref decryptAndTypeField.
+     */
+    void performTypeAuto();
+
+    /**
      * @brief Queued from the mouse hook when in Diagnose state. Runs the
      * probe pipeline at the captured click point, builds a multi-line
      * summary string, emits @ref diagnoseCompleted, and returns to Idle.
@@ -280,6 +403,16 @@ private slots:
     void performDiagnose();
 
 private:
+    /**
+     * @brief Shared body of @ref arm / @ref armAuto. @p targetState is
+     *        State::Armed (manual Ctrl+Click) or State::AutoArmed (staged).
+     */
+    [[nodiscard]] bool armInternal(int recordIndex,
+                                   const std::vector<seal::VaultRecord>& records,
+                                   seal::CredentialSession& session,
+                                   const uint64_t& ownerGeneration,
+                                   State targetState);
+
     /// @brief Install global low-level mouse and keyboard hooks.
     void installHooks();
 
@@ -338,6 +471,28 @@ private:
      */
     seal::Verdict runProbeRegistry(LONG x, LONG y);
 
+    /**
+     * @brief Same probe run as @ref runProbeRegistry but returns the full
+     *        @ref FusionOutcome (verdict + provenance flags). The auto path
+     *        gates a secret release on the corroboration flags; @ref
+     *        runProbeRegistry delegates here and returns only the verdict.
+     */
+    seal::FusionOutcome runProbeRegistryDetailed(LONG x, LONG y);
+
+    /**
+     * @brief Decrypt the record's selected field and type it via SendInput.
+     *
+     * The single decrypt+type site shared by @ref performType (manual) and
+     * @ref performTypeAuto. Opens a scoped @c session.unlock() only around the
+     * on-demand decrypt, types the field, cleanses immediately, then either
+     * completes -- tears down hooks and emits fillCompleted -- when both fields
+     * have been typed or the fill is an auto (staged) one, or (manual mode, one
+     * field still pending) resets the countdown and stays Armed for the other
+     * field's Ctrl+Click. Callers must have already validated the record and
+     * (for auto) the fail-closed gates.
+     */
+    void decryptAndTypeField(const seal::VaultRecord& record, TypeTarget target);
+
     std::atomic<State> m_State{State::Idle};  ///< Current state machine state.
     int m_RecordIndex = -1;                   ///< Index of the armed vault record.
     const std::vector<seal::VaultRecord>* m_Records =
@@ -360,6 +515,10 @@ private:
     std::atomic<LONG> m_ClickY{0};  ///< Screen Y captured in mouseHookProc.
 
     uint8_t m_TypedFields = TypedNone;  ///< Which fields have been typed so far.
+
+    std::atomic<bool> m_AutoMode{false};  ///< True while staged via navigation (AutoArmed path).
+    std::atomic<bool> m_AutoFillInFlight{
+        false};  ///< Single-flight guard: one auto completion at a time.
 
     // BrowserBridge MUST be declared before BrowserBridgeProbe because the
     // probe holds a non-owning pointer initialised from m_BrowserBridge.

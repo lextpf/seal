@@ -47,9 +47,22 @@ namespace seal
  * Custom roles are defined in the `Roles` enum class and exposed
  * to QML via roleNames():
  * - **Platform** - cleartext service name
- * - **MaskedUsername** - fixed asterisk placeholder
- * - **MaskedPassword** - fixed asterisk placeholder
+ * - **MaskedUsername** - fixed bullet-dot placeholder
+ * - **MaskedPassword** - fixed bullet-dot placeholder
  * - **RecordIndex** - real index for decrypt-on-demand lookups
+ * - **BrandIconPath** - qrc path for the resolved brand icon, or empty
+ *
+ * @par Roles exposed to QML
+ * | Roles enum     | roleNames() key  | data() returns                     | Secret |
+ * |----------------|------------------|------------------------------------|--------|
+ * | Platform       | `platform`       | cleartext platform name            | no     |
+ * | MaskedUsername | `maskedUsername` | 8 U+2022 glyphs (fixed)            | masked |
+ * | MaskedPassword | `maskedPassword` | 12 U+2022 glyphs (fixed)           | masked |
+ * | RecordIndex    | `recordIndex`    | real index into the record vector  | n/a    |
+ * | BrandIconPath  | `brandIconPath`  | qrc brand-icon path, or empty      | no     |
+ *
+ * The masked roles return a fixed-width run of U+2022 bullet characters that is
+ * independent of the real secret length; the plaintext never reaches QML.
  *
  * @see AppViewModel
  */
@@ -64,8 +77,8 @@ public:
     enum class Roles
     {
         Platform = Qt::UserRole + 1,  ///< Cleartext service/platform name.
-        MaskedUsername,               ///< Fixed asterisk placeholder for username.
-        MaskedPassword,               ///< Fixed asterisk placeholder for password.
+        MaskedUsername,               ///< Fixed bullet-dot placeholder for username.
+        MaskedPassword,               ///< Fixed bullet-dot placeholder for password.
         RecordIndex,                  ///< Real index for decrypt-on-demand lookups.
         BrandIconPath                 ///< qrc path for the resolved brand icon, or empty.
     };
@@ -92,19 +105,25 @@ public:
     /// @brief Map custom Roles enum values to QML role name strings.
     QHash<int, QByteArray> roleNames() const override;
 
-    /// @brief Set the backing record store (non-owning pointer).
-    /// @param records         Pointer to the vault record vector (must outlive this model, may be
-    /// null).
-    /// @param ownerGeneration Pointer to owner's monotonic mutation counter (may be null).
+    /**
+     * @brief Set the backing record store (non-owning pointer).
+     * @param records         Pointer to the vault record vector (must outlive this model, may be
+     * null).
+     * @param ownerGeneration Pointer to owner's monotonic mutation counter (may be null).
+     */
     void setRecords(const std::vector<seal::VaultRecord>* records,
                     const uint64_t* ownerGeneration = nullptr);
 
-    /// @brief Set the current platform-name filter text.
-    /// @param filter Substring to match (empty shows all non-deleted records).
+    /**
+     * @brief Set the current platform-name filter text.
+     * @param filter Substring to match (empty shows all non-deleted records).
+     */
     void setFilter(const QString& filter);
 
-    /// @brief Set the visual ordering applied after filtering.
-    /// @param mode One of the SortMode enum values.
+    /**
+     * @brief Set the visual ordering applied after filtering.
+     * @param mode One of the SortMode enum values.
+     */
     void setSortMode(int mode);
 
     /// @brief Get the active ordering mode.
@@ -116,10 +135,21 @@ public:
     /// @brief Number of visible (filtered) records.
     int count() const;
 
-    /// @brief Map a filtered-model row to the real record index.
-    /// @param row Row index in the filtered view.
-    /// @return Index into the backing `std::vector<VaultRecord>`, or -1 if out of range.
+    /**
+     * @brief Map a filtered-model row to the real record index.
+     * @param row Row index in the filtered view.
+     * @return Index into the backing `std::vector<VaultRecord>`, or -1 if out of range.
+     */
     int recordIndexForRow(int row) const;
+
+    /**
+     * @brief Map a real record index back to its visible (filtered) row.
+     * @param recordIndex Index into the backing `std::vector<VaultRecord>`.
+     * @return Row in the filtered view, or -1 if that record is filtered out.
+     * @note Not exposed to QML (QML never resolves indices); used only by
+     *       AppViewModel to highlight an auto-armed record.
+     */
+    int rowForRecordIndex(int recordIndex) const;
 
 signals:
     void countChanged();
