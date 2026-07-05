@@ -1,14 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
 
-// Bottom status bar. Spans the full window width (sits outside the inner
-// content margins) to create a clear visual boundary.
-//
-// Layout: [status text] ... [vault filename] | [N accounts] [armed dot]
-//
-// The pulsing orange dot appears only when auto-fill hooks are armed,
-// giving the user a persistent visual reminder that global hooks are active.
-
 Rectangle {
     id: root
 
@@ -47,8 +39,6 @@ Rectangle {
             color: Theme.textSubtle
         }
 
-        // Browser-bridge status chip. Click to toggle (M8 panic mode).
-        // Install/uninstall is CLI-only (seal install-browser-extension).
         BridgeSettings { }
 
         Item { Layout.fillWidth: true }
@@ -80,10 +70,6 @@ Rectangle {
             color: Theme.textMuted
         }
 
-        // Pulsing orange dot when fill hooks are armed. The infinite sine-wave
-        // opacity animation (1.0 -> 0.3 -> 1.0) ensures the indicator is always
-        // noticeable even in peripheral vision, alerting the user that global
-        // mouse/keyboard hooks are active and waiting for a Ctrl+Click.
         Rectangle {
             id: armedIndicator
             width: 8

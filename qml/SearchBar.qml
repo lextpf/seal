@@ -1,13 +1,6 @@
 import QtQuick
 import QtQuick.Controls
 
-// Live search field. Typing here instantly updates AppViewModel.searchFilter, which
-// triggers VaultListModel::setFilter() in C++ to re-filter the visible rows.
-// The model uses case-insensitive substring matching against platform names.
-//
-// Layout: [search icon] [text input] [match count text] [X clear button]
-// The count label and clear button appear only when the field has text.
-
 TextField {
     id: root
     property int resultCount: 0
@@ -15,8 +8,6 @@ TextField {
     readonly property bool filtering: text.trim().length > 0
     readonly property string resultLabel: resultCount === 1 ? "1 match" : resultCount + " matches"
 
-    // Debounced search signal. Fires 200 ms after the last keystroke so C++
-    // model filtering is not triggered on every single character typed.
     signal searchRequested(string text)
 
     Timer {
@@ -28,11 +19,6 @@ TextField {
     onVaultLoadedChanged: if (!vaultLoaded && text.length > 0) text = ""
 
     enabled: vaultLoaded
-    // Service names are the only field held in plaintext at rest — username
-    // and password blobs stay AES-GCM-encrypted in memory and only decrypt
-    // on demand (typeLogin / edit). The model's setFilter() reflects that:
-    // VaultModel.cpp filters strictly on rec.platform. Don't widen this
-    // placeholder to suggest the search also covers credentials.
     placeholderText: vaultLoaded ? "Search service names"
                                  : "Load a vault or add an account to enable search"
     placeholderTextColor: Theme.textPlaceholder
@@ -122,9 +108,6 @@ TextField {
     background: Rectangle {
         implicitHeight: 44
         radius: Theme.radiusLarge
-        // Matches the accounts-grid card transparency so the background blobs
-        // read through the field: idle/disabled = bgGrid (the card's top alpha),
-        // focused = bgGridEnd (its slightly more grounded bottom alpha).
         color: !root.enabled ? Theme.bgGrid : root.activeFocus ? Theme.bgGridEnd : Theme.bgGrid
         border.width: 1
         border.color: !root.enabled ? (Theme.dark ? Theme.borderMedium : Theme.borderSubtle)

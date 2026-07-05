@@ -1,10 +1,5 @@
 import QtQuick
 
-// Decorative color blobs for dialog shells. Mirrors the main window's blob
-// pattern (three cycling Theme hues) at higher alpha to compensate for the
-// solid bgDialog surface and modal overlay dimming. Percentage positioning
-// lets one component fit any dialog width. Drop inside a dialog's masked
-// Item so the existing MultiEffect clips to rounded corners.
 Item {
     anchors.fill: parent
     z: -1

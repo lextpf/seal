@@ -2,15 +2,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Slim toolbar above the chip grid. Hosts the live account count plus two
-// persisted preference dropdowns (sort mode, chip size). Both prefs are
-// stored on Theme via the existing Settings alias pattern, so they survive
-// across restarts without any C++ plumbing.
-//
-// Layout: [count] ............................. [sort ▾] [size ▾]
-// In compact mode the dropdowns hide so the strip can fit alongside a single
-// chip-row.
-
 Rectangle {
     id: root
     property int accountCount: 0
@@ -23,9 +14,6 @@ Rectangle {
         GradientStop { position: 0; color: Theme.bgTableHeaderTop }
         GradientStop { position: 1; color: Theme.bgTableHeaderEnd }
     }
-    // Round all four corners so the top corners match the parent card's
-    // outer radius. A mask rectangle at the bottom then squares off the
-    // bottom corners where the toolbar meets the chip grid.
     radius: Theme.radiusLarge
     clip: true
 
@@ -145,10 +133,6 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         leftPadding: 10
                     }
-                    // Round only the top corners of the first item and the
-                    // bottom corners of the last item so the hover fill snaps
-                    // to the popup background's rounded shell instead of
-                    // overflowing as a square.
                     background: Rectangle {
                         color: menuItem.hovered ? Theme.bgHover : "transparent"
                         topLeftRadius: index === 0 ? Theme.radiusMedium : 0

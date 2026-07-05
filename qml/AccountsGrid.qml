@@ -2,20 +2,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Vault credentials grid: a wrap-to-fit tag cloud of brand-icon chips.
-//
-// Replaces the old AccountsTable. Service / username / password columns are
-// gone; each account is now a single chip showing its resolved brand icon
-// (or a monogram fallback) plus its name. Single-click toggles selection,
-// double-click arms autofill via AppViewModel.armFillForRow (which
-// resolves the row and delegates to Fill.armFor).
-//
-// The card shell (background gradient, border, two decorative blobs) is
-// preserved from the previous design so the visual frame around the data
-// stays consistent. Empty-state panels (no vault, empty vault, no search
-// match) are ported verbatim — they live inside the same Item that would
-// otherwise host the chip flow.
-
 Rectangle {
     id: root
 
@@ -34,8 +20,6 @@ Rectangle {
     signal addAccountRequested()
     signal clearSearchRequested()
 
-    // Inline empty-state card shared by the empty-vault placeholder. Same
-    // shape as the legacy version so visual continuity is preserved.
     component EmptyStatePanel: Rectangle {
         id: panel
         property string titleText: ""
@@ -126,8 +110,6 @@ Rectangle {
     }
 
     radius: Theme.radiusLarge
-    // Deliberately transparent (bgGrid/bgGridEnd, not bgCard) so the animated
-    // background blobs float visibly through the chip area — see Main.qml.
     gradient: Gradient {
         GradientStop { position: 0; color: Theme.bgGrid }
         GradientStop { position: 1; color: Theme.bgGridEnd }
@@ -169,8 +151,6 @@ Rectangle {
             isCompact: root.isCompact
         }
 
-        // Chip grid + empty states share this Item. Only one is meaningfully
-        // visible at a time.
         Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -188,18 +168,6 @@ Rectangle {
                                              : ScrollBar.AsNeeded
                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
-                // Padding lives on the ScrollView (a Control), not on the Flow.
-                // Flow is a positioner that derives from Item and ignores any
-                // `padding` property — that's why the previous version had an
-                // asymmetric gap in compact mode.
-                //
-                // The 14px visual gutter is split 10px ScrollView padding +
-                // 4px margin INSIDE the clipped viewport (the wrapper Item
-                // below). The selected chip's outer glow ring draws ~3px
-                // outside its delegate bounds; ScrollView clips at the padded
-                // content area, so without the in-content margin the ring is
-                // sliced off at the top/left for first-row / first-column
-                // chips. 10 + 4 keeps the layout pixel-identical.
                 topPadding: 10
                 bottomPadding: 10
                 leftPadding: 10

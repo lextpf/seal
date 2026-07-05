@@ -2,22 +2,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// CRUD action buttons + Fill auto-type.
-//
-// Each button is color-coded by semantic meaning:
-//   Green        = Add (new credential)
-//   Purple       = Edit (modify existing)
-//   Red          = Delete (soft-delete, committed on save)
-//   Yellow-green = Fill (arm auto-type hooks)
-//   Orange       = Fill armed (hooks active, countdown running)
-//
-// TintedButton is a shared inline component that Add/Edit/Delete instantiate
-// with their own tint* color overrides. Fill is a separate Button because it
-// has two distinct visual states (normal vs armed) with different color branches,
-// icon swap (crosshairs vs X), and text that includes the countdown timer.
-//
-// Edit, Delete, and Fill require a row selection; Add is always enabled.
-
 RowLayout {
     id: root
     spacing: Theme.spacingSmall
@@ -81,9 +65,6 @@ RowLayout {
         onClicked: root.deleteClicked()
     }
 
-    // Fill button. Separate from TintedButton because it has two entirely different
-    // visual states (normal yellow-green vs armed opaque orange) that need independent
-    // color branches in the gradient stops, plus dynamic text showing the countdown.
     Button {
         id: fillBtn
         readonly property color _fillBorder: Qt.rgba(Theme.btnFillEnd.r, Theme.btnFillEnd.g, Theme.btnFillEnd.b, Math.min(Theme.btnFillEnd.a + 0.18, 1.0))

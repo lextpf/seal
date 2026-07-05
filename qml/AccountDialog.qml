@@ -3,13 +3,6 @@ import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
 
-// Add / edit account dialog. Dual-mode: editIndex == -1 means "add a new
-// credential", >= 0 means "edit the record at that index."
-//
-// The caller (Main.qml) sets only non-secret metadata before opening.
-// In edit mode, blank username/password fields mean "keep the stored value";
-// stored secrets are not preloaded into QML properties.
-
 Popup {
     id: root
 
@@ -54,9 +47,6 @@ Popup {
         border.width: 1
         border.color: Theme.borderMedium
 
-        // Decorative overlays are masked to the dialog's rounded silhouette so
-        // the top gradient, edge light, and tone blob don't bleed into the
-        // invisible corner regions of the rounded rectangle.
         Item {
             anchors.fill: parent
             layer.enabled: true
@@ -277,10 +267,6 @@ Popup {
                 color: Theme.textPrimary
                 placeholderText: root._requiresSecretFields ? "" : "Leave blank to keep current"
                 placeholderTextColor: Theme.textPlaceholder
-                // Hover-to-reveal: password is masked by default and only shown while
-                // the cursor is over the eye icon. Re-hides immediately when the
-                // cursor leaves, reducing shoulder-surfing exposure time vs a
-                // persistent toggle.
                 echoMode: showPassword ? TextInput.Normal : TextInput.Password
                 passwordCharacter: "\u2981"
                 selectByMouse: true
@@ -301,10 +287,6 @@ Popup {
                                  : passwordField.activeFocus ? Theme.borderFocus : Theme.borderInput
                 }
 
-                // Qt.NoButton lets the MouseArea track hover state without intercepting
-                // click events (which would prevent the TextField from receiving focus).
-                // The -4 margin expands the hover hit area beyond the icon bounds for
-                // easier targeting on high-DPI screens.
                 SvgIcon {
                     anchors.right: parent.right
                     anchors.rightMargin: 8
@@ -443,8 +425,6 @@ Popup {
     // Focus the first field on open so the user can start typing immediately.
     onOpened: serviceField.forceActiveFocus()
 
-    // Shared submit for OK click and Enter. Password not trimmed (preserves spaces).
-    // Validates all fields before accepting; shows red borders on empty fields.
     function submitForm() {
         var svc = serviceField.text.trim()
         var usr = usernameField.text.trim()
@@ -466,8 +446,6 @@ Popup {
 
     onAboutToShow: { _showValidation = false; resetFields() }
 
-    // Clear credential strings from QML property memory when the dialog
-    // closes so plaintext doesn't linger in Qt's heap for the session.
     onClosed: {
         initialService = ""
         serviceField.text = ""

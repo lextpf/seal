@@ -2,14 +2,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Embedded terminal panel for interactive CLI commands.
-//
-// Replaces the main vault UI (SearchBar, AccountsGrid, ActionBar)
-// when CLI mode is toggled via the window chrome button. The panel is a
-// dumb view: commands are dispatched to Cli.executeCliCommand()
-// and the full transcript (echo lines, output, trim policy) is owned by
-// the ViewModel and bound via Cli.cliOutputText.
-
 Item {
     id: root
 
@@ -47,8 +39,6 @@ Item {
                 TextArea {
                     id: outputArea
                     text: Cli.cliOutputText
-                    // Auto-scroll to the newest line whenever the ViewModel
-                    // appends output (pure view concern).
                     onTextChanged: Qt.callLater(function() {
                         outputScroll.ScrollBar.vertical.position =
                                 1.0 - outputScroll.ScrollBar.vertical.size

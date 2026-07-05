@@ -2,20 +2,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Single chip in the accounts grid.
-//
-// Security: no plaintext credentials reach this component. The model exposes
-// only the platform name plus a derived `brandIconPath`. Username/password
-// roles still exist on the model for compatibility but this chip ignores them
-// — the redesign treats the chip as a launcher for the existing Fill / Edit
-// flow, where decryption happens in C++ on demand.
-//
-// Visual: pill-shaped, content-sized width with a 280px cap (then ellipsis +
-// tooltip), height controlled by Theme.chipSize (28 = Compact, else 36 =
-// Comfortable). Background is Theme.chipColorFor(platform) at increasing alpha
-// across idle → hover → selected states. When brandIconPath is empty a
-// monogram circle with the first letter of `platform` replaces the SVG icon.
-
 Item {
     id: root
 
@@ -72,9 +58,6 @@ Item {
         Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
         Behavior on border.color { ColorAnimation { duration: Theme.hoverDuration } }
 
-        // Selection outer glow ring: adapts the technique from the legacy
-        // AccountRow selection glow (gradient fade from colored to transparent)
-        // but wraps the pill rather than running across the row.
         Rectangle {
             anchors.fill: parent
             anchors.margins: -3

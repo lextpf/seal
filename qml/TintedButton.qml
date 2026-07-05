@@ -1,13 +1,6 @@
 import QtQuick
 import QtQuick.Controls
 
-// Shared parameterized button template used by ActionBar and HeaderBar.
-//
-// Each instance overrides the tint* properties to apply its semantic color.
-// Disabled state is derived by reducing the tint alpha (same hue at lower
-// opacity) rather than switching to a generic gray, so the button's identity
-// remains recognizable.
-
 Button {
     id: root
     property string faIcon: ""
@@ -31,9 +24,6 @@ Button {
     HoverHandler { id: btnHover; cursorShape: Qt.PointingHandCursor }
 
     contentItem: Row {
-        // Collapse the icon slot entirely when there's no icon, so a text-only
-        // button (e.g. "Cancel") centres on its own rather than sitting shifted
-        // by a phantom icon width + gap.
         spacing: root.faIcon !== "" ? 6 : 0
         anchors.centerIn: parent
         SvgIcon {

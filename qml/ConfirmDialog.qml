@@ -3,13 +3,6 @@ import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
 
-// Generic Yes/No confirmation popup. Used directly for delete confirmations
-// and also serves as a structural base for the error and info dialogs in
-// Main.qml, which replace the contentItem to show a single OK button instead.
-//
-// CloseOnPressOutside is enabled so the user can dismiss by clicking the
-// overlay (equivalent to "No"). The confirmed() signal only fires on "Yes".
-
 Popup {
     id: root
 
@@ -47,9 +40,6 @@ Popup {
         border.width: 1
         border.color: Theme.borderMedium
 
-        // Decorative overlays are masked to the dialog's rounded silhouette so
-        // the top gradient, edge light, and tone blob don't bleed into the
-        // invisible corner regions of the rounded rectangle.
         Item {
             anchors.fill: parent
             layer.enabled: true

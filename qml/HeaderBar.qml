@@ -4,14 +4,6 @@ import QtQuick.Window
 import QtQuick.Shapes
 import QtQuick.Effects
 
-// Top header bar. Layout: [narwhal icon] [title] [theme toggle] ... [Load] [Save] [Unload]
-//
-// Save and Unload are disabled until a vault is loaded (bound to vaultLoaded).
-// Load is always enabled so the user can open a vault from any state.
-//
-// All three vault buttons use the neutral iconBtn palette (same hue, different
-// states) because they're utilities rather than primary actions like Add/Edit/Delete.
-
 Item {
     id: root
     implicitHeight: headerRow.implicitHeight
@@ -24,9 +16,6 @@ Item {
 
     property bool vaultLoaded: false
 
-    // Title bar drag area: wraps the header row so unhandled clicks
-    // (on empty space between buttons) bubble up here and start a
-    // native window drag. Interactive children consume their own events.
     MouseArea {
         id: dragArea
         anchors.fill: parent
@@ -47,21 +36,10 @@ Item {
         anchors.fill: parent
         spacing: Theme.spacingMedium
 
-    // App identity icon. Clicking triggers a sonar-pulse rainbow easter egg:
-    // a ring expands outward from the icon while its color sweeps through
-    // the spectrum, then returns to the theme accent.
-    //
-    // Wrapped in an Item so the rings (siblings before the icon) render
-    // behind the narwhal silhouette instead of on top of it.
     Item {
         Layout.preferredWidth: narwhalIcon.width
         Layout.preferredHeight: narwhalIcon.height
 
-        // Sonar rings - GPU-rendered vector arcs via QtQuick.Shapes.
-        // Each ring is a donut (two concentric circular paths with OddEvenFill)
-        // filled with a conic gradient. No Canvas rasterization, no onPaint -
-        // the scene graph handles anti-aliasing natively.
-        // Declared before the icon so they render behind it.
         Shape {
             id: ringWarm
             anchors.centerIn: narwhalIcon
@@ -175,8 +153,6 @@ Item {
             property real auroraShift: -0.22
             property real sheenShift: -0.18
 
-            // Keep the effect low-frequency and directional so it still reads
-            // cleanly at 32 px; the base icon provides the silhouette detail.
             Item {
                 id: auroraGradient
                 anchors.centerIn: parent
@@ -296,9 +272,6 @@ Item {
         SequentialAnimation {
             id: easterEgg
 
-            // Nudge each ring's center by a small random offset so the ripples
-            // don't share a single perfectly concentric origin - like droplets
-            // on a water surface that land slightly apart.
             ScriptAction {
                 script: {
                     function jitter() { return (Math.random() - 0.5) * Theme.px(5); }
