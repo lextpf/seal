@@ -59,7 +59,7 @@ bool TitleBarFilter::nativeEventFilter(const QByteArray& eventType, void* messag
         }
         case WM_NCPAINT:
         {
-            // Suppress NC painting -- our client covers the whole window.
+            // Suppress NC painting - our client covers the whole window.
             *result = 0;
             return true;
         }
@@ -165,7 +165,7 @@ void InstallWindowChrome(HWND hwnd)
     MARGINS margins{-1, -1, -1, -1};
     DwmExtendFrameIntoClientArea(hwnd, &margins);
 
-    // No system backdrop -- prevents accent/glass bleeding through the
+    // No system backdrop - prevents accent/glass bleeding through the
     // rounded-corner clip region.
     static constexpr DWORD DWMWA_SYSTEMBACKDROP_TYPE = 38;
     DWORD backdropNone = 1;  // DWMSBT_NONE

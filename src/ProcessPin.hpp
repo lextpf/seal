@@ -16,7 +16,9 @@ namespace seal::signer
 {
 
 /**
+ * @class PinnedProcess
  * @brief Move-only RAII pin over a process handle that prevents PID recycling.
+ * @author Alex (https://github.com/lextpf)
  * @ingroup Utilities
  *
  * Holds an OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) handle for the
@@ -31,8 +33,10 @@ class PinnedProcess
 public:
     PinnedProcess() noexcept = default;
 
-    /// @brief Pin @p pid by opening a query handle. valid() is false on failure.
-    /// @param pid The process id to pin.
+    /**
+     * @brief Pin @p pid by opening a query handle. valid() is false on failure.
+     * @param pid The process id to pin.
+     */
     explicit PinnedProcess(DWORD pid) noexcept
         : m_Pid(pid),
           m_Handle(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid))
@@ -74,21 +78,29 @@ public:
     PinnedProcess& operator=(const PinnedProcess&) = delete;
     ~PinnedProcess() { reset(); }
 
-    /// @brief Whether a live query handle is held.
-    /// @return true iff an OpenProcess handle is owned.
+    /**
+     * @brief Whether a live query handle is held.
+     * @return true iff an OpenProcess handle is owned.
+     */
     bool valid() const noexcept { return m_Handle != nullptr; }
     explicit operator bool() const noexcept { return valid(); }
 
-    /// @brief The pinned PID (0 if invalid). Stable while pinned: not recyclable.
-    /// @return The process id.
+    /**
+     * @brief The pinned PID (0 if invalid). Stable while pinned: not recyclable.
+     * @return The process id.
+     */
     DWORD pid() const noexcept { return m_Pid; }
 
-    /// @brief OpenProcess failure code captured at construction (0 when valid()).
-    /// @return The GetLastError value from a failed construction, else 0.
+    /**
+     * @brief OpenProcess failure code captured at construction (0 when valid()).
+     * @return The GetLastError value from a failed construction, else 0.
+     */
     DWORD lastError() const noexcept { return m_LastError; }
 
-    /// @brief On-disk image path queried from the held handle.
-    /// @return The image path, or an empty string if invalid or the query fails.
+    /**
+     * @brief On-disk image path queried from the held handle.
+     * @return The image path, or an empty string if invalid or the query fails.
+     */
     std::wstring imagePath() const
     {
         if (!valid())
@@ -104,13 +116,15 @@ public:
         return std::wstring(buf, bufChars);
     }
 
-    /// @brief Whether the pinned process is still running.
-    /// @return true iff GetExitCodeProcess yields STILL_ACTIVE.
-    ///
-    /// A process that genuinely exits with code 259 (== STILL_ACTIVE) reads as
-    /// alive - a Win32 footgun, but harmless here: a false "alive" only delays
-    /// teardown, identity is anchored by the open handle, and the subsequent
-    /// pipe read fails on the dead peer anyway.
+    /**
+     * @brief Whether the pinned process is still running.
+     * @return true iff GetExitCodeProcess yields STILL_ACTIVE.
+     *
+     * A process that genuinely exits with code 259 (== STILL_ACTIVE) reads as
+     * alive - a Win32 footgun, but harmless here: a false "alive" only delays
+     * teardown, identity is anchored by the open handle, and the subsequent
+     * pipe read fails on the dead peer anyway.
+     */
     bool alive() const noexcept
     {
         if (!valid())
@@ -125,12 +139,14 @@ public:
         return code == STILL_ACTIVE;
     }
 
-    /// @brief Process creation time as a 64-bit FILETIME tick count.
-    /// @return The packed creation time, or std::nullopt if the query fails.
-    ///
-    /// GetProcessTimes is total under PROCESS_QUERY_LIMITED_INFORMATION for a
-    /// same-user handle, so nullopt is effectively unreachable in-threat-model;
-    /// callers nonetheless fail closed on nullopt.
+    /**
+     * @brief Process creation time as a 64-bit FILETIME tick count.
+     * @return The packed creation time, or std::nullopt if the query fails.
+     *
+     * GetProcessTimes is total under PROCESS_QUERY_LIMITED_INFORMATION for a
+     * same-user handle, so nullopt is effectively unreachable in-threat-model;
+     * callers nonetheless fail closed on nullopt.
+     */
     std::optional<std::uint64_t> creationTime() const noexcept
     {
         if (!valid())

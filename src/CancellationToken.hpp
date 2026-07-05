@@ -6,7 +6,9 @@
 namespace seal
 {
 /**
+ * @class CancellationToken
  * @brief Read-only cooperative-cancellation flag polled by a background work body.
+ * @author Alex (https://github.com/lextpf)
  * @ingroup Utilities
  *
  * The owning AsyncRunner holds the writable `std::shared_ptr<std::atomic<bool>>`; the work body
@@ -19,8 +21,10 @@ public:
     /// @brief Construct a never-cancelled token.
     CancellationToken() = default;
 
-    /// @brief Construct a token over a shared cancellation flag (read-only).
-    /// @param flag Shared flag set by the owning AsyncRunner / AsyncHandle.
+    /**
+     * @brief Construct a token over a shared cancellation flag (read-only).
+     * @param flag Shared flag set by the owning AsyncRunner / AsyncHandle.
+     */
     explicit CancellationToken(std::shared_ptr<const std::atomic<bool>> flag)
         : m_Flag(std::move(flag))
     {

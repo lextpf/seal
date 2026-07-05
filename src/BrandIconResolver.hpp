@@ -65,7 +65,6 @@ namespace brand
 
 /**
  * @brief Normalize a free-form platform name to a lower-case alphanumeric slug.
- * @author Alex (https://github.com/lextpf)
  * @ingroup BrandIcon
  *
  * Drops every character that isn't `[a-z0-9]`. Used as the first stage of
@@ -79,7 +78,6 @@ std::string normalizeSlug(const std::string& platformName);
 
 /**
  * @brief Resolve a platform name to a brand-asset slug (without the `.svg` suffix).
- * @author Alex (https://github.com/lextpf)
  * @ingroup BrandIcon
  *
  * Applies, in order:
@@ -87,6 +85,8 @@ std::string normalizeSlug(const std::string& platformName);
  *   2. Direct match against the supplied asset index
  *   3. Curated alias table (e.g. `"x"` -> `"x-twitter"`, `"signal"` -> `"signal-messenger"`)
  *   4. Trailing-TLD strip (`"github.com"` -> `"github"`) then direct/alias retry
+ *   5. Per-token retry for multi-word labels (`"Twitter, Inc."` -> `"twitter"`,
+ *      which then aliases to `"x-twitter"`)
  *
  * The caller supplies a `lookupAsset` predicate that maps a normalized slug to
  * the real asset filename (with hyphens preserved). This lets the pure-C++ slice
@@ -104,7 +104,6 @@ std::string resolveBrandIconSlug(const std::string& platformName,
 #ifdef USE_QT_UI
 /**
  * @brief Resolve a platform name to a qrc path under `assets/brands/`.
- * @author Alex (https://github.com/lextpf)
  * @ingroup BrandIcon
  *
  * Convenience wrapper that uses the application's compiled-in asset set as the

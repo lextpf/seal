@@ -8,10 +8,22 @@ namespace seal
 /**
  * @brief Pure idle auto-lock decision.
  * @author Alex (https://github.com/lextpf)
- * @ingroup GUI
+ * @ingroup ViewModel
  *
  * Kept Qt-free so the policy is unit-testable in the no-Qt test target;
  * AutoLockController feeds it timestamps from the Qt event layer.
+ *
+ * @par Decision
+ * | Condition                                    | Result             |
+ * |----------------------------------------------|--------------------|
+ * | `timeoutSecs <= 0`                           | `false` (disabled) |
+ * | `nowMs - lastActivityMs >= timeoutSecs*1000` | `true` (lock)      |
+ * | otherwise                                    | `false` (idle)     |
+ *
+ * @f[
+ *   \text{lock} \;=\; (\text{timeoutSecs} > 0)\;\land\;
+ *   \bigl(\text{nowMs} - \text{lastActivityMs} \;\ge\; 1000 \cdot \text{timeoutSecs}\bigr)
+ * @f]
  *
  * @param lastActivityMs Monotonic milliseconds of the last user activity.
  * @param nowMs          Monotonic milliseconds now.
