@@ -228,7 +228,6 @@ def collect_group_members(docs_dir: Path, group_dir: str) -> list[tuple[str, str
             r":material-format-section: \[([^\]]+)\]\(([^)]+)/index\.md\)",
             text,
         ):
-            sub_name = m.group(1)
             sub_dir = m.group(2)
             # Class-based subgroups have content at the nested path; try there first.
             sub_index = docs_dir / group_dir / sub_dir / "index.md"
