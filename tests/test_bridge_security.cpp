@@ -39,7 +39,7 @@ TEST_F(BridgeSecurityTest, ValidMessageAccepted)
 
 // M6: WinVerifyTrust runs against real signed binaries elsewhere; the
 // actual call lives in BrowserBridge.cpp (USE_QT_UI-gated, not in
-// seal_tests) and seal-browser/main.cpp via SignerUtils.hpp. Here we
+// seal_tests) and host/browser/main.cpp via SignerUtils.hpp. Here we
 // only assert the parser's structural invariants -- a malformed peer
 // cannot bypass the schema.
 TEST_F(BridgeSecurityTest, ParserRejectsControlCharactersInHost)
