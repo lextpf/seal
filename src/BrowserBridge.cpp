@@ -49,15 +49,31 @@ constexpr DWORD kPipeOutBufferBytes = 8192;
 constexpr DWORD kAcceptBackoffMs = 50;
 constexpr DWORD kMessageReadTimeoutMs = 5000;
 constexpr DWORD kMaxMessageBytes = 4096;
-// Bridge-entry TTL. Matches FillController::FILL_TIMEOUT_SECONDS so the
-// bridge cache and the armed window share one "30 s from the prior
-// mousedown" model -- enough for click-to-focus then alt-tab to seal
-// then Ctrl+Click. The earlier 2 s was too tight for human-paced
-// autofill and produced silent "browser_extension=unknown" misses.
+// Bridge-entry TTL. Matches FillController::FILL_TIMEOUT_SECONDS so the cache
+// and armed window share one "30 s from the prior mousedown" model - enough for
+// click-to-focus then alt-tab to seal then Ctrl+Click. The earlier 2 s was too
+// tight for human-paced autofill and caused silent "browser_extension=unknown" misses.
 constexpr auto kEntryLifetime = std::chrono::seconds(30);
 
 // Quantises a raw screen coordinate to the map's bucket resolution.
 constexpr int kQuantShift = 2;
+
+// Navigation-snapshot freshness. Short: a staged auto-arm must reflect where
+// the user *is now*, not a page they left minutes ago. StagingController
+// polls at ~100 ms, so a few seconds is ample to catch a fresh navigation.
+constexpr auto kNavLifetime = std::chrono::seconds(10);
+
+// Per-connection navigation-report rate limit (a DoS guard against SPA route
+// floods; content.js also debounces). At most kNavBurst reports per window.
+constexpr auto kNavThrottleWindow = std::chrono::seconds(2);
+constexpr int kNavBurst = 4;
+
+// Per-connection nav throttle state - a worker-thread local, so no lock.
+struct NavThrottle
+{
+    std::chrono::steady_clock::time_point m_WindowStart;
+    int m_Count = 0;
+};
 
 // Cap on simultaneously-served connections. Each accepted peer already clears
 // the signer + parent-browser gates, but bound the worker count so a local
@@ -150,7 +166,7 @@ struct ConnectionWorker
 
 // Build SECURITY_ATTRIBUTES that grant the current user SID rwx + sync,
 // no Authenticated-Users / Administrators ACE. CreateNamedPipe consumes
-// the contents, but storage must outlive the call -- hence the carrier.
+// the contents, but storage must outlive the call - hence the carrier.
 struct PipeSecurity
 {
     SECURITY_ATTRIBUTES m_Attributes{};
@@ -231,7 +247,7 @@ std::string hexEncode(const unsigned char* data, std::size_t length)
     return out;
 }
 
-// BCrypt RNG wrapper -- system-preferred algorithm is an unbiased CSPRNG
+// BCrypt RNG wrapper - system-preferred algorithm is an unbiased CSPRNG
 // without us enumerating providers.
 bool generateRandom(unsigned char* out, std::size_t bytes)
 {
@@ -290,7 +306,7 @@ constexpr int quantise(LONG raw) noexcept
 
 struct BrowserBridge::Impl
 {
-    HANDLE m_ListenPipe = INVALID_HANDLE_VALUE;  ///< First instance pre-created by startImpl().
+    HANDLE m_ListenPipe = INVALID_HANDLE_VALUE;  // First instance pre-created by startImpl().
     std::jthread m_AcceptThread;
     std::atomic<bool> m_Running{false};
     std::atomic<bool> m_Disabled{false};
@@ -302,11 +318,34 @@ struct BrowserBridge::Impl
         m_PeerCounts{};
     std::array<unsigned char, 32> m_HmacKey{};
     std::wstring m_PipeName;
-    PipeSecurity m_PipeSecurity;  ///< Per-user DACL, built once, applied to every pipe instance.
+    PipeSecurity m_PipeSecurity;  // Per-user DACL, built once, applied to every pipe instance.
     mutable std::shared_mutex m_MapMutex;
     std::unordered_map<BridgeKey, BridgeEntry, BridgeKeyHash> m_Map;
     std::unordered_map<DWORD, int> m_BrowserConnCounts;  // guarded by m_MapMutex
     std::string m_ExpectedSignerIdentity;
+
+    // Latest navigation snapshot, on its own mutex so nav reports never
+    // contend with the click-path map. m_NavSeq bumps on every accepted nav.
+    mutable std::mutex m_NavMutex;
+    NavSnapshot m_PendingNav;
+    std::uint64_t m_NavSeq = 0;  // guarded by m_NavMutex
+
+    // A live, authenticated peer connection for the reverse-channel write (username injection).
+    // The worker owns the read side; sendFillUsername (GUI thread) takes m_WriteMutex, checks
+    // m_Alive, then overlapped-writes the full-duplex pipe. The worker sets m_Alive=false under
+    // its write mutex before returning; the acceptor joins it before closing - writes never race.
+    struct PeerConn
+    {
+        HANDLE m_Pipe = INVALID_HANDLE_VALUE;
+        std::mutex m_WriteMutex;
+        std::atomic<bool> m_Alive{true};
+        explicit PeerConn(HANDLE pipe)
+            : m_Pipe(pipe)
+        {
+        }
+    };
+    mutable std::mutex m_PeerConnMutex;
+    std::unordered_map<DWORD, std::shared_ptr<PeerConn>> m_PeerConns;  // browserPid -> connection
 
     // Internal so enable() can re-call without going through the public
     // start() entrypoint (which would double-log).
@@ -316,7 +355,8 @@ struct BrowserBridge::Impl
     void acceptorLoop(std::stop_token stopToken);
     void serveConnection(HANDLE pipe, std::stop_token stopToken);
     bool verifySignerMatches(const std::wstring& peerPath) const;
-    void handleMessage(DWORD browserPid, std::string_view payload);
+    void handleMessage(DWORD browserPid, std::string_view payload, NavThrottle& navThrottle);
+    void notePendingNavigation(DWORD browserPid, const ParsedBridgeMessage& parsed);
     void pruneExpiredLocked(const std::chrono::steady_clock::time_point& now);
     void noteBrowserConnected(DWORD browserPid);
     void noteBrowserDisconnected(DWORD browserPid);
@@ -394,7 +434,7 @@ bool BrowserBridge::Impl::startImpl()
 
     // Pre-create the first instance so (a) creation failures surface
     // synchronously to the caller and (b) a listening instance exists before we
-    // return -- otherwise the extension's first connectNative would miss and
+    // return - otherwise the extension's first connectNative would miss and
     // back off for seconds before retrying.
     HANDLE first = createPipeInstance(true);
     if (first == INVALID_HANDLE_VALUE)
@@ -423,7 +463,7 @@ void BrowserBridge::Impl::stopImpl()
     {
         // The acceptor polls its stop token every 200 ms while waiting for a
         // connection, then cancels + joins every live worker and closes all
-        // pipe handles before returning -- so this join is the single sync
+        // pipe handles before returning - so this join is the single sync
         // point for full teardown.
         m_AcceptThread.request_stop();
         m_AcceptThread.join();
@@ -511,7 +551,9 @@ void BrowserBridge::Impl::noteBrowserDisconnected(DWORD browserPid)
     }
 }
 
-void BrowserBridge::Impl::handleMessage(DWORD browserPid, std::string_view payload)
+void BrowserBridge::Impl::handleMessage(DWORD browserPid,
+                                        std::string_view payload,
+                                        NavThrottle& navThrottle)
 {
     if (m_Disabled.load())
     {
@@ -525,6 +567,31 @@ void BrowserBridge::Impl::handleMessage(DWORD browserPid, std::string_view paylo
             {"event=fill.bridge.reject",
              seal::diag::kv("reason", bridgeParseErrorToken(err)),
              seal::diag::kv("browser_pid", static_cast<unsigned int>(browserPid))}));
+        return;
+    }
+
+    // Navigation reports never enter the positional click map; they update the
+    // latest-nav snapshot (rate-limited per connection).
+    if (parsed.m_Kind == BridgeKind::Nav)
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (navThrottle.m_Count == 0 || now - navThrottle.m_WindowStart >= kNavThrottleWindow)
+        {
+            navThrottle.m_WindowStart = now;
+            navThrottle.m_Count = 0;
+        }
+        if (navThrottle.m_Count >= kNavBurst)
+        {
+            // Over budget: drop silently (one debug line, never per-drop info
+            // spam). The content.js debounce is the primary limiter.
+            qCDebug(logBridge).noquote() << QString::fromStdString(seal::diag::joinFields(
+                {"event=fill.bridge.nav",
+                 "result=throttled",
+                 seal::diag::kv("browser_pid", static_cast<unsigned int>(browserPid))}));
+            return;
+        }
+        ++navThrottle.m_Count;
+        notePendingNavigation(browserPid, parsed);
         return;
     }
 
@@ -553,11 +620,9 @@ void BrowserBridge::Impl::handleMessage(DWORD browserPid, std::string_view paylo
         m_Map.insert_or_assign(key, std::move(entry));
     }
 
-    // One info line per accepted report. Verdict + raw/quantised coords
-    // are safe to log; URL host stays off this line (privacy).
-    //
-    // Cast the verdict literal through string_view so kv() picks the
-    // string overload -- a bare const char* matches the bool overload via
+    // One info line per accepted report: verdict + raw/quantised coords are safe to log;
+    // URL host stays off it (privacy). Cast the verdict literal through string_view so kv()
+    // picks the string overload - a bare const char* matches the bool overload via
     // standard-conversion rank and would print "verdict=true".
     qCInfo(logBridge).noquote() << QString::fromStdString(seal::diag::joinFields(
         {"event=fill.bridge.msg",
@@ -571,6 +636,31 @@ void BrowserBridge::Impl::handleMessage(DWORD browserPid, std::string_view paylo
          seal::diag::kv("qy", key.m_QuantY)}));
 }
 
+void BrowserBridge::Impl::notePendingNavigation(DWORD browserPid, const ParsedBridgeMessage& parsed)
+{
+    const auto now = std::chrono::steady_clock::now();
+    {
+        std::lock_guard<std::mutex> lock(m_NavMutex);
+        m_PendingNav.m_Host = parsed.m_UrlHost;
+        m_PendingNav.m_Secure = parsed.m_Secure;
+        m_PendingNav.m_HasPasswordForm = parsed.m_HasPasswordForm;
+        m_PendingNav.m_HasUsernameField = parsed.m_HasUsernameField;
+        m_PendingNav.m_Visit = parsed.m_Visit;
+        m_PendingNav.m_BrowserPid = browserPid;
+        m_PendingNav.m_At = now;
+        m_PendingNav.m_Seq = ++m_NavSeq;
+    }
+    // One info line per accepted nav. The host stays off the line (privacy);
+    // the fingerprint is enough to correlate with a later fill.decide.
+    qCInfo(logBridge).noquote() << QString::fromStdString(seal::diag::joinFields(
+        {"event=fill.bridge.nav",
+         "result=ok",
+         seal::diag::kv("browser_pid", static_cast<unsigned int>(browserPid)),
+         seal::diag::kv("host_len", static_cast<unsigned int>(parsed.m_UrlHost.size())),
+         seal::diag::kv("secure", parsed.m_Secure ? 1 : 0),
+         seal::diag::kv("form", parsed.m_HasPasswordForm ? 1 : 0)}));
+}
+
 bool BrowserBridge::Impl::readFramedMessage(HANDLE pipe,
                                             std::vector<char>& outBuf,
                                             OVERLAPPED& overlapped,
@@ -578,13 +668,10 @@ bool BrowserBridge::Impl::readFramedMessage(HANDLE pipe,
                                             const seal::signer::PinnedProcess& peer,
                                             const seal::signer::PinnedProcess& browser)
 {
-    // Two phases:
-    //   1. Length prefix: idle is legit (no clicks for hours). Wait
-    //      indefinitely, polling stop/running/disabled every kStopPollMs.
-    //      Broken pipes still surface via WaitForSingleObject /
-    //      GetOverlappedResult, so real disconnects tear the loop down.
-    //   2. Payload: once committed to a length, bytes must arrive promptly.
-    //      kMessageReadTimeoutMs caps a peer that prefix-then-stalls.
+    // Two phases. (1) Length prefix: idle is legit (no clicks for hours), so wait
+    // indefinitely, polling stop/running/disabled every kStopPollMs; broken pipes still
+    // surface via WaitForSingleObject/GetOverlappedResult, tearing the loop down. (2) Payload:
+    // once committed to a length, kMessageReadTimeoutMs caps a peer that prefix-then-stalls.
     constexpr DWORD kStopPollMs = 1000;
 
     auto isStopping = [&]() noexcept
@@ -622,7 +709,7 @@ bool BrowserBridge::Impl::readFramedMessage(HANDLE pipe,
             // Idle is fine; the poll interval keeps shutdown responsive.
             continue;
         }
-        // WAIT_FAILED / WAIT_ABANDONED -- treat as fatal.
+        // WAIT_FAILED / WAIT_ABANDONED - treat as fatal.
         CancelIoEx(pipe, &overlapped);
         return false;
     }
@@ -721,11 +808,10 @@ bool BrowserBridge::Impl::writeFramedMessage(HANDLE pipe,
 
 void BrowserBridge::Impl::acceptorLoop(std::stop_token stopToken)
 {
-    // The acceptor owns every connection's pipe handle and the worker thread
-    // serving it. A worker runs the per-connection gates + handshake + read
-    // loop; the acceptor reaps finished workers (closing their handles) and, on
-    // stop, cancels + joins all of them. Keeping all worker bookkeeping on this
-    // one thread avoids cross-thread races on the worker list.
+    // The acceptor owns every connection's pipe handle and the worker thread serving it.
+    // A worker runs the per-connection gates + handshake + read loop; the acceptor reaps
+    // finished workers (closing their handles) and, on stop, cancels + joins all of them.
+    // Keeping worker bookkeeping on this one thread avoids cross-thread races on the list.
     std::vector<ConnectionWorker> workers;
 
     auto reapFinished = [&workers]()
@@ -917,7 +1003,7 @@ void BrowserBridge::Impl::acceptorLoop(std::stop_token stopToken)
 void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken)
 {
     // Runs on a per-connection worker thread, so it owns its own event +
-    // OVERLAPPED. It does NOT close `pipe` -- the acceptor does that after
+    // OVERLAPPED. It does NOT close `pipe` - the acceptor does that after
     // joining this thread. All the accept-time gates that used to live inline
     // in the single accept loop run here, unchanged, per connection.
     HandleGuard event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
@@ -1083,14 +1169,13 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
         return;
     }
     // The "parent" for the rest of the connection is the discovered browser
-    // ancestor -- that PID owns the user's window click, hence map key.
+    // ancestor - that PID owns the user's window click, hence map key.
     const DWORD parentPid = browser.pid();
 
-    // Per-connection nonce -- NOT the HMAC key (that one only derives
-    // the pipe-name suffix and never leaves the process). Fresh per
-    // accept so a captured handshake cannot be replayed. The echo is
-    // a framing sanity check; authentication is the signer-identity
-    // match plus the parent-process gate above.
+    // Per-connection nonce - NOT the HMAC key (that one only derives the pipe-name
+    // suffix and never leaves the process). Fresh per accept so a captured handshake
+    // cannot be replayed. The echo is a framing sanity check; authentication is the
+    // signer-identity match plus the parent-process gate above.
     std::array<unsigned char, 32> connectionNonce{};
     if (!generateRandom(connectionNonce.data(), connectionNonce.size()))
     {
@@ -1134,7 +1219,16 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
                                 seal::diag::kv("browser_pid", static_cast<unsigned int>(parentPid)),
                                 seal::diag::kv("browser", seal::signer::browserKindToken(kind))}));
 
+    // Register this authenticated connection for reverse-channel writes
+    // (username injection). Latest connection per browser PID wins.
+    auto conn = std::make_shared<PeerConn>(pipe);
+    {
+        std::lock_guard<std::mutex> lock(m_PeerConnMutex);
+        m_PeerConns[parentPid] = conn;
+    }
+
     std::vector<char> message;
+    NavThrottle navThrottle;  // Per-connection nav rate-limit state (worker-local).
     while (m_Running.load() && !stopToken.stop_requested() && !m_Disabled.load())
     {
         if (!peer.alive() || !browser.alive())
@@ -1146,8 +1240,8 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
             break;
         }
         // Key on the browser's PID (host's parent), not the host's PID
-        // -- WindowFromPoint on the lookup side returns the browser PID.
-        handleMessage(parentPid, std::string_view(message.data(), message.size()));
+        // - WindowFromPoint on the lookup side returns the browser PID.
+        handleMessage(parentPid, std::string_view(message.data(), message.size()), navThrottle);
     }
 
     // A liveness trip emits the specific token; otherwise the existing
@@ -1165,6 +1259,23 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
             {"event=fill.bridge.disconnect",
              "reason=browser_exited",
              seal::diag::kv("browser_pid", static_cast<unsigned int>(parentPid))}));
+    }
+
+    // Deregister from the reverse-channel map. Set alive=false UNDER the write mutex
+    // first, so an in-flight sendFillUsername either finished its write or now sees the
+    // dead flag and skips - before the acceptor (which joins this thread next) closes the
+    // pipe handle. This is what makes a cross-thread reverse write safe against that close.
+    {
+        std::lock_guard<std::mutex> writeLock(conn->m_WriteMutex);
+        conn->m_Alive.store(false);
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_PeerConnMutex);
+        auto it = m_PeerConns.find(parentPid);
+        if (it != m_PeerConns.end() && it->second == conn)
+        {
+            m_PeerConns.erase(it);
+        }
     }
 
     m_PeerCounts[kindIdx].fetch_sub(1, std::memory_order_relaxed);
@@ -1227,6 +1338,13 @@ void BrowserBridge::disable()
         // against any change to the join-before-clear ordering.
         m_Impl->m_BrowserConnCounts.clear();
     }
+    {
+        // M8 also drops any pending navigation so a staged auto-arm cannot
+        // survive a panic-disable. takeNavSince already returns nullopt while
+        // disabled; this clears the slot so a later enable() starts clean.
+        std::lock_guard<std::mutex> navLock(m_Impl->m_NavMutex);
+        m_Impl->m_PendingNav = NavSnapshot{};
+    }
     qCInfo(logBridge).noquote() << QString::fromStdString(
         seal::diag::joinFields({"event=fill.bridge.disabled"}));
 }
@@ -1278,14 +1396,10 @@ std::optional<BridgeEntry> BrowserBridge::lookup(DWORD browserPid, POINT screenP
     const auto now = std::chrono::steady_clock::now();
     std::shared_lock<std::shared_mutex> lock(m_Impl->m_MapMutex);
 
-    // Lookup tolerance in raw screen px (Chebyshev distance). The earlier
-    // 5-key cross-probe at quant-shift 2 gave only ~+-6 px on cardinal
-    // axes and 0 on diagonals, producing silent
-    // "browser_extension=unknown" misses when the focus-click and the
-    // Ctrl+Click landed on different parts of the same input. 48 px
-    // covers natural variance on a typical 40 px tall input. Nearby fields
-    // can collide on lookup, but we pick the FRESHEST entry and (M5) the
-    // FusionDecider requires a second probe to agree.
+    // Lookup tolerance in raw screen px (Chebyshev distance). 48 px covers the
+    // variance between the focus-click and the Ctrl+Click on one ~40 px-tall input
+    // (a tighter radius caused silent "browser_extension=unknown" misses). Nearby
+    // fields may collide, but we take the FRESHEST entry and (M5) require a second probe.
     constexpr int kLookupToleranceRawPx = 48;
     constexpr int kBucketCenterOffset = 1 << (kQuantShift - 1);
 
@@ -1320,6 +1434,149 @@ std::optional<BridgeEntry> BrowserBridge::lookup(DWORD browserPid, POINT screenP
         return std::nullopt;
     }
     return *freshest;
+}
+
+std::optional<NavSnapshot> BrowserBridge::takeNavSince(std::uint64_t& lastSeenSeq) const
+{
+    if (m_Impl->m_Disabled.load())
+    {
+        return std::nullopt;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(m_Impl->m_NavMutex);
+    if (m_Impl->m_NavSeq == 0 || m_Impl->m_NavSeq <= lastSeenSeq)
+    {
+        return std::nullopt;  // Nothing new since this caller last looked.
+    }
+    if (now - m_Impl->m_PendingNav.m_At > kNavLifetime)
+    {
+        // Stale: advance the cursor so we don't re-examine it, and report none.
+        lastSeenSeq = m_Impl->m_NavSeq;
+        return std::nullopt;
+    }
+    lastSeenSeq = m_Impl->m_NavSeq;
+    return m_Impl->m_PendingNav;
+}
+
+namespace
+{
+// Minimal JSON string-body escaper. UTF-8 bytes >= 0x80 are valid inside a
+// JSON string and pass through unchanged; only the structural / control
+// characters need escaping.
+std::string jsonEscape(std::string_view s)
+{
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (const unsigned char c : s)
+    {
+        switch (c)
+        {
+            case '"':
+                out += "\\\"";
+                break;
+            case '\\':
+                out += "\\\\";
+                break;
+            case '\b':
+                out += "\\b";
+                break;
+            case '\f':
+                out += "\\f";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\r':
+                out += "\\r";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
+            default:
+                if (c < 0x20)
+                {
+                    out += "\\u00";
+                    out += kHex[(c >> 4) & 0x0F];
+                    out += kHex[c & 0x0F];
+                }
+                else
+                {
+                    out += static_cast<char>(c);
+                }
+                break;
+        }
+    }
+    return out;
+}
+}  // namespace
+
+bool BrowserBridge::sendFillUsername(DWORD browserPid,
+                                     const std::string& host,
+                                     const std::string& usernameUtf8)
+{
+    if (m_Impl->m_Disabled.load())
+    {
+        return false;  // M8 panic: no reverse traffic.
+    }
+
+    // Find the live connection for this browser PID; hold a shared_ptr so the
+    // worker can't free it out from under us mid-write.
+    std::shared_ptr<Impl::PeerConn> conn;
+    {
+        std::lock_guard<std::mutex> lock(m_Impl->m_PeerConnMutex);
+        const auto it = m_Impl->m_PeerConns.find(browserPid);
+        if (it == m_Impl->m_PeerConns.end())
+        {
+            return false;  // no peer connected for this browser
+        }
+        conn = it->second;
+    }
+
+    // Build the framed directive in ONE pre-reserved buffer - never chained
+    // operator+ - so no intermediate temporary holding the plaintext username
+    // is ever freed unwiped. `json` and the escaped username are both zeroed
+    // below; the host is not a secret.
+    std::string escapedUser = jsonEscape(usernameUtf8);
+    const std::string escapedHost = jsonEscape(host);
+    std::string json;
+    json.reserve(escapedHost.size() + escapedUser.size() + 80);  // > full literal length
+    json += "{\"v\":1,\"kind\":\"fill_username\",\"url_host\":\"";
+    json += escapedHost;
+    json += "\",\"username\":\"";
+    json += escapedUser;  // capacity reserved above -> no realloc frees plaintext
+    json += "\"}";
+    if (!escapedUser.empty())
+    {
+        SecureZeroMemory(escapedUser.data(), escapedUser.size());
+    }
+
+    bool ok = false;
+    {
+        // Serialize with the worker's alive-transition. If the worker already
+        // marked the connection dead (disconnecting), skip - the handle may be
+        // about to close.
+        std::lock_guard<std::mutex> writeLock(conn->m_WriteMutex);
+        if (conn->m_Alive.load())
+        {
+            OVERLAPPED ov{};
+            HandleGuard ev(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+            if (ev.get() != nullptr)
+            {
+                ov.hEvent = ev.get();
+                ok = m_Impl->writeFramedMessage(conn->m_Pipe, json, ov);
+            }
+        }
+    }
+
+    // Wipe the wire buffer that held the plaintext username. (The bytes already
+    // in the OS pipe / browser are inherent to the opted-in DOM-fill; only our
+    // in-process copies are our responsibility.)
+    if (!json.empty())
+    {
+        SecureZeroMemory(json.data(), json.size());
+    }
+    return ok;
 }
 
 #ifdef SEAL_BRIDGE_TEST_HOOKS

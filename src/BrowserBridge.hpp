@@ -8,8 +8,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -52,6 +54,34 @@ struct BridgeEntry
 };
 
 /**
+ * @brief The most-recent navigation report from the WebExtension.
+ * @author Alex (https://github.com/lextpf)
+ * @ingroup FillController
+ *
+ * Unlike @ref BridgeEntry (a positional click record), a nav report is
+ * page-level: the host the user just navigated to, plus the `secure`/`form`
+ * flags. It never enters the click verdict map. The bridge keeps only the
+ * latest snapshot per process; StagingController polls it on the GUI thread
+ * via @ref BrowserBridge::takeNavSince and decides whether to auto-arm.
+ *
+ * @note @ref m_Host is the plain, non-secret hostname (no full URL, no
+ *       secret ever travels this channel). It is deliberately a plain
+ *       std::string so the Qt-free @ref resolveStageRecord can consume it.
+ */
+struct NavSnapshot
+{
+    std::string m_Host;                          ///< Navigated hostname (e.g. "www.paypal.com").
+    bool m_Secure = false;                       ///< Page is an https/secure context.
+    bool m_HasPasswordForm = false;              ///< A visible <input type=password> exists.
+    bool m_HasUsernameField = false;             ///< A visible login identifier field exists.
+    std::string m_Visit;                         ///< Per-document page-load token (empty on a
+                                                 ///< stale extension -> staging fails closed).
+    DWORD m_BrowserPid = 0;                      ///< WinVerifyTrust-validated browser PID.
+    std::uint64_t m_Seq = 0;                     ///< Monotonic sequence; consume-once per new seq.
+    std::chrono::steady_clock::time_point m_At;  ///< When the report was recorded (freshness TTL).
+};
+
+/**
  * @brief Bounded named-pipe server that receives extension mousedown reports.
  * @author Alex (https://github.com/lextpf)
  * @ingroup FillController
@@ -65,6 +95,22 @@ struct BridgeEntry
  * and inserted into the in-memory verdict map that
  * BrowserBridgeProbe::lookup() consults at fill time.
  *
+ * @par Inbound report flow
+ * @verbatim
+ * content.js         classify clicked field; emit {v,x,y,tag,url_host,url_path}
+ *    | chrome.runtime.sendMessage
+ *    v
+ * background.js      own-id check; SHA-256(url_path)->url_path_hash (raw path dropped)
+ *    | connectNative("com.seal.fill")
+ *    v
+ * seal-browser.exe   dumb stdio<->pipe relay (no parsing)
+ *    | named pipe  \\.\pipe\seal-fill-<hex>   hex = SHA-256(per-start key)  [M7]
+ *    | frame = uint32 length (native LE) + JSON, <= 4096 bytes
+ *    v
+ * BrowserBridge      per-conn gates: signer [M6] -> browser parent -> nonce echo,
+ *                    then parseBridgeMessage -> verdict map keyed by (browserPid,qx,qy)
+ * @endverbatim
+ *
  * ## :material-shield-lock: Hardening Mitigations
  *
  * The bridge is the highest-risk attack surface in seal: same-user
@@ -73,41 +119,55 @@ struct BridgeEntry
  * following checks in order; failure at any gate disconnects the peer
  * before a single byte of its JSON is read.
  *
- * - **Pipe DACL** -- only the current user SID gets RWX + SYNC on the
- *   pipe (Authenticated Users and Administrators are explicitly NOT
+ * - **Pipe DACL** - only the current user SID gets read/write + sync on
+ *   the pipe (Authenticated Users and Administrators are explicitly NOT
  *   granted). Cross-user attacks are blocked at the OS layer.
- * - **M6: Signer identity match** -- the peer binary path resolves via
+ * - **M6: Signer identity match** - the peer binary path resolves via
  *   `GetNamedPipeClientProcessId`, then `WinVerifyTrust` with whole-
  *   chain revocation against the OS cache, and finally its SPKI
  *   thumbprint must equal seal.exe's. SPKI (not CN, not serial) binds
  *   to the publisher's public key, so cert renewals with the same key
  *   still match but a key-rotation reissue after a compromise does not.
- * - **M7: Fresh nonce per accept** -- after the peer is identity-
+ * - **Fresh nonce per accept** - after the peer is identity-
  *   matched, the bridge sends a per-connection random nonce and
- *   requires it back verbatim. The persistent HMAC key (used only in
- *   the pipe name) is never transmitted.
- * - **Parent process must be a known signed browser** -- the host's
+ *   requires it back verbatim. This is a framing/replay sanity check,
+ *   not authentication (that is the signer + parent-process gate); it
+ *   carries no M-number. The persistent HMAC key (used only in the
+ *   pipe name, M7) is never transmitted.
+ * - **Parent process must be a known signed browser** - the host's
  *   parent (via `CreateToolhelp32Snapshot`, walking through cmd.exe /
  *   powershell.exe hops) must (a) match a known browser image name and
  *   (b) pass `WinVerifyTrust`. Closes the "puppet a signed host" hole:
  *   same-user malware launching seal-browser.exe with attacker-
  *   controlled stdin still fails because its parent isn't a browser.
- * - **M5: Bridge-alone short-circuit prohibition** -- enforced in
+ * - **M5: Bridge-alone short-circuit prohibition** - enforced in
  *   `FusionDecider`, not here. A Tier-1 hit from the bridge probe
  *   alone cannot decide a fill; another Tier-1 probe must agree.
- * - **Browser-PID-keyed map** -- entries are indexed by the resolved
+ * - **Browser-PID-keyed map** - entries are indexed by the resolved
  *   parent (browser) PID, not the host's own PID. There is no in-band
  *   `browser_pid` claim from the peer; the wire schema omits the
  *   field entirely so a lying peer cannot poison the map with a wrong
  *   key.
- * - **Bounded JSON parser** -- hand-rolled recursive-descent, rejects
+ * - **Bounded JSON parser** - hand-rolled recursive-descent, rejects
  *   messages > 4 KB, nesting depth > 4, unknown / duplicate keys, or
- *   any value outside the six-field schema. Never allocates a
+ *   any value outside the kind-selected schema. Never allocates a
  *   `seal::secure_string` / DPAPIGuard (a test-only counter asserts
  *   zero such allocations across the fuzz corpus).
- * - **M8: Panic-mode disable** -- `disable()` drops the map, closes
+ * - **M8: Panic-mode disable** - `disable()` drops the map, closes
  *   the pipe, and refuses further inserts/lookups until `enable()` is
  *   called. The chip's right-click toggle wires to this.
+ *
+ * @par Mitigation index (M2-M9)
+ * | Tag | Mitigation | Where |
+ * |-----|------------|-------|
+ * | M2 | Report only via chrome.runtime.sendMessage (no page postMessage) | content.js |
+ * | M3 | Trusted events only (e.isTrusted) | content.js |
+ * | M4 | Top frame only | content.js |
+ * | M5 | Bridge not solely decisive; needs a 2nd on-disk Tier-1 probe | FusionDecider |
+ * | M6 | Peer signer identity match (WinVerifyTrust + SPKI) | BrowserBridge |
+ * | M7 | Per-run pipe-name rotation (SHA-256 of per-start key) | BrowserBridge |
+ * | M8 | Panic-mode disable (drop map, close pipe) | BrowserBridge |
+ * | M9 | Only user-visible click targets reported | content.js |
  *
  * ## :material-state-machine: Lifecycle
  *
@@ -159,8 +219,11 @@ public:
      *
      * @return true on success, false if the pipe could not be created or the
      *         HMAC key generation failed. Callers should treat failure as a
-     *         non-fatal warning -- field detection still works without the
+     *         non-fatal warning - field detection still works without the
      *         bridge via the other probes.
+     *
+     * @note Returns false without starting while the bridge is panic-disabled
+     *       (see @ref disable); call @ref enable to resume first.
      */
     bool start();
 
@@ -169,7 +232,7 @@ public:
      *
      * Signals the jthread's stop token, cancels any pending overlapped I/O
      * on the pipe via `CancelIoEx`, joins the thread, and closes the
-     * handle. The map is NOT cleared -- use @ref disable() for that.
+     * handle. The map is NOT cleared - use @ref disable() for that.
      */
     void stop();
 
@@ -212,12 +275,67 @@ public:
      * is sized to cover natural click variance on a typical 40 px input
      * field; precise within-pixel match isn't required.
      *
+     * @par Bucket geometry
+     * Raw coords are quantised to 4 px buckets (arithmetic shift by 2); a
+     * bucket's stored point is its centre, and a query matches within a 48 px
+     * Chebyshev radius of that centre:
+     * @f[
+     *   q(v) = \left\lfloor v / 4 \right\rfloor, \qquad \hat{v} = 4\,q(v) + 2
+     * @f]
+     * @f[
+     *   \text{match} \iff \max\bigl(|\hat{x} - x|,\ |\hat{y} - y|\bigr) \le 48
+     * @f]
+     *
      * @param browserPid Owner PID of the focused window at click time.
      * @param screenPoint Screen-space click coordinates.
      * @return A populated @ref BridgeEntry when a fresh entry exists within a
      *         small jitter tolerance; @c std::nullopt otherwise.
      */
     std::optional<BridgeEntry> lookup(DWORD browserPid, POINT screenPoint) const noexcept;
+
+    /**
+     * @brief Consume the latest navigation snapshot if it is newer than seen.
+     *
+     * Returns the most-recent @ref NavSnapshot exactly once per navigation:
+     * the caller threads a @p lastSeenSeq it owns, and the snapshot is
+     * returned only when its sequence exceeds it (then @p lastSeenSeq is
+     * advanced). Returns @c std::nullopt when the bridge is panic-disabled
+     * (M8), when nothing new has arrived, or when the snapshot has aged past
+     * its freshness window. Never blocks meaningfully - a short mutex.
+     *
+     * Called on the GUI thread by StagingController's poll; the snapshot is
+     * written by bridge worker threads under a dedicated mutex.
+     *
+     * @param lastSeenSeq In/out: the last sequence this caller consumed.
+     * @return A fresh, not-yet-seen snapshot, or @c std::nullopt.
+     */
+    std::optional<NavSnapshot> takeNavSince(std::uint64_t& lastSeenSeq) const;
+
+    /**
+     * @brief Push a username-injection directive to a connected browser peer.
+     *
+     * The ONE reverse-channel write (bridge -> extension) besides the
+     * handshake. Sends a framed `{"v":1,"kind":"fill_username","url_host",
+     * "username"}` message to the authenticated peer serving @p browserPid, if
+     * one is connected. The caller (FillController) MUST have already
+     * JIT-decrypted the username and confirmed a STRICT domain match; this
+     * method only routes to the correct, already-signer/parent-gated
+     * connection and frames the bytes.
+     *
+     * Thread-safe: called on the GUI thread while a worker thread reads the
+     * same full-duplex pipe. Returns false when the bridge is disabled (M8),
+     * no peer is connected for @p browserPid, or the write fails.
+     *
+     * @param browserPid   The validated browser PID whose peer to send to.
+     * @param host         The page host (echoed so the content script can
+     *                     re-verify its own location before injecting).
+     * @param usernameUtf8 The plaintext username (UTF-8). Copied into the wire
+     *                     frame; the caller and this method wipe their copies.
+     * @return true iff a framed directive was written to a live peer.
+     */
+    bool sendFillUsername(DWORD browserPid,
+                          const std::string& host,
+                          const std::string& usernameUtf8);
 
     /**
      * @brief Whether the pipe currently has an accepted peer (handshake done).
@@ -249,7 +367,7 @@ public:
     /**
      * @brief Current size of the in-memory verdict map.
      *
-     * Diagnostic only -- the contents are not exposed via this API; only the
+     * Diagnostic only - the contents are not exposed via this API; only the
      * count of live entries. Used by the diagnose dry-run so the operator can
      * tell "peer connected but map empty" from "no peer at all".
      *
