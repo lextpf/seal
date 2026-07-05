@@ -2,7 +2,7 @@
 
 /**
  * @brief Lightweight host extraction and matching for URL/platform binding.
- * @author Claude (https://github.com/claude)
+ * @author Alex (https://github.com/lextpf)
  * @ingroup Utilities
  *
  * Phishing-resistance gate for the auto-fill path: a credential whose
@@ -11,10 +11,10 @@
  * the no-USE_QT_UI test target.
  *
  * Two distinct levels of strictness are exposed:
- *  - @ref hostsMatch -- strict eTLD-boundary suffix match between two
+ *  - @ref hostsMatch - strict eTLD-boundary suffix match between two
  *    normalised hostnames. Used when the record platform is itself a URL
  *    and an exact-subdomain match is appropriate.
- *  - @ref extractKey + @ref keysMatch -- fuzzy match suitable for
+ *  - @ref extractKey + @ref keysMatch - fuzzy match suitable for
  *    free-form record labels like "PayPal Login" or "Bob's Gmail". Both
  *    sides reduce to a single brand-name token; equality wins.
  *
@@ -46,7 +46,7 @@
  *
  * @note **PSL v1 caveat.** No public-suffix list is consulted. Hostnames
  *       with multi-label suffixes (`co.uk`, `com.au`, `gov.br`, ...) reduce
- *       to the suffix label rather than the registrable name -- e.g.
+ *       to the suffix label rather than the registrable name - e.g.
  *       `google.co.uk` reduces to the key `co`. This is acceptable
  *       because the binding is a phishing GATE: the worst-case failure
  *       on a ccTLD is a visible "Site mismatch" dialog that the user
@@ -137,7 +137,7 @@ inline std::string extractHost(std::string_view input)
 
     // Strip port (last colon, because IPv6 isn't expected in a record
     // platform; if it shows up we'd cut at the wrong colon, but we'd then
-    // fail the host-char validation below and return empty -- safe).
+    // fail the host-char validation below and return empty - safe).
     const auto colon = input.find(':');
     if (colon != std::string_view::npos)
     {
@@ -243,7 +243,7 @@ inline bool hostsMatch(std::string_view recordHost, std::string_view pageHost) n
  * For a hostname with N dot-separated labels, the key is the
  * second-to-last label (the "registrable name" in non-ccTLD cases). For
  * a single-label string (no dots), the whole label is used. Empty input
- * or input that doesn't pass extractHost() returns empty -- callers
+ * or input that doesn't pass extractHost() returns empty - callers
  * should fail OPEN on empty record keys (free-form labels can't bind).
  *
  * Examples:
@@ -307,20 +307,10 @@ inline std::string extractKey(std::string_view input)
         return key;
     }
 
-    // Second-pass: the input didn't pass extractHost() -- typically a
-    // free-form record label with spaces ("Paypal Login", "My Gmail",
-    // "Bob's Paypal", "Personal Gmail Account"). Split into ASCII-
-    // alnum tokens, drop common stop-words, and pick the first long-
-    // enough remaining token (brand names are almost always >= 4
-    // chars; this skips short connector words like "of" or initials
-    // like "X" that would otherwise win over the actual brand).
-    //
-    // Reject non-ASCII bytes up front: the URL-binding check is a
-    // phishing-resistance gate, and silently coercing a UTF-8 label
-    // into whatever ASCII letters happen to survive byte-by-byte is
-    // worse than failing closed. extractHost() already does this for
-    // hostname inputs; this branch is the matching path for free-form
-    // ones.
+    // Second-pass (input failed extractHost): a free-form label with spaces like
+    // "Paypal Login" / "Bob's Paypal". Split into ASCII-alnum tokens, drop stop-words,
+    // pick the first >= 4-char token (brand names; skips connectors/initials). Reject
+    // non-ASCII up front - this is a phishing gate, so coercing UTF-8 fails closed.
     for (char c : input)
     {
         if (static_cast<unsigned char>(c) >= 0x80)
@@ -415,6 +405,65 @@ inline bool keysMatch(std::string_view recordKey, std::string_view pageKey) noex
         return false;
     }
     return recordKey == pageKey;
+}
+
+/**
+ * @brief Tiered match between a record's platform label and a live page host,
+ *        for zero-gesture auto-fill (selection AND the fill-time gate).
+ *
+ * The two callers that decide/authorize a staged auto-fill (the
+ * @ref seal::resolveStageRecord selector and FillController's fail-closed
+ * release gate) MUST agree, so the policy lives here in one place.
+ *
+ * ## The two tiers
+ *
+ * - **Record carries a real domain** (its platform parses to a host with a
+ *   dot - "paypal.com", "https://login.paypal.com") -> **strict**
+ *   @ref hostsMatch: eTLD-boundary, TLD-sensitive. A typosquat on a different
+ *   TLD (`paypal.co`) does NOT match. This is the safe tier and the one to
+ *   prefer for high-value credentials.
+ * - **Record is a bare brand label or free-form label** ("PayPal",
+ *   "My PayPal") -> **fuzzy** registrable-name match via
+ *   @ref extractKey / @ref keysMatch. This is **TLD-BLIND**: "PayPal" matches
+ *   `paypal.com` AND `paypal.co`. It exists so the common brand-label vault
+ *   auto-fills at all, and it is exactly the phishing exposure the manual
+ *   Ctrl+Click path already has for such records - so the auto path is no
+ *   weaker than manual for labels, and strictly safer for domain records.
+ *
+ * @par Decision order
+ * | # | Condition                                | Result                             |
+ * |---|------------------------------------------|------------------------------------|
+ * | 1 | page host fails @ref extractHost         | `false` (fail closed)              |
+ * | 2 | record parses to a host containing a `.` | strict @ref hostsMatch (TLD-aware) |
+ * | 3 | otherwise (bare / free-form label)       | fuzzy @ref keysMatch (TLD-blind)   |
+ *
+ * @note SECURITY TRADEOFF. The fuzzy tier is the deliberate relaxation that
+ *       makes brand-label records usable. To make auto-fill strictly
+ *       typosquat-resistant for ALL records, delete the fuzzy fallback below
+ *       (return false there) - then only records storing a real domain
+ *       auto-fill. Keep the two callers in lockstep either way.
+ *
+ * @param recordPlatform The record's stored platform label (any form).
+ * @param pageHost       The live page hostname (a real `location.hostname`).
+ * @return true when the record should bind to this host under the tiers above.
+ */
+inline bool platformMatchesHost(std::string_view recordPlatform, std::string_view pageHost)
+{
+    const std::string page = extractHost(pageHost);
+    if (page.empty())
+    {
+        return false;  // No real page host -> fail closed.
+    }
+    const std::string recordHost = extractHost(recordPlatform);
+    if (!recordHost.empty() && recordHost.contains('.'))
+    {
+        // Record carries a real domain -> strict, TLD-sensitive match.
+        return hostsMatch(recordHost, page);
+    }
+    // Bare/free-form label -> fuzzy registrable-name match (TLD-blind).
+    const std::string recordKey = extractKey(recordPlatform);
+    const std::string pageKey = extractKey(page);
+    return !recordKey.empty() && !pageKey.empty() && keysMatch(recordKey, pageKey);
 }
 
 }  // namespace seal::url

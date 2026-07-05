@@ -8,10 +8,38 @@ using seal::url::extractHost;
 using seal::url::extractKey;
 using seal::url::hostsMatch;
 using seal::url::keysMatch;
+using seal::url::platformMatchesHost;
 
 class UrlBindingTest : public ::testing::Test
 {
 };
+
+// --- Tiered platformMatchesHost (auto-fill record binding) ---
+
+TEST_F(UrlBindingTest, TieredDomainRecordIsStrict)
+{
+    // A record carrying a real domain matches only that eTLD+1, not a
+    // different-TLD lookalike or the subdomain trick.
+    EXPECT_TRUE(platformMatchesHost("paypal.com", "www.paypal.com"));
+    EXPECT_TRUE(platformMatchesHost("login.paypal.com", "paypal.com"));
+    EXPECT_FALSE(platformMatchesHost("paypal.com", "paypal.co"));
+    EXPECT_FALSE(platformMatchesHost("paypal.com", "paypal.com.evil.com"));
+}
+
+TEST_F(UrlBindingTest, TieredBareLabelIsFuzzyTldBlind)
+{
+    // A bare/free-form label matches by registrable name, TLD-blind.
+    EXPECT_TRUE(platformMatchesHost("PayPal", "www.paypal.com"));
+    EXPECT_TRUE(platformMatchesHost("My PayPal", "paypal.com"));
+    EXPECT_TRUE(platformMatchesHost("PayPal", "paypal.co"));  // the accepted tradeoff
+    EXPECT_FALSE(platformMatchesHost("PayPal", "example.com"));
+}
+
+TEST_F(UrlBindingTest, TieredEmptyPageHostFailsClosed)
+{
+    EXPECT_FALSE(platformMatchesHost("paypal.com", ""));
+    EXPECT_FALSE(platformMatchesHost("PayPal", ""));
+}
 
 // extractHost -- happy path
 TEST_F(UrlBindingTest, ExtractsBareHostname)
