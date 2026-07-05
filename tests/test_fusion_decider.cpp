@@ -6,6 +6,7 @@
 #include <vector>
 
 using seal::FusionDecider;
+using seal::FusionOutcome;
 using seal::ProbeResult;
 using seal::Verdict;
 
@@ -188,4 +189,66 @@ TEST_F(FusionDeciderTest, BridgeAgreesWithWin32ButUiaDisagrees)
     //   score(Username) = 0.825
     //   diff = 0.727 >= 0.7 -> Password.
     EXPECT_EQ(decider.decide(results), Verdict::Password);
+}
+
+// --- decideDetailed: the flags the zero-gesture auto-fill path gates on. ---
+
+// Bridge + an on-disk Tier-1 probe agree: short-circuit fires AND the bridge
+// is corroborated -> the auto path is allowed to release the secret.
+TEST_F(FusionDeciderTest, DetailedBridgePlusUiaAgreeIsCorroborated)
+{
+    const FusionDecider decider;
+    const std::vector<ProbeResult> results = {
+        mk(Verdict::Password, 0.97F, "browser_extension"),
+        mk(Verdict::Password, 0.96F, "uia_is_password"),
+    };
+    const FusionOutcome out = decider.decideDetailed(results);
+    EXPECT_EQ(out.m_Verdict, Verdict::Password);
+    EXPECT_TRUE(out.m_Tier1ShortCircuit);
+    EXPECT_TRUE(out.m_BridgeCorroborated);
+}
+
+// Bridge ALONE still yields a verdict via the Tier-2 vote (0.873 >= margin),
+// but neither flag is set -> the auto path MUST refuse. This is the M5 hole
+// that decideDetailed exists to expose (decide() alone cannot distinguish it).
+TEST_F(FusionDeciderTest, DetailedBridgeAloneIsNotCorroborated)
+{
+    const FusionDecider decider;
+    const std::vector<ProbeResult> results = {
+        mk(Verdict::Password, 0.97F, "browser_extension"),
+    };
+    const FusionOutcome out = decider.decideDetailed(results);
+    EXPECT_EQ(out.m_Verdict, Verdict::Password);  // decide() compatibility
+    EXPECT_FALSE(out.m_Tier1ShortCircuit);
+    EXPECT_FALSE(out.m_BridgeCorroborated);
+}
+
+// Bridge Password vs a text field: on-disk probes are Unknown (the Threat-3
+// verdict-flip). Bridge-alone -> not corroborated -> auto path refuses.
+TEST_F(FusionDeciderTest, DetailedBridgeOverTextFieldNotCorroborated)
+{
+    const FusionDecider decider;
+    const std::vector<ProbeResult> results = {
+        mk(Verdict::Password, 0.97F, "browser_extension"),
+        mk(Verdict::Unknown, 0.0F, "uia_is_password"),
+        mk(Verdict::Unknown, 0.0F, "win32_es_password"),
+        mk(Verdict::Unknown, 0.0F, "uia_metadata"),
+    };
+    const FusionOutcome out = decider.decideDetailed(results);
+    EXPECT_FALSE(out.m_BridgeCorroborated);
+}
+
+// Two on-disk probes agree with no bridge in play: short-circuit fires, but
+// there is no bridge hit to corroborate, so m_BridgeCorroborated stays false.
+TEST_F(FusionDeciderTest, DetailedOnDiskOnlyIsNotBridgeCorroborated)
+{
+    const FusionDecider decider;
+    const std::vector<ProbeResult> results = {
+        mk(Verdict::Password, 0.96F, "uia_is_password"),
+        mk(Verdict::Password, 0.97F, "win32_es_password"),
+    };
+    const FusionOutcome out = decider.decideDetailed(results);
+    EXPECT_EQ(out.m_Verdict, Verdict::Password);
+    EXPECT_TRUE(out.m_Tier1ShortCircuit);
+    EXPECT_FALSE(out.m_BridgeCorroborated);
 }

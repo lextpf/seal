@@ -48,6 +48,13 @@ const ProbeProfile* lookup(const char* name)
 
 Verdict FusionDecider::decide(std::span<const ProbeResult> results) const
 {
+    return decideDetailed(results).m_Verdict;
+}
+
+FusionOutcome FusionDecider::decideDetailed(std::span<const ProbeResult> results) const
+{
+    FusionOutcome outcome;
+
     // Pass 1: collect Tier-1 short-circuit candidates.
     Verdict tier1Verdict = Verdict::Unknown;
     int tier1HitCount = 0;
@@ -84,13 +91,19 @@ Verdict FusionDecider::decide(std::span<const ProbeResult> results) const
         ++tier1HitCount;
     }
 
-    // M5: browser-extension alone cannot short-circuit -- another Tier-1
+    // M5: browser-extension alone cannot short-circuit - another Tier-1
     // probe must agree, otherwise a poisoned bridge map could mis-route.
     const bool bridgeOnlyHit = (tier1HitCount > 0) && (tier1HitCount == tier1BridgeOnlyCount);
+    const bool shortCircuit = tier1HitCount > 0 && !tier1Conflict && !bridgeOnlyHit;
+    outcome.m_Tier1ShortCircuit = shortCircuit;
+    // Corroborated only when a bridge Tier-1 hit was part of an agreeing,
+    // non-bridge-only short-circuit - i.e. an on-disk Tier-1 probe agreed.
+    outcome.m_BridgeCorroborated = shortCircuit && (tier1BridgeOnlyCount > 0);
 
-    if (tier1HitCount > 0 && !tier1Conflict && !bridgeOnlyHit)
+    if (shortCircuit)
     {
-        return tier1Verdict;
+        outcome.m_Verdict = tier1Verdict;
+        return outcome;
     }
 
     // Pass 2: Tier-2 weighted vote across every probe with a known profile.
@@ -120,13 +133,17 @@ Verdict FusionDecider::decide(std::span<const ProbeResult> results) const
 
     if (scorePassword - scoreUsername >= kMargin)
     {
-        return Verdict::Password;
+        outcome.m_Verdict = Verdict::Password;
     }
-    if (scoreUsername - scorePassword >= kMargin)
+    else if (scoreUsername - scorePassword >= kMargin)
     {
-        return Verdict::Username;
+        outcome.m_Verdict = Verdict::Username;
     }
-    return Verdict::Unknown;
+    else
+    {
+        outcome.m_Verdict = Verdict::Unknown;
+    }
+    return outcome;
 }
 
 }  // namespace seal
