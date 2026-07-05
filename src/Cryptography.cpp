@@ -37,13 +37,9 @@ void Cryptography::hardenProcessAccess()
     PSECURITY_DESCRIPTOR pSD = nullptr;
     PACL pDacl = nullptr;
 
-    // SDDL:
-    //   D:                = DACL
-    //   (D;;0x147A;;;WD)  = Deny Everyone:
-    //                       VM_READ|VM_WRITE|VM_OPERATION|DUP_HANDLE|
-    //                       QUERY_INFORMATION|CREATE_THREAD
-    //   (A;;GA;;;SY)      = Allow SYSTEM: GENERIC_ALL
-    //   (A;;GA;;;BA)      = Allow Administrators: GENERIC_ALL
+    // SDDL "D:(D;;0x147A;;;WD)(A;;GA;;;SY)(A;;GA;;;BA)": DACL denying Everyone (WD)
+    //   0x147A = VM_READ|VM_WRITE|VM_OPERATION|DUP_HANDLE|QUERY_INFORMATION|CREATE_THREAD,
+    //   and allowing SYSTEM (SY) and Administrators (BA) GENERIC_ALL (GA).
     BOOL ok = ConvertStringSecurityDescriptorToSecurityDescriptorA(
         "D:(D;;0x147A;;;WD)(A;;GA;;;SY)(A;;GA;;;BA)", SDDL_REVISION_1, &pSD, nullptr);
 
@@ -71,7 +67,7 @@ void Cryptography::hardenProcessAccess()
 
 void Cryptography::disableCrashDumps()
 {
-    // Suppress WER -- minidumps could contain secrets.
+    // Suppress WER - minidumps could contain secrets.
     SetErrorMode(SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS);
 
     // Unhandled-exception filter: terminate before the default handler can
@@ -103,7 +99,7 @@ void Cryptography::detectDebugger()
 #else
         OutputDebugStringA("[seal] FATAL: debugger detected\n");
 #endif
-        // 0xDEAD is the seal "security kill" exit code -- recognizable in
+        // 0xDEAD is the seal "security kill" exit code - recognizable in
         // logs and crash reports as an anti-debug termination.
         TerminateProcess(GetCurrentProcess(), 0xDEAD);
         // __fastfail(7) = FAST_FAIL_FATAL_APP_EXIT: immediate kernel-level
@@ -208,14 +204,10 @@ BOOL Cryptography::setSecureProcessMitigations(bool allowDynamicCode)
     sigPolicy.AuditMicrosoftSignedOnly = 0;
     allSuccess &= pSet(ProcessSignaturePolicy, &sigPolicy, sizeof(sigPolicy));
 
-    // 3. Side-channel isolation against transient-execution attacks:
-    //   - SmtBranchTargetIsolation:   Spectre-BTI cross-thread BTB poisoning.
-    //   - IsolateSecurityDomain:      keep foreign work off sibling SMT.
-    //   - DisablePageCombine:         no dedup fingerprinting via CoW timing.
-    //   - SpeculativeStoreBypassDisable: SSB (CVE-2018-3639).
-    //   - RestrictCoreSharing:        no untrusted process on the same core.
-    // All best-effort -- the kernel ignores unknown bits on older builds
-    // and the call still returns TRUE.
+    // 3. Side-channel isolation vs transient-exec attacks (best-effort; unknown bits ignored):
+    //    SmtBranchTargetIsolation=Spectre-BTI cross-thread BTB poisoning;
+    //    IsolateSecurityDomain/RestrictCoreSharing=keep foreign work off sibling SMT/core;
+    //    DisablePageCombine=no CoW-timing dedup; SpeculativeStoreBypassDisable=SSB CVE-2018-3639.
     PROCESS_MITIGATION_SIDE_CHANNEL_ISOLATION_POLICY sc{};
     sc.SmtBranchTargetIsolation = 1;
     sc.IsolateSecurityDomain = 1;
@@ -539,7 +531,7 @@ std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned 
     opensslCheck(EVP_DecryptUpdate(ctx.p, plain.data(), &outlen, ct, (int)ct_len),
                  "DecryptUpdate(CT) failed");
 
-    // Set tag and finalize -- this is the auth check. SET_TAG takes void*,
+    // Set tag and finalize - this is the auth check. SET_TAG takes void*,
     // not const void*, so copy into a mutable buffer.
     std::vector<unsigned char> tagCopy(tag, tag + seal::cfg::TAG_LEN);
     opensslCheck(

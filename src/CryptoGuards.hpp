@@ -45,6 +45,13 @@ namespace seal
  *     Detached --> [*]
  * ```
  *
+ * @par Guard operations
+ * | Method        | No-op (returns false) when      | On success                  |
+ * |---------------|---------------------------------|-----------------------------|
+ * | `protect()`   | no buffer / empty / protected   | pad, encrypt; protected=1   |
+ * | `unprotect()` | no buffer / empty / unprotected | decrypt, unpad; protected=0 |
+ * | `reprotect()` | (alias for `protect()`)         | see `protect()`             |
+ *
  * @note Destruction unprotects but does **not** wipe the buffer. The
  *       caller must call `Cryptography::cleanseString()` or let the
  *       secure string's own destructor handle wiping.
@@ -56,8 +63,8 @@ struct DPAPIGuard
 {
     using char_type = std::remove_pointer_t<decltype(std::declval<SecStr>().data())>;
 
-    SecStr* m_Str = nullptr;
-    bool m_Protected = false;
+    SecStr* m_Str = nullptr;    ///< Non-owning pointer to the guarded secure string.
+    bool m_Protected = false;   ///< Whether the buffer is currently DPAPI-encrypted.
     size_t m_OriginalSize = 0;  ///< Pre-pad logical size, restored after unprotect.
 
     DPAPIGuard() = default;
@@ -104,7 +111,13 @@ struct DPAPIGuard
         }
     }
 
-    /// @return true if DPAPI encryption succeeded, false on failure or no-op.
+    /**
+     * @brief Encrypt the guarded buffer in place with CryptProtectMemory.
+     *
+     * Pads the buffer up to the DPAPI block size before encrypting; a no-op
+     * when there is no buffer, it is empty, or it is already protected.
+     * @return true if DPAPI encryption succeeded, false on failure or no-op.
+     */
     bool protect()
     {
         if (!m_Str || m_Str->empty() || m_Protected)
@@ -121,7 +134,13 @@ struct DPAPIGuard
         return false;
     }
 
-    /// @return true if DPAPI decryption succeeded, false on failure or no-op.
+    /**
+     * @brief Decrypt the guarded buffer in place with CryptUnprotectMemory.
+     *
+     * On success, strips the DPAPI block padding by restoring the original
+     * logical size captured at protect() time.
+     * @return true if DPAPI decryption succeeded, false on failure or no-op.
+     */
     bool unprotect()
     {
         if (!m_Str || m_Str->empty() || !m_Protected)
@@ -184,9 +203,11 @@ struct scoped_console
     DWORD oldMode{};      ///< Saved console mode, restored on destruction.
     bool changed{false};  ///< Whether SetConsoleMode succeeded.
 
-    /// @brief Snapshot the current console mode and apply @p mode.
-    /// @param handle Console input or output handle.
-    /// @param mode   Desired console mode flags (e.g. ENABLE_MOUSE_INPUT).
+    /**
+     * @brief Snapshot the current console mode and apply @p mode.
+     * @param handle Console input or output handle.
+     * @param mode   Desired console mode flags (e.g. ENABLE_MOUSE_INPUT).
+     */
     scoped_console(HANDLE handle, DWORD mode)
         : h(handle)
     {
@@ -211,6 +232,7 @@ struct scoped_console
 /**
  * @struct EvpCipherCtx
  * @brief RAII owner for an OpenSSL EVP_CIPHER_CTX.
+ * @author Alex (https://github.com/lextpf)
  * @ingroup Crypto
  *
  * Allocates a cipher context on construction and frees it on
@@ -220,7 +242,7 @@ struct scoped_console
  */
 struct EvpCipherCtx
 {
-    EVP_CIPHER_CTX* p{nullptr};
+    EVP_CIPHER_CTX* p{nullptr};  ///< Owned cipher context; freed on destruction.
     EvpCipherCtx()
         : p(EVP_CIPHER_CTX_new())
     {
@@ -245,6 +267,7 @@ struct EvpCipherCtx
 /**
  * @struct EvpMdCtx
  * @brief RAII owner for an OpenSSL EVP_MD_CTX.
+ * @author Alex (https://github.com/lextpf)
  * @ingroup Crypto
  *
  * Allocates a digest context on construction and frees it on
@@ -254,7 +277,7 @@ struct EvpCipherCtx
  */
 struct EvpMdCtx
 {
-    EVP_MD_CTX* p{nullptr};
+    EVP_MD_CTX* p{nullptr};  ///< Owned digest context; freed on destruction.
     EvpMdCtx()
         : p(EVP_MD_CTX_new())
     {

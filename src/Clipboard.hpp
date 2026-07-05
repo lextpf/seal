@@ -46,7 +46,7 @@ namespace seal
  * joinable background thread (auto-joined on reassignment or
  * process exit) that sleeps for a configurable duration
  * (default 6 s). When the thread wakes it performs a
- * constant-time comparison (`Cryptography::ctEqualAny`) of the current
+ * constant-time comparison (`Cryptography::ctEqual`) of the current
  * clipboard content against the original value and empties the
  * clipboard only if the content is unchanged - so a manual paste
  * by the user between apps is never clobbered.
@@ -75,6 +75,16 @@ public:
      * empties the clipboard only if the content is unchanged. The original
      * buffer is securely wiped regardless.
      *
+     * @par Scrub timeline
+     * @verbatim
+     * t=0        setText(value); spawn jthread; wipe the temp UTF-8 copy
+     *  |         poll: sleep in 100 ms increments, wake early on stop_requested
+     *  v
+     * t=ttl_ms   deadline (default 6000 ms) -> re-check stop
+     *            ctEqual(clipboard, value) ? EmptyClipboard : leave intact
+     *            cleanse(value) + trimWorkingSet
+     * @endverbatim
+     *
      * @param data   Pointer to the raw UTF-8 byte buffer.
      * @param n      Length of @p data in bytes.
      * @param ttl_ms Milliseconds before the clipboard is scrubbed (default 6000).
@@ -85,7 +95,7 @@ public:
      *       by another application.
      *
      * @see setText
-     * @see Cryptography::ctEqualAny
+     * @see Cryptography::ctEqual
      */
     [[nodiscard]] static bool copyWithTTL(const char* data, size_t n, DWORD ttl_ms = 6000);
 
@@ -188,8 +198,22 @@ private:
  * character. A small randomised inter-keystroke delay is added after each
  * pair to improve compatibility with input-rate-limited applications.
  *
- * Both the `INPUT` sequence and the working copy of the string are securely
- * wiped with `SecureZeroMemory` before the function returns.
+ * The `INPUT` sequence built from the string is securely wiped with
+ * `SecureZeroMemory` before the function returns; the plaintext is read
+ * directly from the caller's buffer and never copied into a pageable string.
+ *
+ * @par Injection timeline
+ * @verbatim
+ * Sleep(delay_ms)                  initial focus grace (default 4000 ms)
+ * for each UTF-16 code unit c:
+ *     SendInput  down: wScan=c, KEYEVENTF_UNICODE
+ *     SendInput  up:   wScan=c, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP
+ *     Sleep(5..12 ms)              jitter after every down/up pair
+ * SecureZeroMemory(seq)            wipe the INPUT buffer
+ * @endverbatim
+ *
+ * The per-pair jitter is @f$ 5 + (t \bmod 8) @f$ ms (with @f$ t @f$ the
+ * current tick count), i.e. uniformly distributed over the range [5, 12] ms.
  *
  * @param bytes    UTF-16 string to type.
  * @param len      Number of wide characters, or `-1` for null-terminated.

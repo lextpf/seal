@@ -178,7 +178,7 @@ bool Clipboard::copyWithTTL(const char* data, size_t n, DWORD ttl_ms)
                 }
                 GlobalUnlock(h);
 
-                // Constant-time compare -- no byte-by-byte timing leak.
+                // Constant-time compare - no byte-by-byte timing leak.
                 same = seal::Cryptography::ctEqual(cur, val);
             }
 
@@ -225,7 +225,7 @@ bool Clipboard::copyInputFile()
 std::atomic<LONGLONG> s_CallNextDuration{0};
 std::atomic<bool> s_HookFired{false};
 
-// Performance counter as long long via bit_cast -- avoids LARGE_INTEGER
+// Performance counter as long long via bit_cast - avoids LARGE_INTEGER
 // QuadPart union access (type-punning).
 inline long long perfCounter()
 {

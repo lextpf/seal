@@ -17,8 +17,8 @@ namespace seal
  * @ingroup Memory
  *
  * All character data lives in VirtualAlloc'd pages that are pinned in
- * physical RAM and bordered by PAGE_NOACCESS guard pages. Copy is
- * deleted; only move semantics are supported.
+ * physical RAM (best-effort, via VirtualLock) and bordered by PAGE_NOACCESS
+ * guard pages. Copy is deleted; only move semantics are supported.
  *
  * @tparam CharT Character type (e.g. `char`, `wchar_t`, `char16_t`).
  * @tparam A     Allocator type (default: locked_allocator\<CharT\>).
@@ -73,7 +73,7 @@ struct basic_secure_string
     std::basic_string_view<CharT> view() const noexcept { return {s.data(), s.size()}; }
 
     /**
-     * @brief Return a null-terminated wide C string.
+     * @brief Return a null-terminated C string.
      *
      * Appends a zero code unit if one is not already present.
      *
@@ -132,11 +132,15 @@ struct basic_secure_string
         return std::basic_string<CharT>(s.data(), s.data() + s.size());
     }
 
-    /// @brief Const iterator to the first code unit (read-source for assign / iteration).
-    /// @ingroup Memory
+    /**
+     * @brief Const iterator to the first code unit (read-source for assign / iteration).
+     * @ingroup Memory
+     */
     auto begin() const noexcept { return s.begin(); }
-    /// @brief Const iterator past the last code unit.
-    /// @ingroup Memory
+    /**
+     * @brief Const iterator past the last code unit.
+     * @ingroup Memory
+     */
     auto end() const noexcept { return s.end(); }
 
     /**
@@ -217,14 +221,25 @@ using secure_string = basic_secure_string<char, A>;
  * On destruction, restores the original protection (typically PAGE_NOACCESS).
  * Non-copyable and non-movable.
  *
+ * @verbatim
+ *   payload: PAGE_NOACCESS
+ *        |  RWGuard g(p)      save oldProt; VirtualProtect(payloadSpan, RW)
+ *        |                    changed = (VirtualProtect succeeded)
+ *        v
+ *   payload: PAGE_READWRITE   read / write the secret within this scope
+ *        |  ~RWGuard()        if changed: VirtualProtect(payloadSpan, oldProt)
+ *        v
+ *   payload: oldProt          (typically PAGE_NOACCESS again)
+ * @endverbatim
+ *
  * @pre The pointer must have been returned by locked_allocator::allocate().
  */
 template <class T>
 struct RWGuard
 {
-    const T* p{};
-    DWORD oldProt{};
-    bool changed{false};
+    const T* p{};         ///< Guarded payload pointer; null makes the guard inert.
+    DWORD oldProt{};      ///< Protection saved at construction, restored on destruction.
+    bool changed{false};  ///< Whether construction actually flipped protection to RW.
     explicit RWGuard(const T* ptr)
         : p(ptr)
     {
@@ -350,6 +365,7 @@ struct secure_triplet16
         }
     }
 };
+/// @brief Convenience alias for secure_triplet16 with the default locked allocator.
 using secure_triplet16_t = secure_triplet16<>;
 
 }  // namespace seal
@@ -359,6 +375,7 @@ template <class A>
 struct std::tuple_size<seal::secure_triplet16<A>> : std::integral_constant<std::size_t, 3>
 {
 };
+/// @brief Field type (string_type) for structured bindings over secure_triplet16.
 template <std::size_t I, class A>
 struct std::tuple_element<I, seal::secure_triplet16<A>>
 {

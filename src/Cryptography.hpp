@@ -93,7 +93,14 @@ public:
      */
     static bool ctEqualRaw(const unsigned char* a, const unsigned char* b, size_t n);
 
-    /// @brief Constant-time equality for byte-like ranges.
+    /**
+     * @brief Constant-time equality for two byte-like ranges.
+     *
+     * The per-byte comparison runs in data-independent time, but a size
+     * mismatch returns early: the lengths are treated as public, not secret.
+     *
+     * @return `true` when the ranges have equal length and identical bytes.
+     */
     template <class A, class B>
         requires requires(const A& aa, const B& bb) {
             { std::ranges::data(aa) };
@@ -112,6 +119,7 @@ public:
                           std::ranges::size(aa));
     }
 
+    /// @brief Constant-time equality for two secure strings of the same char type.
     template <class CharT, class A>
     static bool ctEqual(const basic_secure_string<CharT, A>& a,
                         const basic_secure_string<CharT, A>& b)
@@ -119,30 +127,40 @@ public:
         return ctEqualAny(a, b);
     }
 
-    /// @brief Enable heap termination on corruption via `HeapSetInformation`.
-    /// @post The process heap is configured to terminate on detected corruption
-    ///       rather than returning an error code.
+    /**
+     * @brief Enable heap termination on corruption via `HeapSetInformation`.
+     * @post The process heap is configured to terminate on detected corruption
+     *       rather than returning an error code.
+     */
     static void hardenHeap();
 
-    /// @brief Set a restrictive DACL on the current process to block external memory reads.
-    /// @post The process DACL denies PROCESS_VM_READ to all non-SYSTEM principals,
-    ///       preventing tools like Process Hacker from dumping secrets.
+    /**
+     * @brief Set a restrictive DACL on the current process to block external memory reads.
+     * @post The process DACL denies PROCESS_VM_READ to all non-SYSTEM principals,
+     *       preventing tools like Process Hacker from dumping secrets.
+     */
     static void hardenProcessAccess();
 
-    /// @brief Suppress crash dumps and WER dialogs to prevent memory disclosure.
-    /// @post MiniDumpWriteDump, WER, and Dr. Watson are disabled so a crash
-    ///       does not write plaintext secrets to disk.
+    /**
+     * @brief Suppress crash dumps and WER dialogs to prevent memory disclosure.
+     * @post MiniDumpWriteDump, WER, and Dr. Watson are disabled so a crash
+     *       does not write plaintext secrets to disk.
+     */
     static void disableCrashDumps();
 
-    /// @brief Detect attached debuggers and terminate the process if found.
-    /// @post If `IsDebuggerPresent()`, `CheckRemoteDebuggerPresent()`, or
-    ///       `NtQueryInformationProcess(ProcessDebugPort)` detects a debugger,
-    ///       the process calls `TerminateProcess` followed by `__fastfail`.
+    /**
+     * @brief Detect attached debuggers and terminate the process if found.
+     * @post If `IsDebuggerPresent()`, `CheckRemoteDebuggerPresent()`, or
+     *       `NtQueryInformationProcess(ProcessDebugPort)` detects a debugger,
+     *       the process calls `TerminateProcess` followed by `__fastfail`.
+     */
     static void detectDebugger();
 
-    /// @brief Trim the working set via `EmptyWorkingSet()`.
-    /// @post Dirty pages containing decrypted secrets are flushed from
-    ///       physical RAM, reducing the window for cold-boot or swap-file recovery.
+    /**
+     * @brief Trim the working set via `EmptyWorkingSet()`.
+     * @post Dirty pages containing decrypted secrets are flushed from
+     *       physical RAM, reducing the window for cold-boot or swap-file recovery.
+     */
     static void trimWorkingSet();
 
     /**
@@ -173,6 +191,15 @@ public:
      * allocator type) and then released. Locked-page buffers have their
      * protection restored to PAGE_READWRITE before wiping.
      *
+     * @par Per-argument wipe dispatch
+     * | Argument type            | Wipe primitive                     | After          |
+     * |--------------------------|------------------------------------|----------------|
+     * | `std::basic_string`      | `OPENSSL_cleanse`                  | clear + shrink |
+     * | `basic_secure_string`    | RW-flip -> `SecureZeroMemory`      | clear          |
+     * | `std::vector<byte_like>` | `OPENSSL_cleanse`                  | clear + shrink |
+     * | `CharT*` + length        | `OPENSSL_cleanse(len)`             | n/a            |
+     * | `CharT*` (NUL-term)      | traits length -> `OPENSSL_cleanse` | n/a            |
+     *
      * @tparam Ts Argument types (deduced).
      * @param xs Containers or pointers to wipe.
      */
@@ -188,7 +215,7 @@ public:
     /**
      * @brief Parsed (or freshly built) packet header.
      *
-     * `bytes`/`size` hold the exact on-wire header -- these bytes are the
+     * `bytes`/`size` hold the exact on-wire header - these bytes are the
      * GCM AAD, so encrypt and decrypt must feed them verbatim.
      */
     struct PacketHeader
@@ -225,9 +252,21 @@ public:
      *
      * Packet format: `AAD(8) | Salt(16) | IV(12) | Ciphertext(n) | Tag(16)`.
      *
+     * @verbatim
+     *  offset  size  field
+     *  ------  ----  ------------------------------------------------
+     *   0        8   AAD header  (magic "seal" | alg | log2N | r | p)
+     *   8       16   Salt        (scrypt, random per packet)
+     *  24       12   IV          (AES-GCM nonce, random per packet)
+     *  36        n   Ciphertext  (n = |plaintext|)
+     *  36+n     16   GCM tag     (authenticates AAD + ciphertext)
+     * @endverbatim
+     *
      * @tparam SecurePwd Secure password container with `.data()` and `.size()`.
      * @param plaintext Raw bytes to encrypt.
      * @param password  Master password for scrypt key derivation.
+     * @param kdf       KDF parameters serialized into the header and used for
+     *                  key derivation; defaults to `cfg::DEFAULT_KDF`.
      * @return The framed encrypted packet.
      * @throw std::runtime_error on OpenSSL failure.
      */
@@ -239,6 +278,10 @@ public:
 
     /**
      * @brief Decrypt a framed AES-256-GCM packet.
+     *
+     * The KDF parameters are read from the packet's self-describing header and
+     * cap-validated (via cfg::kdfParamsAcceptable) **before** any key
+     * derivation, so a hostile header cannot force an oversized scrypt call.
      *
      * @tparam SecurePwd Secure password container with `.data()` and `.size()`.
      * @param packet   Framed encrypted packet (as produced by encryptPacket()).

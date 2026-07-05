@@ -22,11 +22,21 @@ namespace seal
  * @author Alex (https://github.com/lextpf)
  * @ingroup Crypto
  *
- * Packet wire format:
- * $[\text{AAD}_{4} \mid \text{Salt}_{16} \mid \text{IV}_{12} \mid \text{CT}_{n} \mid
- * \text{Tag}_{16}]$ where $n = |\text{plaintext}|$.
+ * Packet wire format (the 8-byte AAD header is the magic plus the four raw
+ * KDF-parameter bytes, fed verbatim as GCM AAD):
+ * @f$[\text{AAD}_{8} \mid \text{Salt}_{16} \mid \text{IV}_{12} \mid \text{CT}_{n} \mid
+ * \text{Tag}_{16}]@f$ where @f$n = |\text{plaintext}|@f$.
  *
- * scrypt memory usage: $M = 128 \cdot r \cdot N = 128 \cdot 8 \cdot 2^{16} = 64\text{ MiB}$.
+ * scrypt memory usage: @f$M = 128 \cdot r \cdot N = 128 \cdot 8 \cdot 2^{16} = 64\text{ MiB}@f$.
+ *
+ * @par AAD header layout (8 bytes, fed verbatim as GCM AAD)
+ * | Offset | Size | Field | Value / source                          |
+ * |--------|------|-------|-----------------------------------------|
+ * | 0..3   | 4    | magic | `AAD_HDR` = "seal" (`MAGIC_LEN` bytes)   |
+ * | 4      | 1    | alg   | `KdfParams::alg` (0x01 = scrypt)        |
+ * | 5      | 1    | log2N | `KdfParams::log2N`; scrypt N = 2^log2N  |
+ * | 6      | 1    | r     | `KdfParams::r` (scrypt block size)      |
+ * | 7      | 1    | p     | `KdfParams::p` (scrypt parallelism)     |
  */
 namespace cfg
 {
@@ -36,7 +46,7 @@ static constexpr size_t IV_LEN = 12;           ///< AES-GCM initialisation vecto
 static constexpr size_t TAG_LEN = 16;          ///< GCM authentication tag length in bytes.
 static constexpr size_t FILE_CHUNK = 1 << 20;  ///< Read-buffer chunk size (1 MiB).
 static constexpr uint64_t SCRYPT_N =
-    1ULL << 16;                          ///< scrypt CPU/memory cost parameter ($2^{16} = 65536$).
+    1ULL << 16;  ///< scrypt CPU/memory cost parameter (@f$2^{16} = 65536@f$).
 static constexpr uint64_t SCRYPT_R = 8;  ///< scrypt block size parameter.
 static constexpr uint64_t SCRYPT_P = 1;  ///< scrypt parallelisation parameter.
 static constexpr uint64_t SCRYPT_MAXMEM =
@@ -76,6 +86,21 @@ static constexpr uint64_t KDF_MAX_MEM_BYTES = 512ULL * 1024 * 1024;
 
 /**
  * @brief Validate decode-side KDF parameters against the acceptance caps.
+ *
+ * A hostile packet cannot demand an oversized scrypt call: every field is
+ * range-checked and the implied working-set memory must satisfy
+ *
+ * @f[ 128 \cdot r \cdot 2^{\log_2 N} \;\le\; \text{KDF\_MAX\_MEM\_BYTES}
+ *     \;=\; 512\ \text{MiB} @f]
+ *
+ * @par Write-side default vs. decode-side caps
+ * | Field | Default (`DEFAULT_KDF`) | Accepted range                  |
+ * |-------|-------------------------|---------------------------------|
+ * | alg   | 0x01 (scrypt)           | `== KDF_ALG_SCRYPT` (0x01)       |
+ * | log2N | 16                      | `KDF_LOG2N_MIN..MAX` = 14..22    |
+ * | r     | 8                       | 1..`KDF_R_MAX` = 32             |
+ * | p     | 1                       | 1..`KDF_P_MAX` = 16             |
+ *
  * @param k Parameters parsed from a packet header.
  * @return `true` when every field and the implied memory cost are in range.
  */
@@ -118,6 +143,7 @@ consteval bool validate()
                   "scrypt MAXMEM must cover the working set (128 * r * N)");
     return true;
 }
+/// @brief Forces validate() to run at compile time; a failed static_assert breaks the build.
 inline constexpr bool kConfigValid = validate();
 }  // namespace cfg
 
@@ -135,7 +161,14 @@ concept secure_password = requires(const T& pwd) {
     { pwd.size() } -> std::convertible_to<std::size_t>;
 };
 
-/// @brief Round up to the next multiple of an alignment.
+/**
+ * @brief Round @p v up to the next multiple of @p a.
+ *
+ * @param v Value to round up.
+ * @param a Alignment step.
+ * @return The smallest multiple of @p a that is not less than @p v.
+ * @pre @p a is a non-zero power of two.
+ */
 static constexpr size_t align_up(size_t v, size_t a)
 {
     assert(a > 0);
@@ -143,9 +176,9 @@ static constexpr size_t align_up(size_t v, size_t a)
 }
 
 static constexpr uint32_t kMagic =
-    0x6C616573u;  //!< locked_allocator header integrity magic ("seal"); not the vault file magic.
+    0x6C616573u;  ///< locked_allocator header integrity magic ("seal"); not the vault file magic.
 static constexpr uint32_t kVersion =
-    1u;  //!< locked_allocator header version; not the vault format version.
-static constexpr size_t kCanaryBytes = 32;  //!< Canary bytes after payload (0xD0)
+    1u;  ///< locked_allocator header version; not the vault format version.
+static constexpr size_t kCanaryBytes = 32;  ///< Canary bytes (0xD0) placed after the payload.
 
 }  // namespace seal

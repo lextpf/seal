@@ -25,14 +25,14 @@ namespace seal
  */
 struct locked_header
 {
-    void* base;          //!< Start of reserved region (includes guard pages)
-    size_t total;        //!< Total reserved bytes (guard + middle + guard)
-    size_t middleSize;   //!< Committed bytes (no guards)
-    size_t usable;       //!< Requested payload bytes
-    size_t headerSize;   //!< Padded header size used (page-aligned)
-    size_t payloadSpan;  //!< Committed payload span (usable + canary + slack)
-    uint32_t magic;      //!< Integrity check value (must match kMagic)
-    uint32_t version;    //!< Header version (must match kVersion)
+    void* base;          ///< Start of reserved region (includes guard pages).
+    size_t total;        ///< Total reserved bytes (guard + middle + guard).
+    size_t middleSize;   ///< Committed bytes (no guards).
+    size_t usable;       ///< Requested payload bytes.
+    size_t headerSize;   ///< Padded header size used (page-aligned).
+    size_t payloadSpan;  ///< Committed payload span (usable + canary + slack).
+    uint32_t magic;      ///< Integrity check value (must match kMagic).
+    uint32_t version;    ///< Header version (must match kVersion).
 };
 
 /// @brief Cached system page size (thread-safe, computed once).
@@ -47,8 +47,10 @@ inline SIZE_T cachedPageSize()
     return ps;
 }
 
-/// @brief Reconstruct allocation header from a payload pointer.
-/// @pre @p payload was returned by locked_allocator::allocate().
+/**
+ * @brief Reconstruct allocation header from a payload pointer.
+ * @pre @p payload was returned by locked_allocator::allocate().
+ */
 template <class T>
 inline locked_header* header_from_payload(const T* payload)
 {
@@ -85,6 +87,30 @@ inline locked_header* header_from_payload(const T* payload)
  *
  *     G1 --> H --> P --> G2
  * ```
+ *
+ * Byte-offset map (addresses increase left to right):
+ *
+ *   base = start of the reserved region; committed middle begins at base + page
+ *   total (reserved) = middleSize + 2 * page
+ *
+ * @verbatim
+ *    +--------------+------------------------------------+--------------+
+ *    | FRONT GUARD  |  committed middle (middleSize)     |  BACK GUARD  |
+ *    | 1 page       | header+payload+canary+slack        |  1 page      |
+ *    | NOACCESS     | PAGE_READWRITE (VirtualLock'd)      | NOACCESS     |
+ *    | reserve only |                                    | reserve only |
+ *    +--------------+------------------------------------+--------------+
+ *
+ *   committed middle, expanded:
+ *    +----------------+-------------+---------------+---------+
+ *    | header         | payload     | canary 0xD0   | slack   |
+ *    | headerSize     | usable      | <= 32 bytes   | pad to  |
+ *    | (page-aligned) | n*sizeof(T) | kCanaryBytes  | page    |
+ *    +----------------+-------------+---------------+---------+
+ *                     |<----------- payloadSpan ------------->|
+ *                     ^ the span toggled by protect_noaccess /
+ *                       protect_readwrite / RWGuard
+ * @endverbatim
  *
  * - Guard pages trap out-of-bounds reads/writes.
  * - Committed pages are pinned in RAM via VirtualLock (best-effort).
@@ -286,8 +312,10 @@ inline bool operator==(const locked_allocator<T>&, const locked_allocator<U>&)
     return true;
 }
 
-/// @brief Switch the payload protection to PAGE_NOACCESS.
-/// @pre @p p was returned by locked_allocator::allocate() (or is null).
+/**
+ * @brief Switch the payload protection to PAGE_NOACCESS.
+ * @pre @p p was returned by locked_allocator::allocate() (or is null).
+ */
 template <class T>
 inline void protect_noaccess(const T* p)
 {
@@ -299,8 +327,10 @@ inline void protect_noaccess(const T* p)
         const_cast<std::remove_cv_t<T>*>(p), hdr->payloadSpan, PAGE_NOACCESS, &oldProt);
 }
 
-/// @brief Switch the payload protection to PAGE_READWRITE.
-/// @pre @p p was returned by locked_allocator::allocate() (or is null).
+/**
+ * @brief Switch the payload protection to PAGE_READWRITE.
+ * @pre @p p was returned by locked_allocator::allocate() (or is null).
+ */
 template <class T>
 inline void protect_readwrite(const T* p)
 {

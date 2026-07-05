@@ -16,7 +16,28 @@ namespace seal
  * buffer. The template parameter allows use with any DPAPIGuard
  * specialisation (e.g. narrow or wide secure strings).
  *
+ * Destruction reprotects only when the construction-time `unprotect()`
+ * actually changed state (see @ref ok); a failed or no-op unprotect leaves
+ * the buffer untouched. The destructor swallows any exception, so teardown
+ * never throws.
+ *
+ * @verbatim
+ *   guarded buffer: DPAPI-protected (ciphertext at rest)
+ *        |
+ *        |  ScopedDpapiUnprotect g(guard)    m_Changed = guard.unprotect()
+ *        v
+ *   +-------------------------------------------------------------+
+ *   |  g.ok() == true  -> plaintext readable within this scope    |
+ *   |  g.ok() == false -> unprotect failed / no-op; do NOT read   |
+ *   +-------------------------------------------------------------+
+ *        |
+ *        |  ~ScopedDpapiUnprotect()   if m_Changed: guard.reprotect()
+ *        v                            (any exception is swallowed)
+ *   guarded buffer: re-protected (unchanged if unprotect had failed)
+ * @endverbatim
+ *
  * @tparam GuardT A DPAPIGuard specialisation.
+ * @see DPAPIGuard
  */
 template <class GuardT>
 class ScopedDpapiUnprotect
@@ -42,11 +63,13 @@ public:
         }
     }
 
-    /// @brief Whether the construction-time unprotect succeeded (the buffer is
-    ///        now plaintext). False means CryptUnprotectMemory failed (or the
-    ///        buffer was empty/already plaintext) - callers bracketing a
-    ///        protected buffer MUST treat false as "do not read plaintext".
-    /// @return true if unprotect() reported success.
+    /**
+     * @brief Whether the construction-time unprotect succeeded (the buffer is
+     *        now plaintext). False means CryptUnprotectMemory failed (or the
+     *        buffer was empty/already plaintext) - callers bracketing a
+     *        protected buffer MUST treat false as "do not read plaintext".
+     * @return true if unprotect() reported success.
+     */
     bool ok() const noexcept { return m_Changed; }
 
     ScopedDpapiUnprotect(const ScopedDpapiUnprotect&) = delete;
