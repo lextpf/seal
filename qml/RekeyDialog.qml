@@ -3,24 +3,12 @@ import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
 
-// Master-password change dialog.
-//
-// Pure view: collects current + new + confirm, validates locally
-// (non-empty, match), then calls AppViewModel.rekeyVault(). The actual
-// re-encryption runs on a ViewModel worker thread; the result arrives via
-// AppViewModel.rekeyFinished and is surfaced by Main.qml's central router.
-//
-// Fields are cleared on every close so passwords never linger in QML state.
-
 Popup {
     id: root
 
     property string errorMessage: ""
     readonly property color shellTone: Theme.accent
 
-    // Best-effort scrub: QML strings are immutable and GC-managed, so they cannot be SecureZero'd.
-    // We clear the visible fields and drop references; the authoritative secret lifetime is governed
-    // C++-side by CredentialSession.
     function clearFields() {
         currentField.text = "";
         newField.text = "";
@@ -78,9 +66,6 @@ Popup {
         border.width: 1
         border.color: Theme.borderMedium
 
-        // Decorative overlays masked to the dialog's rounded silhouette, matching
-        // the Add/Edit dialog shell: drifting blobs, a top tone gradient, an edge
-        // light, and a corner tone blob -- all in this dialog's shellTone.
         Item {
             anchors.fill: parent
             layer.enabled: true
@@ -138,17 +123,13 @@ Popup {
         color: Theme.bgOverlay
     }
 
-    // Shared styling for the three password fields. Hover-to-reveal eye, mirroring
-    // the Add/Edit dialog: masked by default, shown only while the cursor is over
-    // the eye, re-hidden the moment it leaves (less shoulder-surfing exposure than
-    // a persistent toggle).
     component RekeyField: TextField {
         id: field
         Layout.fillWidth: true
         Layout.leftMargin: 24
         Layout.rightMargin: 24
         echoMode: field.showPassword ? TextInput.Normal : TextInput.Password
-        passwordCharacter: "⦁"
+        passwordCharacter: "*"
         placeholderTextColor: Theme.textMuted
         font.family: Theme.fontFamily
         font.pixelSize: Theme.fontSizeLarge
@@ -175,8 +156,6 @@ Popup {
             width: Theme.iconSizeMedium
             height: Theme.iconSizeMedium
 
-            // Qt.NoButton: track hover without intercepting clicks (which would
-            // steal focus from the field). -4 margin enlarges the hit area.
             MouseArea {
                 id: rekeyEyeArea
                 anchors.fill: parent
@@ -278,31 +257,92 @@ Popup {
 
             Item { Layout.fillWidth: true }
 
-            TintedButton {
+            Button {
+                id: rekeyCancelButton
                 text: "Cancel"
-                tintTop:       Theme.iconBtnTop
-                tintEnd:       Theme.iconBtnEnd
-                tintHoverTop:  Theme.iconBtnHoverTop
-                tintHoverEnd:  Theme.iconBtnHoverEnd
-                tintPressed:   Theme.iconBtnPressed
-                tintText:      Theme.textIcon
-                tintTextHover: Theme.textSecondary
-                background.implicitWidth: 100
                 onClicked: root.close()
+
+                HoverHandler { id: rekeyCancelHover; cursorShape: Qt.PointingHandCursor }
+
+                scale: pressed ? 0.97 : 1.0
+                Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutBack; easing.overshoot: 2.0 } }
+
+                contentItem: Text {
+                    text: parent.text
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeMedium
+                    font.weight: Font.Medium
+                    color: rekeyCancelButton.hovered ? Theme.textPrimary : Theme.textGhost
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
+                }
+                background: Rectangle {
+                    implicitWidth: 90
+                    implicitHeight: 34
+                    radius: Theme.radiusMedium
+                    clip: true
+                    gradient: Gradient {
+                        GradientStop { position: 0; color: rekeyCancelButton.pressed ? Theme.ghostBtnPressed : rekeyCancelButton.hovered ? Theme.ghostBtnHoverTop : Theme.ghostBtnTop; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
+                        GradientStop { position: 1; color: rekeyCancelButton.pressed ? Theme.ghostBtnPressed : rekeyCancelButton.hovered ? Theme.ghostBtnHoverEnd : Theme.ghostBtnEnd; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
+                    }
+                    border.width: 1
+                    border.color: rekeyCancelButton.pressed ? Theme.borderPressed
+                                : rekeyCancelButton.hovered ? Theme.borderFocusHover
+                                : Theme.borderSubtle
+                    Behavior on border.color { ColorAnimation { duration: Theme.hoverDuration } }
+
+                    RippleEffect {
+                        id: rekeyCancelRipple
+                        baseColor: Qt.rgba(Theme.textPrimary.r, Theme.textPrimary.g, Theme.textPrimary.b, 0.30)
+                        cornerRadius: parent.radius
+                    }
+                }
+                onPressed: rekeyCancelRipple.trigger(rekeyCancelHover.point.position.x, rekeyCancelHover.point.position.y)
             }
 
-            TintedButton {
+            Button {
+                id: rekeyOkButton
                 text: "Change"
-                faIcon: Theme.iconKey
-                tintTop:       Theme.iconBtnTop
-                tintEnd:       Theme.iconBtnEnd
-                tintHoverTop:  Theme.iconBtnHoverTop
-                tintHoverEnd:  Theme.iconBtnHoverEnd
-                tintPressed:   Theme.iconBtnPressed
-                tintText:      Theme.accent
-                tintTextHover: Theme.accentBright
-                background.implicitWidth: 110
+                enabled: currentField.text.length > 0
+                      && newField.text.length > 0
+                      && confirmField.text.length > 0
                 onClicked: root.submit()
+
+                HoverHandler { id: rekeyOkHover; cursorShape: Qt.PointingHandCursor }
+
+                scale: pressed ? 0.97 : 1.0
+                Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutBack; easing.overshoot: 2.0 } }
+
+                contentItem: Text {
+                    text: parent.text
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeMedium
+                    font.weight: Font.DemiBold
+                    color: rekeyOkButton.enabled ? Theme.textOnAccent : Theme.textDisabled
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    implicitWidth: 90
+                    implicitHeight: 34
+                    radius: Theme.radiusMedium
+                    clip: true
+                    gradient: Gradient {
+                        GradientStop { position: 0; color: rekeyOkButton.enabled ? (rekeyOkButton.pressed ? Theme.btnPressTop : rekeyOkButton.hovered ? Theme.btnHoverTop : Theme.btnGradTop) : Theme.btnDisabledTop; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
+                        GradientStop { position: 1; color: rekeyOkButton.enabled ? (rekeyOkButton.pressed ? Theme.btnPressBot : rekeyOkButton.hovered ? Theme.btnHoverBot : Theme.btnGradBot) : Theme.btnDisabledBot; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
+                    }
+                    border.width: 1
+                    border.color: !rekeyOkButton.enabled ? Theme.borderSubtle : rekeyOkButton.hovered ? Theme.borderBright : Theme.borderBtn
+                    Behavior on border.color { ColorAnimation { duration: Theme.hoverDuration } }
+
+                    RippleEffect {
+                        id: rekeyOkRipple
+                        baseColor: Qt.rgba(Theme.textOnAccent.r, Theme.textOnAccent.g, Theme.textOnAccent.b, 0.30)
+                        cornerRadius: parent.radius
+                    }
+                }
+                onPressed: rekeyOkRipple.trigger(rekeyOkHover.point.position.x, rekeyOkHover.point.position.y)
             }
         }
     }
