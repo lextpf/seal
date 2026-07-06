@@ -26,10 +26,10 @@
  */
 
 /**
- * seal companion — background service worker.
+ * seal companion - background service worker.
  *
  * Connects to native-messaging host `com.seal.fill`, echoes a per-connection
- * nonce (framing check, not auth — auth is bridge/host-side), and forwards
+ * nonce (framing check, not auth - auth is bridge/host-side), and forwards
  * content-script reports to the host as length-prefixed JSON.
  *
  * One-way flow; inbound messages with sender.id != our runtime id are dropped.

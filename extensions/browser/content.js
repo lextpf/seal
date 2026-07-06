@@ -26,11 +26,11 @@
  */
 
 /**
- * seal companion — content script.
+ * seal companion - content script.
  *
  * Classifies the clicked field and reports login navigations to the SW.
  * Security invariants (don't relax without re-running the threat model):
- *   M2  only chrome.runtime.sendMessage — no postMessage/'message' (page can't forge)
+ *   M2  only chrome.runtime.sendMessage - no postMessage/'message' (page can't forge)
  *   M3  trusted events only (synthetic events ignored)
  *   M4  top frame only
  *   M9  user-visible targets only (visibility gate defeats hidden overlays)
@@ -471,7 +471,7 @@
     // seal pushes a username back ONLY for records that STRICTLY match this
     // exact registered domain (gated seal-side). Written into the visible
     // username/email field. This is the one place a credential value crosses
-    // into the page — the user's opted-in, strict-domain tradeoff. The password
+    // into the page - the user's opted-in, strict-domain tradeoff. The password
     // is never sent this way; it is still typed locally on a real click.
 
     // Replace the value of a field and notify JS frameworks (React/Vue read
