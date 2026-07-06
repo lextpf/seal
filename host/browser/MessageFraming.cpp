@@ -120,83 +120,85 @@ bool overlappedPipeRead(HANDLE pipe, HANDLE ev, HANDLE shutdownEvent, void* buf,
     return true;
 }
 
+// Little-endian 4-byte length codec shared by both wire framings.
+std::array<unsigned char, 4> encodeLen(DWORD len)
+{
+    return {static_cast<unsigned char>(len & 0xff),
+            static_cast<unsigned char>((len >> 8) & 0xff),
+            static_cast<unsigned char>((len >> 16) & 0xff),
+            static_cast<unsigned char>((len >> 24) & 0xff)};
+}
+
+DWORD decodeLen(const std::array<unsigned char, 4>& b)
+{
+    return static_cast<DWORD>(b[0]) | (static_cast<DWORD>(b[1]) << 8) |
+           (static_cast<DWORD>(b[2]) << 16) | (static_cast<DWORD>(b[3]) << 24);
+}
+
+// Read one length-prefixed frame via `read(buf, n) -> bool`. Empty vector on
+// EOF / oversized / read error -- the contract both public readers share.
+template <typename ReadFn>
+std::vector<char> readFrame(ReadFn read)
+{
+    std::array<unsigned char, 4> lenBytes{};
+    if (!read(lenBytes.data(), 4))
+    {
+        return {};
+    }
+    const DWORD len = decodeLen(lenBytes);
+    if (len == 0 || len > kMaxMessageBytes)
+    {
+        return {};
+    }
+    std::vector<char> payload(len);
+    if (!read(payload.data(), len))
+    {
+        return {};
+    }
+    return payload;
+}
+
+// Write one length-prefixed frame via `write(buf, n) -> bool`.
+template <typename WriteFn>
+bool writeFrame(WriteFn write, const std::vector<char>& payload)
+{
+    const DWORD len = static_cast<DWORD>(payload.size());
+    const std::array<unsigned char, 4> lenBytes = encodeLen(len);
+    if (!write(lenBytes.data(), 4))
+    {
+        return false;
+    }
+    return write(payload.data(), len);
+}
+
 }  // namespace
 
 // Read one Chrome native-messaging frame from stdin: 4-byte LE length +
 // UTF-8 JSON. Empty vector on EOF, oversized, or read error.
 std::vector<char> readNativeMessage(HANDLE in)
 {
-    std::array<unsigned char, 4> lenBytes{};
-    if (!readExact(in, lenBytes.data(), 4))
-    {
-        return {};
-    }
-    const DWORD len = static_cast<DWORD>(lenBytes[0]) | (static_cast<DWORD>(lenBytes[1]) << 8) |
-                      (static_cast<DWORD>(lenBytes[2]) << 16) |
-                      (static_cast<DWORD>(lenBytes[3]) << 24);
-    if (len == 0 || len > kMaxMessageBytes)
-    {
-        return {};
-    }
-    std::vector<char> payload(len);
-    if (!readExact(in, payload.data(), len))
-    {
-        return {};
-    }
-    return payload;
-}
-
-// Length-prefixed write to the bridge pipe (overlapped, message mode).
-bool writePipeMessage(HANDLE pipe, HANDLE ev, const std::vector<char>& payload)
-{
-    const DWORD len = static_cast<DWORD>(payload.size());
-    std::array<unsigned char, 4> lenBytes{static_cast<unsigned char>(len & 0xff),
-                                          static_cast<unsigned char>((len >> 8) & 0xff),
-                                          static_cast<unsigned char>((len >> 16) & 0xff),
-                                          static_cast<unsigned char>((len >> 24) & 0xff)};
-    if (!overlappedPipeWrite(pipe, ev, lenBytes.data(), 4))
-    {
-        return false;
-    }
-    return overlappedPipeWrite(pipe, ev, payload.data(), len);
-}
-
-// Length-prefixed read from the bridge pipe (overlapped, shutdown-aware).
-std::vector<char> readPipeMessage(HANDLE pipe, HANDLE ev, HANDLE shutdownEvent)
-{
-    std::array<unsigned char, 4> lenBytes{};
-    if (!overlappedPipeRead(pipe, ev, shutdownEvent, lenBytes.data(), 4))
-    {
-        return {};
-    }
-    const DWORD len = static_cast<DWORD>(lenBytes[0]) | (static_cast<DWORD>(lenBytes[1]) << 8) |
-                      (static_cast<DWORD>(lenBytes[2]) << 16) |
-                      (static_cast<DWORD>(lenBytes[3]) << 24);
-    if (len == 0 || len > kMaxMessageBytes)
-    {
-        return {};
-    }
-    std::vector<char> payload(len);
-    if (!overlappedPipeRead(pipe, ev, shutdownEvent, payload.data(), len))
-    {
-        return {};
-    }
-    return payload;
+    return readFrame([in](void* buf, DWORD n) { return readExact(in, buf, n); });
 }
 
 // Forward one bridge payload to stdout (extension consumes the handshake).
 bool writeNativeMessage(HANDLE out, const std::vector<char>& payload)
 {
-    const DWORD len = static_cast<DWORD>(payload.size());
-    std::array<unsigned char, 4> lenBytes{static_cast<unsigned char>(len & 0xff),
-                                          static_cast<unsigned char>((len >> 8) & 0xff),
-                                          static_cast<unsigned char>((len >> 16) & 0xff),
-                                          static_cast<unsigned char>((len >> 24) & 0xff)};
-    if (!writeAll(out, lenBytes.data(), 4))
-    {
-        return false;
-    }
-    return writeAll(out, payload.data(), len);
+    return writeFrame([out](const void* buf, DWORD n) { return writeAll(out, buf, n); }, payload);
+}
+
+// Length-prefixed write to the bridge pipe (overlapped, message mode).
+bool writePipeMessage(HANDLE pipe, HANDLE ev, const std::vector<char>& payload)
+{
+    return writeFrame([pipe, ev](const void* buf, DWORD n)
+                      { return overlappedPipeWrite(pipe, ev, buf, n); },
+                      payload);
+}
+
+// Length-prefixed read from the bridge pipe (overlapped, shutdown-aware).
+std::vector<char> readPipeMessage(HANDLE pipe, HANDLE ev, HANDLE shutdownEvent)
+{
+    return readFrame([pipe, ev, shutdownEvent](void* buf, DWORD n)
+                     { return overlappedPipeRead(pipe, ev, shutdownEvent, buf, n); });
 }
 
 }  // namespace seal::browser_host
