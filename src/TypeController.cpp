@@ -31,6 +31,35 @@ namespace seal
 constexpr DWORD kFieldSettleDelayMs = 200;   // Wait for target field to process username
 constexpr DWORD kTabKeySettleDelayMs = 100;  // Wait for Tab to advance focus
 
+// Decrypt a record's credential on demand, logging a mode-tagged failure line.
+// Returns false (leaving `cred` empty) on any decrypt error. Shared preamble
+// for doTypeLogin/doTypePassword; `modeField` is the literal "mode=login" or
+// "mode=password" token.
+static bool decryptForType(
+    const seal::VaultRecord& record,
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPw,
+    const char* modeField,
+    seal::DecryptedCredential& cred)
+{
+    try
+    {
+        cred = seal::decryptCredentialOnDemand(record, masterPw);
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        qCWarning(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
+            {"event=fill.type.decrypt.fail", modeField, seal::diag::errorFields(e.what())}));
+        return false;
+    }
+    catch (...)
+    {
+        qCWarning(logBackend).noquote() << QString::fromStdString(
+            seal::diag::joinFields({"event=fill.type.decrypt.fail", modeField, "reason=unknown"}));
+        return false;
+    }
+}
+
 // Types username + Tab + password into the focused window. Works on
 // snapshots so the worker never touches the controller's shared state.
 static bool doTypeLogin(
@@ -38,23 +67,8 @@ static bool doTypeLogin(
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPw)
 {
     seal::DecryptedCredential cred;
-    try
+    if (!decryptForType(record, masterPw, "mode=login", cred))
     {
-        cred = seal::decryptCredentialOnDemand(record, masterPw);
-    }
-    catch (const std::exception& e)
-    {
-        qCWarning(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
-            {"event=fill.type.decrypt.fail",
-             "mode=login",
-             seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
-             seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what()))}));
-        return false;
-    }
-    catch (...)
-    {
-        qCWarning(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
-            {"event=fill.type.decrypt.fail", "mode=login", "reason=unknown"}));
         return false;
     }
 
@@ -92,23 +106,8 @@ static bool doTypePassword(
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPw)
 {
     seal::DecryptedCredential cred;
-    try
+    if (!decryptForType(record, masterPw, "mode=password", cred))
     {
-        cred = seal::decryptCredentialOnDemand(record, masterPw);
-    }
-    catch (const std::exception& e)
-    {
-        qCWarning(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
-            {"event=fill.type.decrypt.fail",
-             "mode=password",
-             seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
-             seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what()))}));
-        return false;
-    }
-    catch (...)
-    {
-        qCWarning(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
-            {"event=fill.type.decrypt.fail", "mode=password", "reason=unknown"}));
         return false;
     }
 
