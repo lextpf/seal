@@ -135,6 +135,38 @@ inline wchar_t asciiLower(wchar_t c) noexcept
     return (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c - L'A' + L'a') : c;
 }
 
+/// @brief Lowercased (ASCII) basename of an image path, or empty when the path
+/// is empty. Shared by the browser/shell image classifiers below.
+inline std::wstring lowerBasename(const std::wstring& imagePath)
+{
+    if (imagePath.empty())
+    {
+        return {};
+    }
+    const auto sep = imagePath.find_last_of(L"\\/");
+    std::wstring basename = (sep == std::wstring::npos) ? imagePath : imagePath.substr(sep + 1);
+    for (auto& c : basename)
+    {
+        c = asciiLower(c);
+    }
+    return basename;
+}
+
+/// @brief Whether `basename` exactly equals any entry in `names`.
+template <std::size_t N>
+inline bool matchesAny(std::wstring_view basename,
+                       const std::array<std::wstring_view, N>& names) noexcept
+{
+    for (const auto& name : names)
+    {
+        if (basename == name)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace detail
 
 /**
@@ -409,17 +441,6 @@ inline DWORD resolveParentPid(DWORD childPid)
  */
 inline bool isKnownBrowserImage(const std::wstring& imagePath)
 {
-    if (imagePath.empty())
-    {
-        return false;
-    }
-    const auto sep = imagePath.find_last_of(L"\\/");
-    std::wstring basename = (sep == std::wstring::npos) ? imagePath : imagePath.substr(sep + 1);
-    for (auto& c : basename)
-    {
-        c = detail::asciiLower(c);
-    }
-
     static constexpr std::array<std::wstring_view, 12> kBrowsers = {{
         L"chrome.exe",
         L"msedge.exe",
@@ -434,14 +455,7 @@ inline bool isKnownBrowserImage(const std::wstring& imagePath)
         L"floorp.exe",
         L"zen.exe",
     }};
-    for (const auto& name : kBrowsers)
-    {
-        if (basename == name)
-        {
-            return true;
-        }
-    }
-    return false;
+    return detail::matchesAny(detail::lowerBasename(imagePath), kBrowsers);
 }
 
 /**
@@ -503,16 +517,7 @@ enum class BrowserKind
  */
 inline BrowserKind identifyBrowser(const std::wstring& imagePath)
 {
-    if (imagePath.empty())
-    {
-        return BrowserKind::Unknown;
-    }
-    const auto sep = imagePath.find_last_of(L"\\/");
-    std::wstring basename = (sep == std::wstring::npos) ? imagePath : imagePath.substr(sep + 1);
-    for (auto& c : basename)
-    {
-        c = detail::asciiLower(c);
-    }
+    const std::wstring basename = detail::lowerBasename(imagePath);
 
     struct KindEntry
     {
@@ -597,31 +602,13 @@ inline std::string_view browserKindToken(BrowserKind kind) noexcept
  */
 inline bool isShellImage(const std::wstring& imagePath)
 {
-    if (imagePath.empty())
-    {
-        return false;
-    }
-    const auto sep = imagePath.find_last_of(L"\\/");
-    std::wstring basename = (sep == std::wstring::npos) ? imagePath : imagePath.substr(sep + 1);
-    for (auto& c : basename)
-    {
-        c = detail::asciiLower(c);
-    }
-
     static constexpr std::array<std::wstring_view, 4> kShells = {{
         L"cmd.exe",
         L"powershell.exe",
         L"pwsh.exe",
         L"conhost.exe",
     }};
-    for (const auto& name : kShells)
-    {
-        if (basename == name)
-        {
-            return true;
-        }
-    }
-    return false;
+    return detail::matchesAny(detail::lowerBasename(imagePath), kShells);
 }
 
 }  // namespace seal::signer
