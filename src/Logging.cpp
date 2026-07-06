@@ -6,6 +6,7 @@
 
 #include <QtCore/QByteArray>
 #include <QtCore/QDateTime>
+#include <QtCore/QDebug>
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -84,6 +85,35 @@ static void sealMessageHandler(QtMsgType type, const QMessageLogContext& ctx, co
 void installSealMessageHandler()
 {
     qInstallMessageHandler(sealMessageHandler);
+}
+
+void writeToneLine(const QLoggingCategory& category,
+                   seal::console::Tone tone,
+                   std::initializer_list<std::string> fields)
+{
+    const QString line = QString::fromStdString(seal::diag::joinFields(fields));
+    const QMessageLogger logger(QT_MESSAGELOG_FILE, QT_MESSAGELOG_LINE, QT_MESSAGELOG_FUNC);
+    switch (tone)
+    {
+        case seal::console::Tone::Debug:
+        case seal::console::Tone::Plain:
+            logger.debug(category).noquote() << line;
+            break;
+        case seal::console::Tone::Warning:
+            logger.warning(category).noquote() << line;
+            break;
+        case seal::console::Tone::Error:
+            logger.critical(category).noquote() << line;
+            break;
+        case seal::console::Tone::Info:
+        case seal::console::Tone::Step:
+        case seal::console::Tone::Success:
+        case seal::console::Tone::Summary:
+        case seal::console::Tone::Banner:
+        default:
+            logger.info(category).noquote() << line;
+            break;
+    }
 }
 
 #endif  // USE_QT_UI

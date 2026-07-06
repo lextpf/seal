@@ -38,28 +38,7 @@ bool IsObsCameraName(const std::wstring& name);
 // unified `[ts] [LVL] [seal.camera] [tid=N]` prefix.
 void writeCameraDiag(seal::console::Tone tone, std::initializer_list<std::string> fields)
 {
-    const QString line = QString::fromStdString(seal::diag::joinFields(fields));
-    switch (tone)
-    {
-        case seal::console::Tone::Debug:
-        case seal::console::Tone::Plain:
-            qCDebug(logCamera).noquote() << line;
-            break;
-        case seal::console::Tone::Warning:
-            qCWarning(logCamera).noquote() << line;
-            break;
-        case seal::console::Tone::Error:
-            qCCritical(logCamera).noquote() << line;
-            break;
-        case seal::console::Tone::Info:
-        case seal::console::Tone::Step:
-        case seal::console::Tone::Success:
-        case seal::console::Tone::Summary:
-        case seal::console::Tone::Banner:
-        default:
-            qCInfo(logCamera).noquote() << line;
-            break;
-    }
+    writeToneLine(logCamera(), tone, fields);
 }
 
 std::string narrowToken(std::string_view text, size_t maxLen = 32)

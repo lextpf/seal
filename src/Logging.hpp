@@ -4,6 +4,11 @@
 
 #include <QtCore/QLoggingCategory>
 
+#include "ConsoleStyle.hpp"
+
+#include <initializer_list>
+#include <string>
+
 /**
  * @brief Qt logging categories and message handler for the seal application.
  * @author Alex (https://github.com/lextpf)
@@ -73,5 +78,18 @@ Q_DECLARE_LOGGING_CATEGORY(logBridge)   // BrowserBridge named-pipe server and m
  *      logQr, logBridge
  */
 void installSealMessageHandler();
+
+/**
+ * @brief Emit a pre-joined diagnostic line to @p category at the Qt level that
+ *        matches @p tone. Shared Tone-to-qC dispatcher for the camera/QR sinks.
+ * @ingroup Logging
+ * @param category Target logging category (e.g. logCamera(), logQr()).
+ * @param tone     Severity selector: Debug/Plain to qCDebug, Warning to
+ *                 qCWarning, Error to qCCritical, otherwise qCInfo.
+ * @param fields   logfmt fields, joined via seal::diag::joinFields().
+ */
+void writeToneLine(const QLoggingCategory& category,
+                   seal::console::Tone tone,
+                   std::initializer_list<std::string> fields);
 
 #endif  // USE_QT_UI

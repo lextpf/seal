@@ -31,28 +31,7 @@ namespace
 // Route diagnostics through Qt logging for the unified prefix.
 void writeQrDiag(seal::console::Tone tone, std::initializer_list<std::string> fields)
 {
-    const QString line = QString::fromStdString(seal::diag::joinFields(fields));
-    switch (tone)
-    {
-        case seal::console::Tone::Debug:
-        case seal::console::Tone::Plain:
-            qCDebug(logQr).noquote() << line;
-            break;
-        case seal::console::Tone::Warning:
-            qCWarning(logQr).noquote() << line;
-            break;
-        case seal::console::Tone::Error:
-            qCCritical(logQr).noquote() << line;
-            break;
-        case seal::console::Tone::Info:
-        case seal::console::Tone::Step:
-        case seal::console::Tone::Success:
-        case seal::console::Tone::Summary:
-        case seal::console::Tone::Banner:
-        default:
-            qCInfo(logQr).noquote() << line;
-            break;
-    }
+    writeToneLine(logQr(), tone, fields);
 }
 
 // Maximum time the QR detection loop can run before auto-cancelling.
