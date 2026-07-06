@@ -208,15 +208,35 @@ static bool isOptionToken(const char* token)
     return token && token[0] == '-' && token[1] != '\0';
 }
 
+// Consume an optional <input> and optional <output> path starting after
+// argv[i], advancing i past what it takes. Returns false if no input path
+// follows. When only an input is given, `defaultOutput` (if non-null) becomes
+// the output path. Shared by parseRequiredPath and the import/export commands.
+static bool consumePathArgs(
+    int argc, char* argv[], int& i, ProgramOptions& opts, const char* defaultOutput = nullptr)
+{
+    if (i + 1 >= argc || isOptionToken(argv[i + 1]))
+    {
+        return false;
+    }
+    opts.inputPath = argv[++i];
+    if (i + 1 < argc && !isOptionToken(argv[i + 1]))
+    {
+        opts.outputPath = argv[++i];
+    }
+    else if (defaultOutput != nullptr)
+    {
+        opts.outputPath = defaultOutput;
+    }
+    return true;
+}
+
 // Parse a required path argument for a command. Returns false on missing arg.
 static bool parseRequiredPath(
     int argc, char* argv[], int& i, ProgramOptions& opts, const char* cmdName, const char* usage)
 {
-    if (i + 1 < argc && !isOptionToken(argv[i + 1]))
+    if (consumePathArgs(argc, argv, i, opts))
     {
-        opts.inputPath = argv[++i];
-        if (i + 1 < argc && !isOptionToken(argv[i + 1]))
-            opts.outputPath = argv[++i];
         return true;
     }
     writeCliDiag(std::cerr,
@@ -264,15 +284,7 @@ static int parseArguments(int argc, char* argv[], ProgramOptions& opts)
         {
             if (!trySetMode(opts, Mode::Import))
                 return 1;
-            if (i + 1 < argc && !isOptionToken(argv[i + 1]))
-            {
-                opts.inputPath = argv[++i];
-                if (i + 1 < argc && !isOptionToken(argv[i + 1]))
-                    opts.outputPath = argv[++i];
-                else
-                    opts.outputPath = ".seal";
-            }
-            else
+            if (!consumePathArgs(argc, argv, i, opts, ".seal"))
             {
                 writeCliDiag(std::cerr,
                              seal::console::Tone::Error,
@@ -292,13 +304,7 @@ static int parseArguments(int argc, char* argv[], ProgramOptions& opts)
         {
             if (!trySetMode(opts, Mode::Export))
                 return 1;
-            if (i + 1 < argc && !isOptionToken(argv[i + 1]))
-            {
-                opts.inputPath = argv[++i];
-                if (i + 1 < argc && !isOptionToken(argv[i + 1]))
-                    opts.outputPath = argv[++i];
-            }
-            else
+            if (!consumePathArgs(argc, argv, i, opts))
             {
                 writeCliDiag(std::cerr,
                              seal::console::Tone::Error,
@@ -839,8 +845,7 @@ static int handleImportMode(std::string& importData,
                      {"event=import.finish",
                       "result=fail",
                       seal::diag::kv("op", opId),
-                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
-                      seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what()))});
+                      seal::diag::errorFields(e.what())});
         seal::Cryptography::cleanseString(masterPassword);
     }
     return 1;
@@ -933,8 +938,7 @@ static int handleExportMode(const std::string& inputPath,
                      {"event=export.finish",
                       "result=fail",
                       seal::diag::kv("op", opId),
-                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
-                      seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what())),
+                      seal::diag::errorFields(e.what()),
                       seal::diag::pathSummary(vaultPathStr, "src")});
         seal::Cryptography::cleanseString(masterPassword);
         return 1;
@@ -1161,13 +1165,11 @@ static int handleCliMode()
     }
     catch (const std::exception& e)
     {
-        writeCliDiag(std::cerr,
-                     seal::console::Tone::Error,
-                     "CLI",
-                     {"event=cli.interactive.finish",
-                      "result=fail",
-                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
-                      seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what()))});
+        writeCliDiag(
+            std::cerr,
+            seal::console::Tone::Error,
+            "CLI",
+            {"event=cli.interactive.finish", "result=fail", seal::diag::errorFields(e.what())});
         return 1;
     }
     return 0;
