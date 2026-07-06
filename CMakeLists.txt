@@ -424,6 +424,7 @@ if(ENABLE_TESTS)
         tests/test_process_pin.cpp
         tests/test_vault_rekey.cpp
         tests/test_directory_crypto.cpp
+        tests/test_diagnostics.cpp
         src/Cryptography.cpp
         src/Utils.cpp
         src/Clipboard.cpp
