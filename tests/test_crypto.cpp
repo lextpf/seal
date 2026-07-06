@@ -13,6 +13,26 @@
 
 using namespace std::string_literals;
 
+namespace
+{
+
+// Encrypt `plaintext` (as raw bytes) under `password`; returns the packet.
+template <class Pwd>
+std::vector<unsigned char> encryptText(const std::string& plaintext, const Pwd& password)
+{
+    std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
+    return seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
+}
+
+// A copy of `packet` with its middle byte flipped (breaks GCM authentication).
+std::vector<unsigned char> corruptMiddle(std::vector<unsigned char> packet)
+{
+    packet[packet.size() / 2] ^= 0xFF;
+    return packet;
+}
+
+}  // namespace
+
 class CryptoTest : public ::testing::Test
 {
 };
@@ -59,12 +79,7 @@ TEST_F(CryptoTest, WrongPasswordFailsAuthentication)
 {
     auto correctPassword = make_secure_string("correct_password");
     auto wrongPassword = make_secure_string("wrong_password");
-    std::string plaintext = "Secret message";
-
-    std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
-
-    auto packet = seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes),
-                                                    correctPassword);
+    auto packet = encryptText("Secret message", correctPassword);
 
     EXPECT_THROW((void)seal::Cryptography::decryptPacket(std::span<const unsigned char>(packet),
                                                          wrongPassword),
@@ -74,15 +89,7 @@ TEST_F(CryptoTest, WrongPasswordFailsAuthentication)
 TEST_F(CryptoTest, CorruptedPacketFailsAuthentication)
 {
     auto password = make_secure_string("test_password");
-    std::string plaintext = "Test message";
-
-    std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
-
-    auto packet =
-        seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
-
-    std::vector<unsigned char> corrupted = packet;
-    corrupted[corrupted.size() / 2] ^= 0xFF;
+    auto corrupted = corruptMiddle(encryptText("Test message", password));
 
     EXPECT_THROW((void)seal::Cryptography::decryptPacket(std::span<const unsigned char>(corrupted),
                                                          password),
@@ -92,11 +99,7 @@ TEST_F(CryptoTest, CorruptedPacketFailsAuthentication)
 TEST_F(CryptoTest, VerifyPacketAcceptsValidPacket)
 {
     auto password = make_secure_string("test_password");
-    std::string plaintext = "verify me";
-    std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
-
-    auto packet =
-        seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
+    auto packet = encryptText("verify me", password);
 
     EXPECT_NO_THROW(
         seal::Cryptography::verifyPacket(std::span<const unsigned char>(packet), password));
@@ -106,11 +109,7 @@ TEST_F(CryptoTest, VerifyPacketRejectsWrongPassword)
 {
     auto correctPassword = make_secure_string("correct_password");
     auto wrongPassword = make_secure_string("wrong_password");
-    std::string plaintext = "verify me";
-    std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
-
-    auto packet = seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes),
-                                                    correctPassword);
+    auto packet = encryptText("verify me", correctPassword);
 
     EXPECT_THROW(
         seal::Cryptography::verifyPacket(std::span<const unsigned char>(packet), wrongPassword),
@@ -120,14 +119,7 @@ TEST_F(CryptoTest, VerifyPacketRejectsWrongPassword)
 TEST_F(CryptoTest, VerifyPacketRejectsCorruptedPacket)
 {
     auto password = make_secure_string("test_password");
-    std::string plaintext = "verify me";
-    std::vector<unsigned char> plainBytes(plaintext.begin(), plaintext.end());
-
-    auto packet =
-        seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
-
-    std::vector<unsigned char> corrupted = packet;
-    corrupted[corrupted.size() / 2] ^= 0xFF;
+    auto corrupted = corruptMiddle(encryptText("verify me", password));
 
     EXPECT_THROW(
         seal::Cryptography::verifyPacket(std::span<const unsigned char>(corrupted), password),
