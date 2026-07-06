@@ -49,6 +49,98 @@ std::filesystem::path resolveVaultPath(const std::string& vaultPathArg)
     }
     return seal::findDefaultVault();
 }
+
+// Shared body for HandleFileEncrypt/HandleFileDecrypt: existence check, password
+// prompt, begin/finish diagnostics, the crypto op, source deletion on success,
+// and cleanse on every non-throw path. `op` is encryptFileTo/decryptFileTo;
+// `computeDest` derives the output path; `eventBase` is e.g. "cli.file_encrypt";
+// `opScope` seeds nextOpId; `failReason` is the op-failure reason token.
+int handleFileCrypt(const std::string& inputPath,
+                    const std::string& outputPath,
+                    const char* opScope,
+                    const char* eventBase,
+                    const char* failReason,
+                    bool (*op)(const std::string&,
+                               const std::string&,
+                               const seal::basic_secure_string<wchar_t>&),
+                    std::string (*computeDest)(const std::string&, const std::string&))
+{
+    const std::string finishEvent = std::string("event=") + eventBase + ".finish";
+    if (!seal::utils::fileExistsA(inputPath))
+    {
+        writeCliDiag(seal::console::Tone::Error,
+                     {finishEvent,
+                      "result=fail",
+                      "reason=file_not_found",
+                      seal::diag::pathSummary(inputPath)});
+        return 1;
+    }
+
+    const std::string opId = seal::diag::nextOpId(opScope);
+    const auto started = std::chrono::steady_clock::now();
+    try
+    {
+        seal::basic_secure_string<wchar_t> password = seal::readPasswordConsole();
+        seal::DPAPIGuard<seal::basic_secure_string<wchar_t>> dpapi(&password);
+        ScopedUnprotect<decltype(dpapi)> dpapiScope(dpapi);
+
+        const std::string dest = computeDest(inputPath, outputPath);
+
+        writeCliDiag(seal::console::Tone::Step,
+                     {std::string("event=") + eventBase + ".begin",
+                      "result=start",
+                      seal::diag::kv("op", opId),
+                      seal::diag::pathSummary(inputPath)});
+
+        bool ok = op(inputPath, dest, password);
+        if (!ok)
+        {
+            writeCliDiag(seal::console::Tone::Error,
+                         {finishEvent,
+                          "result=fail",
+                          seal::diag::kv("op", opId),
+                          failReason,
+                          seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
+                          seal::diag::pathSummary(inputPath)});
+            seal::Cryptography::cleanseString(password);
+            return 1;
+        }
+
+        DeleteFileA(inputPath.c_str());
+        writeCliDiag(seal::console::Tone::Success,
+                     {finishEvent,
+                      "result=ok",
+                      seal::diag::kv("op", opId),
+                      seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
+                      seal::diag::pathSummary(inputPath, "src"),
+                      seal::diag::pathSummary(dest, "dst")});
+        seal::Cryptography::cleanseString(password);
+        return 0;
+    }
+    catch (const std::exception& e)
+    {
+        writeCliDiag(seal::console::Tone::Error,
+                     {finishEvent,
+                      "result=fail",
+                      seal::diag::kv("op", opId),
+                      seal::diag::errorFields(e.what()),
+                      seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
+                      seal::diag::pathSummary(inputPath)});
+        return 1;
+    }
+}
+
+// Load a vault index, unprotecting `guard` only for the load (re-protected on
+// return). Shared by the CLI read commands; the caller owns password + guard so
+// the password can be reused after the index is loaded.
+std::vector<seal::VaultRecord> loadIndexUnprotected(
+    seal::DPAPIGuard<seal::basic_secure_string<wchar_t>>& guard,
+    const seal::basic_secure_string<wchar_t>& password,
+    const std::filesystem::path& vaultPath)
+{
+    ScopedUnprotect dpapiScope(guard);
+    return seal::loadVaultIndex(vaultPath, password);
+}
 }  // namespace
 
 namespace seal
@@ -180,8 +272,7 @@ int HandleVerifyMode(const std::string& path)
         writeCliDiag(seal::console::Tone::Error,
                      {"event=cli.verify.finish",
                       "result=fail",
-                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
-                      seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what())),
+                      seal::diag::errorFields(e.what()),
                       seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
                       seal::diag::pathSummary(path)});
         return 1;
@@ -199,149 +290,39 @@ int HandleWipeMode()
 
 int HandleFileEncrypt(const std::string& inputPath, const std::string& outputPath)
 {
-    if (!seal::utils::fileExistsA(inputPath))
-    {
-        writeCliDiag(seal::console::Tone::Error,
-                     {"event=cli.file_encrypt.finish",
-                      "result=fail",
-                      "reason=file_not_found",
-                      seal::diag::pathSummary(inputPath)});
-        return 1;
-    }
-
-    const std::string opId = seal::diag::nextOpId("cli_file_encrypt");
-    const auto started = std::chrono::steady_clock::now();
-    try
-    {
-        seal::basic_secure_string<wchar_t> password = seal::readPasswordConsole();
-        seal::DPAPIGuard<seal::basic_secure_string<wchar_t>> dpapi(&password);
-        ScopedUnprotect<decltype(dpapi)> dpapiScope(dpapi);
-
-        // Encrypt to destination (default: input + ".seal"); source is
-        // deleted only after the destination is fully written.
-        std::string dest = outputPath.empty()
-                               ? seal::utils::add_ext(inputPath, std::string_view{".seal"})
-                               : outputPath;
-
-        writeCliDiag(seal::console::Tone::Step,
-                     {"event=cli.file_encrypt.begin",
-                      "result=start",
-                      seal::diag::kv("op", opId),
-                      seal::diag::pathSummary(inputPath)});
-
-        bool ok = seal::FileOperations::encryptFileTo(inputPath, dest, password);
-        if (!ok)
-        {
-            writeCliDiag(seal::console::Tone::Error,
-                         {"event=cli.file_encrypt.finish",
-                          "result=fail",
-                          seal::diag::kv("op", opId),
-                          "reason=encrypt_failed",
-                          seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
-                          seal::diag::pathSummary(inputPath)});
-            seal::Cryptography::cleanseString(password);
-            return 1;
-        }
-
-        DeleteFileA(inputPath.c_str());
-        writeCliDiag(seal::console::Tone::Success,
-                     {"event=cli.file_encrypt.finish",
-                      "result=ok",
-                      seal::diag::kv("op", opId),
-                      seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
-                      seal::diag::pathSummary(inputPath, "src"),
-                      seal::diag::pathSummary(dest, "dst")});
-        seal::Cryptography::cleanseString(password);
-        return 0;
-    }
-    catch (const std::exception& e)
-    {
-        writeCliDiag(seal::console::Tone::Error,
-                     {"event=cli.file_encrypt.finish",
-                      "result=fail",
-                      seal::diag::kv("op", opId),
-                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
-                      seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what())),
-                      seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
-                      seal::diag::pathSummary(inputPath)});
-        return 1;
-    }
+    return handleFileCrypt(
+        inputPath,
+        outputPath,
+        "cli_file_encrypt",
+        "cli.file_encrypt",
+        "reason=encrypt_failed",
+        &seal::FileOperations::encryptFileTo<seal::basic_secure_string<wchar_t>>,
+        [](const std::string& in, const std::string& out) -> std::string
+        { return out.empty() ? seal::utils::add_ext(in, std::string_view{".seal"}) : out; });
 }
 
 int HandleFileDecrypt(const std::string& inputPath, const std::string& outputPath)
 {
-    if (!seal::utils::fileExistsA(inputPath))
-    {
-        writeCliDiag(seal::console::Tone::Error,
-                     {"event=cli.file_decrypt.finish",
-                      "result=fail",
-                      "reason=file_not_found",
-                      seal::diag::pathSummary(inputPath)});
-        return 1;
-    }
-
-    const std::string opId = seal::diag::nextOpId("cli_file_decrypt");
-    const auto started = std::chrono::steady_clock::now();
-    try
-    {
-        seal::basic_secure_string<wchar_t> password = seal::readPasswordConsole();
-        seal::DPAPIGuard<seal::basic_secure_string<wchar_t>> dpapi(&password);
-        ScopedUnprotect<decltype(dpapi)> dpapiScope(dpapi);
-
-        // Decrypt to destination (default: strip ".seal"); source is
-        // deleted only after the destination is fully written.
-        std::string dest = outputPath;
-        if (dest.empty())
-        {
-            if (seal::utils::endsWithCi(inputPath, ".seal"))
-                dest = seal::utils::strip_ext_ci(inputPath, std::string_view{".seal"});
-            else
-                dest = inputPath + ".decrypted";
-        }
-
-        writeCliDiag(seal::console::Tone::Step,
-                     {"event=cli.file_decrypt.begin",
-                      "result=start",
-                      seal::diag::kv("op", opId),
-                      seal::diag::pathSummary(inputPath)});
-
-        bool ok = seal::FileOperations::decryptFileTo(inputPath, dest, password);
-        if (!ok)
-        {
-            writeCliDiag(seal::console::Tone::Error,
-                         {"event=cli.file_decrypt.finish",
-                          "result=fail",
-                          seal::diag::kv("op", opId),
-                          "reason=decrypt_failed",
-                          seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
-                          seal::diag::pathSummary(inputPath)});
-            seal::Cryptography::cleanseString(password);
-            return 1;
-        }
-
-        DeleteFileA(inputPath.c_str());
-        writeCliDiag(seal::console::Tone::Success,
-                     {"event=cli.file_decrypt.finish",
-                      "result=ok",
-                      seal::diag::kv("op", opId),
-                      seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
-                      seal::diag::pathSummary(inputPath, "src"),
-                      seal::diag::pathSummary(dest, "dst")});
-        seal::Cryptography::cleanseString(password);
-        return 0;
-    }
-    catch (const std::exception& e)
-    {
-        writeCliDiag(seal::console::Tone::Error,
-                     {"event=cli.file_decrypt.finish",
-                      "result=fail",
-                      seal::diag::kv("op", opId),
-                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
-                      seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what())),
-                      seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
-                      seal::diag::pathSummary(inputPath)});
-        return 1;
-    }
+    return handleFileCrypt(inputPath,
+                           outputPath,
+                           "cli_file_decrypt",
+                           "cli.file_decrypt",
+                           "reason=decrypt_failed",
+                           &seal::FileOperations::decryptFileTo<seal::basic_secure_string<wchar_t>>,
+                           [](const std::string& in, const std::string& out) -> std::string
+                           {
+                               // Default: strip ".seal"; else append ".decrypted".
+                               std::string dest = out;
+                               if (dest.empty())
+                               {
+                                   if (seal::utils::endsWithCi(in, ".seal"))
+                                       dest =
+                                           seal::utils::strip_ext_ci(in, std::string_view{".seal"});
+                                   else
+                                       dest = in + ".decrypted";
+                               }
+                               return dest;
+                           });
 }
 
 // Text <-> hex/base64. Reads inline arg or stdin; prompt is on stderr so
@@ -448,10 +429,7 @@ int HandleStringMode(bool encryptMode, const std::string& inlineData)
     catch (const std::exception& e)
     {
         writeCliDiag(seal::console::Tone::Error,
-                     {"event=cli.text.finish",
-                      "result=fail",
-                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
-                      seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what()))});
+                     {"event=cli.text.finish", "result=fail", seal::diag::errorFields(e.what())});
         return 1;
     }
 }
@@ -897,11 +875,7 @@ int HandleListMode(const std::string& vaultPathArg)
     {
         seal::basic_secure_string<wchar_t> password = seal::readPasswordConsole();
         seal::DPAPIGuard<seal::basic_secure_string<wchar_t>> guard(&password);
-        std::vector<seal::VaultRecord> records;
-        {
-            ScopedUnprotect dpapiScope(guard);
-            records = seal::loadVaultIndex(vaultPath, password);
-        }
+        std::vector<seal::VaultRecord> records = loadIndexUnprotected(guard, password, vaultPath);
         for (const auto& rec : records)
         {
             if (!rec.deleted)
@@ -961,11 +935,7 @@ int HandleGetMode(const std::string& platformQuery,
         seal::basic_secure_string<wchar_t> password = seal::readPasswordConsole();
         seal::DPAPIGuard<seal::basic_secure_string<wchar_t>> guard(&password);
 
-        std::vector<seal::VaultRecord> records;
-        {
-            ScopedUnprotect dpapiScope(guard);
-            records = seal::loadVaultIndex(vaultPath, password);
-        }
+        std::vector<seal::VaultRecord> records = loadIndexUnprotected(guard, password, vaultPath);
 
         // Blank (not remove) deleted entries so indices stay aligned.
         std::vector<std::string> names;
@@ -1148,8 +1118,7 @@ int HandleRekeyMode(const std::string& path)
                      {"event=cli.rekey.finish",
                       "result=fail",
                       seal::diag::kv("op", opId),
-                      seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
-                      seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what()))});
+                      seal::diag::errorFields(e.what())});
         return 1;
     }
 }
