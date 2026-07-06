@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace seal
 {
@@ -311,6 +312,83 @@ private:
         return BridgeParseError::None;
     }
 
+    // True for a token byte: alnum or '-', plus '.' when allowDot (host labels
+    // are dotted; the visit token is not).
+    static bool isTokenChar(char c, bool allowDot) noexcept
+    {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+               c == '-' || (allowDot && c == '.');
+    }
+
+    // Non-empty, length-bounded token whose bytes are all isTokenChar().
+    // BadValue on empty, over-length, or an illegal byte; None otherwise.
+    static BridgeParseError validateToken(const char* buf,
+                                          std::size_t len,
+                                          std::size_t maxLen,
+                                          bool allowDot) noexcept
+    {
+        if (len == 0 || len > maxLen)
+        {
+            return BridgeParseError::BadValue;
+        }
+        for (std::size_t i = 0; i < len; ++i)
+        {
+            if (!isTokenChar(buf[i], allowDot))
+            {
+                return BridgeParseError::BadValue;
+            }
+        }
+        return BridgeParseError::None;
+    }
+
+    // Parse a string value, validate it as a bounded token, and store it in
+    // `dest`. The +1 buffer slack turns an in-cap overrun into a BadValue
+    // length rejection rather than TooLarge. Shared by url_host and visit.
+    template <std::size_t MaxLen>
+    BridgeParseError parseTokenInto(std::string* dest, bool allowDot) noexcept
+    {
+        std::array<char, MaxLen + 1> buf{};
+        std::size_t len = 0;
+        const BridgeParseError err = parseAsciiString(buf.data(), buf.size(), &len);
+        if (err != BridgeParseError::None)
+        {
+            return err;
+        }
+        const BridgeParseError valErr = validateToken(buf.data(), len, MaxLen, allowDot);
+        if (valErr != BridgeParseError::None)
+        {
+            return valErr;
+        }
+        dest->assign(buf.data(), len);
+        return BridgeParseError::None;
+    }
+
+    // Parse a short (<=15 char) string value and map it against `table` by exact
+    // match, writing the matched enumerator to `out`. BadValue if unmatched.
+    // Shared by the tag and kind keys (their whitelists are the tables).
+    template <typename Enum, std::size_t N>
+    BridgeParseError parseEnumValue(const std::array<std::pair<std::string_view, Enum>, N>& table,
+                                    Enum* out) noexcept
+    {
+        std::array<char, 16> buf{};
+        std::size_t len = 0;
+        const BridgeParseError err = parseAsciiString(buf.data(), buf.size(), &len);
+        if (err != BridgeParseError::None)
+        {
+            return err;
+        }
+        const std::string_view value(buf.data(), len);
+        for (const auto& entry : table)
+        {
+            if (value == entry.first)
+            {
+                *out = entry.second;
+                return BridgeParseError::None;
+            }
+        }
+        return BridgeParseError::BadValue;
+    }
+
     // Key -> kKey* bit; 0 for any unrecognised key.
     static std::uint32_t keyBit(std::string_view key) noexcept
     {
@@ -418,68 +496,19 @@ private:
             }
             case kKeyTag:
             {
-                std::array<char, 16> buf{};
-                std::size_t len = 0;
-                const BridgeParseError err = parseAsciiString(buf.data(), buf.size(), &len);
-                if (err != BridgeParseError::None)
-                {
-                    return err;
-                }
-                const std::string_view value(buf.data(), len);
-                if (value == std::string_view("password"))
-                {
-                    out->m_Tag = BridgeTag::Password;
-                }
-                else if (value == std::string_view("username"))
-                {
-                    out->m_Tag = BridgeTag::Username;
-                }
-                else if (value == std::string_view("email"))
-                {
-                    out->m_Tag = BridgeTag::Email;
-                }
-                else if (value == std::string_view("text"))
-                {
-                    out->m_Tag = BridgeTag::Text;
-                }
-                else if (value == std::string_view("other"))
-                {
-                    out->m_Tag = BridgeTag::Other;
-                }
-                else
-                {
-                    return BridgeParseError::BadValue;
-                }
-                return BridgeParseError::None;
+                static constexpr std::array<std::pair<std::string_view, BridgeTag>, 5> kTagTable{{
+                    {"password", BridgeTag::Password},
+                    {"username", BridgeTag::Username},
+                    {"email", BridgeTag::Email},
+                    {"text", BridgeTag::Text},
+                    {"other", BridgeTag::Other},
+                }};
+                return parseEnumValue(kTagTable, &out->m_Tag);
             }
             case kKeyUrlHost:
-            {
-                // Hosts cap at 253 bytes; stack buffer keeps the parser
-                // free of secure_string usage.
-                std::array<char, kMaxHostLen + 1> buf{};
-                std::size_t len = 0;
-                const BridgeParseError err = parseAsciiString(buf.data(), buf.size(), &len);
-                if (err != BridgeParseError::None)
-                {
-                    return err;
-                }
-                if (len == 0 || len > kMaxHostLen)
-                {
-                    return BridgeParseError::BadValue;
-                }
-                for (std::size_t i = 0; i < len; ++i)
-                {
-                    const char c = buf[i];
-                    const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                                    (c >= '0' && c <= '9') || c == '.' || c == '-';
-                    if (!ok)
-                    {
-                        return BridgeParseError::BadValue;
-                    }
-                }
-                out->m_UrlHost.assign(buf.data(), len);
-                return BridgeParseError::None;
-            }
+                // Hosts cap at 253 bytes (dotted labels allow '.'); parsed into
+                // a stack buffer, no secure_string.
+                return parseTokenInto<kMaxHostLen>(&out->m_UrlHost, /*allowDot=*/true);
             case kKeyUrlPathHash:
             {
                 std::array<char, kHashLen + 1> buf{};
@@ -507,58 +536,18 @@ private:
             }
             case kKeyKind:
             {
-                std::array<char, 16> buf{};
-                std::size_t len = 0;
-                const BridgeParseError err = parseAsciiString(buf.data(), buf.size(), &len);
-                if (err != BridgeParseError::None)
-                {
-                    return err;
-                }
-                const std::string_view value(buf.data(), len);
-                if (value == std::string_view("click"))
-                {
-                    out->m_Kind = BridgeKind::Click;
-                }
-                else if (value == std::string_view("nav"))
-                {
-                    out->m_Kind = BridgeKind::Nav;
-                }
-                else
-                {
-                    return BridgeParseError::BadValue;
-                }
-                return BridgeParseError::None;
+                static constexpr std::array<std::pair<std::string_view, BridgeKind>, 2> kKindTable{{
+                    {"click", BridgeKind::Click},
+                    {"nav", BridgeKind::Nav},
+                }};
+                return parseEnumValue(kKindTable, &out->m_Kind);
             }
             case kKeyVisit:
-            {
-                // Per-document page-load token. Random alnum+dash (a UUID is
-                // 36 chars); anything else is fail-closed rejected. The +1
-                // buffer slack makes an in-cap overrun a BadValue length
+                // Per-document page-load token: random alnum+dash (a UUID is 36
+                // chars), no dots. Anything else is fail-closed rejected. The +1
+                // buffer slack turns an in-cap overrun into a BadValue length
                 // rejection rather than TooLarge, matching url_host.
-                std::array<char, kMaxVisitLen + 1> buf{};
-                std::size_t len = 0;
-                const BridgeParseError err = parseAsciiString(buf.data(), buf.size(), &len);
-                if (err != BridgeParseError::None)
-                {
-                    return err;
-                }
-                if (len == 0 || len > kMaxVisitLen)
-                {
-                    return BridgeParseError::BadValue;
-                }
-                for (std::size_t i = 0; i < len; ++i)
-                {
-                    const char c = buf[i];
-                    const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                                    (c >= '0' && c <= '9') || c == '-';
-                    if (!ok)
-                    {
-                        return BridgeParseError::BadValue;
-                    }
-                }
-                out->m_Visit.assign(buf.data(), len);
-                return BridgeParseError::None;
-            }
+                return parseTokenInto<kMaxVisitLen>(&out->m_Visit, /*allowDot=*/false);
             case kKeySecure:
             case kKeyForm:
             case kKeyUser:
