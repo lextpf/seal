@@ -220,12 +220,11 @@ void CliPanelViewModel::executeCliCommand(const QString& command)
     }
     catch (const std::exception& ex)
     {
-        qCWarning(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
-            {"event=cli.command.finish",
-             "result=fail",
-             seal::diag::kv("reason", seal::diag::reasonFromMessage(ex.what())),
-             seal::diag::kv("detail", seal::diag::sanitizeAscii(ex.what())),
-             seal::diag::kv("input_len", input.size())}));
+        qCWarning(logBackend).noquote() << QString::fromStdString(
+            seal::diag::joinFields({"event=cli.command.finish",
+                                    "result=fail",
+                                    seal::diag::errorFields(ex.what()),
+                                    seal::diag::kv("input_len", input.size())}));
         appendCliOutput(QString("Error: %1").arg(QString::fromUtf8(ex.what())));
     }
 }
