@@ -425,10 +425,7 @@ void AppViewModel::loadVaultFromPath(const QString& filePath, bool isAutoLoad)
         auto access = m_Workspace.session().unlock();
         if (!access.ok())
         {
-            qCWarning(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
-                {"event=auth.unlock", "result=fail", "reason=dpapi_unprotect"}));
-            emit errorOccurred(QStringLiteral("Vault error"),
-                               QStringLiteral("Could not access the master key."));
+            reportMasterKeyUnavailable();
             setStatus("Failed to load vault");
             return;
         }
@@ -492,8 +489,7 @@ void AppViewModel::loadVaultFromPath(const QString& filePath, bool isAutoLoad)
                                {"event=vault.load.finish",
                                 "result=fail",
                                 seal::diag::kv("op", opId),
-                                seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
-                                seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what())),
+                                seal::diag::errorFields(e.what()),
                                 seal::diag::kv("duration_ms", seal::diag::elapsedMs(started))}));
                     setLoading(false);
                     emit errorOccurred("Error", QString("Failed to load vault: %1").arg(e.what()));
@@ -546,8 +542,7 @@ void AppViewModel::loadVaultFromPath(const QString& filePath, bool isAutoLoad)
                 {"event=vault.load.finish",
                  "result=fail",
                  seal::diag::kv("op", opId),
-                 seal::diag::kv("reason", seal::diag::reasonFromMessage(detail)),
-                 seal::diag::kv("detail", seal::diag::sanitizeAscii(detail)),
+                 seal::diag::errorFields(detail),
                  seal::diag::kv("duration_ms", seal::diag::elapsedMs(started))}));
             setLoading(false);
             emit errorOccurred("Error", QString("Failed to load vault: %1").arg(r.message));
@@ -700,28 +695,11 @@ void AppViewModel::addAccount(const QString& service,
                     catch (const std::exception& e)
                     {
                         seal::Cryptography::cleanseString(*secUser, *secPass);
-                        qCWarning(logBackend).noquote() << QString::fromStdString(
-                            seal::diag::joinFields(
-                                {"event=vault.record.add",
-                                 "result=fail",
-                                 "deferred=true",
-                                 seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
-                                 seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what()))}));
-                        emit errorOccurred("Error",
-                                           QString("Failed to add account: %1").arg(e.what()));
+                        logAddAccountFailure(e.what(), true);
                         return;
                     }
                     seal::Cryptography::cleanseString(*secUser, *secPass);
-                    qCInfo(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
-                        {"event=vault.record.add",
-                         "result=ok",
-                         "deferred=true",
-                         seal::diag::kv("total_records", m_Workspace.records().size()),
-                         seal::diag::kv("service_len", service.size())}));
-                    refreshModel();
-                    setStatus("Account added");
-                    emit vaultLoadedChanged();
-                    emit vaultFileNameChanged();
+                    finishAddAccount(service, true);
                 }))
         {
             return;
@@ -740,28 +718,12 @@ void AppViewModel::addAccount(const QString& service,
     catch (const std::exception& e)
     {
         seal::Cryptography::cleanseString(secUsername, secPassword);
-        qCWarning(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
-            {"event=vault.record.add",
-             "result=fail",
-             "deferred=false",
-             seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
-             seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what()))}));
-        emit errorOccurred("Error", QString("Failed to add account: %1").arg(e.what()));
+        logAddAccountFailure(e.what(), false);
         return;
     }
 
     seal::Cryptography::cleanseString(secUsername, secPassword);
-
-    qCInfo(logBackend).noquote() << QString::fromStdString(
-        seal::diag::joinFields({"event=vault.record.add",
-                                "result=ok",
-                                "deferred=false",
-                                seal::diag::kv("total_records", m_Workspace.records().size()),
-                                seal::diag::kv("service_len", service.size())}));
-    refreshModel();
-    setStatus("Account added");
-    emit vaultLoadedChanged();
-    emit vaultFileNameChanged();
+    finishAddAccount(service, false);
 }
 
 void AppViewModel::editAccountWithSecureFields(
@@ -793,12 +755,11 @@ void AppViewModel::editAccountWithSecureFields(
     catch (const std::exception& e)
     {
         seal::Cryptography::cleanseString(username, password);
-        qCWarning(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
-            {"event=vault.record.edit",
-             "result=fail",
-             seal::diag::kv("index", index),
-             seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
-             seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what()))}));
+        qCWarning(logBackend).noquote()
+            << QString::fromStdString(seal::diag::joinFields({"event=vault.record.edit",
+                                                              "result=fail",
+                                                              seal::diag::kv("index", index),
+                                                              seal::diag::errorFields(e.what())}));
         emit errorOccurred("Error", QString("Failed to update account: %1").arg(e.what()));
         return;
     }
@@ -923,42 +884,84 @@ void AppViewModel::requestDeleteSelected()
                                 QString::fromUtf8(m_Workspace.records()[index].platform.c_str()));
 }
 
-void AppViewModel::encryptDirectory()
+void AppViewModel::logAddAccountFailure(const char* what, bool deferred)
 {
-    if (!ensurePassword([this]() { encryptDirectory(); }))
-    {
-        return;
-    }
+    qCWarning(logBackend).noquote() << QString::fromStdString(
+        seal::diag::joinFields({"event=vault.record.add",
+                                "result=fail",
+                                deferred ? "deferred=true" : "deferred=false",
+                                seal::diag::errorFields(what)}));
+    emit errorOccurred("Error", QString("Failed to add account: %1").arg(what));
+}
 
-    QString dirPath = seal::OpenFolderDialog("Select Directory to Encrypt");
+void AppViewModel::finishAddAccount(const QString& service, bool deferred)
+{
+    qCInfo(logBackend).noquote() << QString::fromStdString(
+        seal::diag::joinFields({"event=vault.record.add",
+                                "result=ok",
+                                deferred ? "deferred=true" : "deferred=false",
+                                seal::diag::kv("total_records", m_Workspace.records().size()),
+                                seal::diag::kv("service_len", service.size())}));
+    refreshModel();
+    setStatus("Account added");
+    emit vaultLoadedChanged();
+    emit vaultFileNameChanged();
+}
+
+void AppViewModel::reportMasterKeyUnavailable()
+{
+    qCWarning(logBackend).noquote() << QString::fromStdString(
+        seal::diag::joinFields({"event=auth.unlock", "result=fail", "reason=dpapi_unprotect"}));
+    emit errorOccurred(QStringLiteral("Vault error"),
+                       QStringLiteral("Could not access the master key."));
+}
+
+void AppViewModel::runDirectoryCrypto(
+    const QString& dialogTitle,
+    const char* opScope,
+    int (*op)(const std::filesystem::path&,
+              const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>&),
+    const char* eventName,
+    const QString& verbPast)
+{
+    QString dirPath = seal::OpenFolderDialog(dialogTitle);
     if (dirPath.isEmpty())
         return;
 
-    const std::string opId = seal::diag::nextOpId("dir_encrypt");
+    const std::string opId = seal::diag::nextOpId(opScope);
     const auto started = std::chrono::steady_clock::now();
     int count = 0;
     {
         auto access = m_Workspace.session().unlock();
         if (!access.ok())
         {
-            qCWarning(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
-                {"event=auth.unlock", "result=fail", "reason=dpapi_unprotect"}));
-            emit errorOccurred(QStringLiteral("Vault error"),
-                               QStringLiteral("Could not access the master key."));
+            reportMasterKeyUnavailable();
             return;
         }
-        count = seal::encryptDirectory(std::filesystem::path{dirPath.toStdWString()},
-                                       access.password());
+        count = op(std::filesystem::path{dirPath.toStdWString()}, access.password());
     }
     qCInfo(logBackend).noquote() << QString::fromStdString(
-        seal::diag::joinFields({"event=directory.encrypt.finish",
+        seal::diag::joinFields({std::string("event=") + eventName,
                                 "result=ok",
                                 seal::diag::kv("op", opId),
                                 seal::diag::kv("count", count),
                                 seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
                                 seal::diag::pathSummary(dirPath.toUtf8().toStdString())}));
-    setStatus(QString("Encrypted %1 file(s)").arg(count));
-    emit infoMessage("Success", QString("Encrypted %1 file(s) in directory").arg(count));
+    setStatus(QString("%1 %2 file(s)").arg(verbPast).arg(count));
+    emit infoMessage("Success", QString("%1 %2 file(s) in directory").arg(verbPast).arg(count));
+}
+
+void AppViewModel::encryptDirectory()
+{
+    if (!ensurePassword([this]() { encryptDirectory(); }))
+    {
+        return;
+    }
+    runDirectoryCrypto("Select Directory to Encrypt",
+                       "dir_encrypt",
+                       &seal::encryptDirectory,
+                       "directory.encrypt.finish",
+                       "Encrypted");
 }
 
 void AppViewModel::decryptDirectory()
@@ -967,36 +970,11 @@ void AppViewModel::decryptDirectory()
     {
         return;
     }
-
-    QString dirPath = seal::OpenFolderDialog("Select Directory to Decrypt");
-    if (dirPath.isEmpty())
-        return;
-
-    const std::string opId = seal::diag::nextOpId("dir_decrypt");
-    const auto started = std::chrono::steady_clock::now();
-    int count = 0;
-    {
-        auto access = m_Workspace.session().unlock();
-        if (!access.ok())
-        {
-            qCWarning(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
-                {"event=auth.unlock", "result=fail", "reason=dpapi_unprotect"}));
-            emit errorOccurred(QStringLiteral("Vault error"),
-                               QStringLiteral("Could not access the master key."));
-            return;
-        }
-        count = seal::decryptDirectory(std::filesystem::path{dirPath.toStdWString()},
-                                       access.password());
-    }
-    qCInfo(logBackend).noquote() << QString::fromStdString(
-        seal::diag::joinFields({"event=directory.decrypt.finish",
-                                "result=ok",
-                                seal::diag::kv("op", opId),
-                                seal::diag::kv("count", count),
-                                seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
-                                seal::diag::pathSummary(dirPath.toUtf8().toStdString())}));
-    setStatus(QString("Decrypted %1 file(s)").arg(count));
-    emit infoMessage("Success", QString("Decrypted %1 file(s) in directory").arg(count));
+    runDirectoryCrypto("Select Directory to Decrypt",
+                       "dir_decrypt",
+                       &seal::decryptDirectory,
+                       "directory.decrypt.finish",
+                       "Decrypted");
 }
 
 void AppViewModel::autoLoadVault()
@@ -1123,11 +1101,10 @@ void AppViewModel::cleanup()
         }
         catch (const std::exception& e)
         {
-            qCWarning(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
-                {"event=app.cleanup.auto_encrypt.finish",
-                 "result=fail",
-                 seal::diag::kv("reason", seal::diag::reasonFromMessage(e.what())),
-                 seal::diag::kv("detail", seal::diag::sanitizeAscii(e.what()))}));
+            qCWarning(logBackend).noquote() << QString::fromStdString(
+                seal::diag::joinFields({"event=app.cleanup.auto_encrypt.finish",
+                                        "result=fail",
+                                        seal::diag::errorFields(e.what())}));
         }
     }
 

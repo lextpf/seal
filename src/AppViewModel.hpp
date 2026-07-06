@@ -599,6 +599,56 @@ private:
     void refreshModel();
 
     /**
+     * @brief Shared body for encryptDirectory()/decryptDirectory().
+     *
+     * Opens the folder picker, runs @p op under a tight session().unlock()
+     * window, and logs the finish line. Reports the standard master-key error
+     * and returns if the session cannot be unlocked. Callers gate on
+     * ensurePassword() first, so the password is already set here.
+     *
+     * @param dialogTitle Folder-picker caption.
+     * @param opScope     nextOpId() scope token (e.g. "dir_encrypt").
+     * @param op          seal::encryptDirectory or seal::decryptDirectory.
+     * @param eventName   Finish-event token (e.g. "directory.encrypt.finish").
+     * @param verbPast    Past-tense verb for the status/info text ("Encrypted").
+     */
+    void runDirectoryCrypto(
+        const QString& dialogTitle,
+        const char* opScope,
+        int (*op)(const std::filesystem::path&,
+                  const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>&),
+        const char* eventName,
+        const QString& verbPast);
+
+    /**
+     * @brief Emit the canonical "master key unavailable" error.
+     *
+     * Logs the standard `event=auth.unlock result=fail` line and raises
+     * errorOccurred() with the fixed vault-access message. Callers still own the
+     * unlock() window and the bail-out that follows.
+     */
+    void reportMasterKeyUnavailable();
+
+    /**
+     * @brief Log an add-account failure and surface it to the UI.
+     *
+     * Shared by the deferred and immediate add paths. The caller has already
+     * cleansed the secure fields before calling this.
+     *
+     * @param what     Exception text (`std::exception::what()`).
+     * @param deferred Whether the add ran from a queued pending action.
+     */
+    void logAddAccountFailure(const char* what, bool deferred);
+
+    /**
+     * @brief Log an add-account success, refresh the model, and emit the
+     *        vault-changed signals. Shared by the deferred and immediate paths.
+     * @param service  Platform name that was added (for the service_len field).
+     * @param deferred Whether the add ran from a queued pending action.
+     */
+    void finishAddAccount(const QString& service, bool deferred);
+
+    /**
      * @brief Convert a QString to a secure wide-character string.
      *
      * The returned string uses locked memory pages to prevent the
