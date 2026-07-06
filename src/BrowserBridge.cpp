@@ -44,6 +44,58 @@ namespace seal
 namespace
 {
 
+// Log a named-pipe creation failure with the captured last-error. Call it
+// immediately after createPipeInstance() returns INVALID_HANDLE_VALUE, before
+// another Win32 call can clobber GetLastError().
+void logPipeCreateFailed()
+{
+    const DWORD err = GetLastError();
+    qCWarning(logBridge).noquote() << QString::fromStdString(
+        seal::diag::joinFields({"event=fill.bridge.start_failed",
+                                "reason=pipe_create_failed",
+                                seal::diag::kv("gle", static_cast<unsigned int>(err))}));
+}
+
+// Wait for `overlapped` to complete, polling `isStopping` every pollMs. When
+// timeoutMs != 0, gives up after that cumulative wait. Returns true on
+// completion (WAIT_OBJECT_0); on stop / timeout / wait failure it cancels the
+// pending I/O and returns false. Shared by the length- and payload-read phases.
+template <typename StopFn>
+bool waitOverlappedOrStop(
+    HANDLE pipe, OVERLAPPED& overlapped, DWORD pollMs, DWORD timeoutMs, StopFn isStopping)
+{
+    DWORD elapsedMs = 0;
+    while (true)
+    {
+        const DWORD wait = WaitForSingleObject(overlapped.hEvent, pollMs);
+        if (isStopping())
+        {
+            CancelIoEx(pipe, &overlapped);
+            return false;
+        }
+        if (wait == WAIT_OBJECT_0)
+        {
+            return true;
+        }
+        if (wait == WAIT_TIMEOUT)
+        {
+            if (timeoutMs != 0)
+            {
+                elapsedMs += pollMs;
+                if (elapsedMs >= timeoutMs)
+                {
+                    CancelIoEx(pipe, &overlapped);
+                    return false;
+                }
+            }
+            continue;
+        }
+        // WAIT_FAILED / WAIT_ABANDONED - treat as fatal.
+        CancelIoEx(pipe, &overlapped);
+        return false;
+    }
+}
+
 constexpr DWORD kPipeInBufferBytes = 8192;
 constexpr DWORD kPipeOutBufferBytes = 8192;
 constexpr DWORD kAcceptBackoffMs = 50;
@@ -439,11 +491,7 @@ bool BrowserBridge::Impl::startImpl()
     HANDLE first = createPipeInstance(true);
     if (first == INVALID_HANDLE_VALUE)
     {
-        const DWORD err = GetLastError();
-        qCWarning(logBridge).noquote() << QString::fromStdString(
-            seal::diag::joinFields({"event=fill.bridge.start_failed",
-                                    "reason=pipe_create_failed",
-                                    seal::diag::kv("gle", static_cast<unsigned int>(err))}));
+        logPipeCreateFailed();
         return false;
     }
     m_ListenPipe = first;
@@ -692,25 +740,9 @@ bool BrowserBridge::Impl::readFramedMessage(HANDLE pipe,
             return false;
         }
     }
-    while (true)
+    // Length prefix: idle is legit (no clicks for hours), so wait indefinitely.
+    if (!waitOverlappedOrStop(pipe, overlapped, kStopPollMs, 0, isStopping))
     {
-        const DWORD wait = WaitForSingleObject(overlapped.hEvent, kStopPollMs);
-        if (isStopping())
-        {
-            CancelIoEx(pipe, &overlapped);
-            return false;
-        }
-        if (wait == WAIT_OBJECT_0)
-        {
-            break;
-        }
-        if (wait == WAIT_TIMEOUT)
-        {
-            // Idle is fine; the poll interval keeps shutdown responsive.
-            continue;
-        }
-        // WAIT_FAILED / WAIT_ABANDONED - treat as fatal.
-        CancelIoEx(pipe, &overlapped);
         return false;
     }
     if (!GetOverlappedResult(pipe, &overlapped, &bytesRead, FALSE) ||
@@ -733,32 +765,10 @@ bool BrowserBridge::Impl::readFramedMessage(HANDLE pipe,
             return false;
         }
     }
-    // Payload phase: stricter timeout. A peer that prefix-then-stalls
-    // is suspicious; tear the connection down.
-    DWORD elapsedMs = 0;
-    while (true)
+    // Payload phase: stricter timeout. A peer that prefix-then-stalls is
+    // suspicious; tear the connection down after kMessageReadTimeoutMs.
+    if (!waitOverlappedOrStop(pipe, overlapped, kStopPollMs, kMessageReadTimeoutMs, isStopping))
     {
-        const DWORD wait = WaitForSingleObject(overlapped.hEvent, kStopPollMs);
-        if (isStopping())
-        {
-            CancelIoEx(pipe, &overlapped);
-            return false;
-        }
-        if (wait == WAIT_OBJECT_0)
-        {
-            break;
-        }
-        if (wait == WAIT_TIMEOUT)
-        {
-            elapsedMs += kStopPollMs;
-            if (elapsedMs >= kMessageReadTimeoutMs)
-            {
-                CancelIoEx(pipe, &overlapped);
-                return false;
-            }
-            continue;
-        }
-        CancelIoEx(pipe, &overlapped);
         return false;
     }
     DWORD readBytes = 0;
@@ -849,11 +859,7 @@ void BrowserBridge::Impl::acceptorLoop(std::stop_token stopToken)
             inst = createPipeInstance(false);
             if (inst == INVALID_HANDLE_VALUE)
             {
-                const DWORD err = GetLastError();
-                qCWarning(logBridge).noquote() << QString::fromStdString(seal::diag::joinFields(
-                    {"event=fill.bridge.start_failed",
-                     "reason=pipe_create_failed",
-                     seal::diag::kv("gle", static_cast<unsigned int>(err))}));
+                logPipeCreateFailed();
                 reapFinished();
                 Sleep(kAcceptBackoffMs);
                 continue;
