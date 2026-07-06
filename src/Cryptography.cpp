@@ -312,7 +312,11 @@ Cryptography::PacketHeader Cryptography::makeHeader(const seal::cfg::KdfParams& 
 {
     PacketHeader h;
     h.kdf = kdf;
-    std::memcpy(h.bytes.data(), seal::cfg::AAD_HDR, seal::cfg::MAGIC_LEN);
+    // Copy the magic bytes into the fixed header buffer; the destination
+    // capacity is proven at compile time, so no overflow is constructible.
+    static_assert(sizeof(h.bytes) >= seal::cfg::MAGIC_LEN,
+                  "packet header buffer must hold the magic bytes");
+    std::copy_n(seal::cfg::AAD_HDR, seal::cfg::MAGIC_LEN, h.bytes.begin());
     h.bytes[4] = kdf.alg;
     h.bytes[5] = kdf.log2N;
     h.bytes[6] = kdf.r;
@@ -339,7 +343,11 @@ Cryptography::PacketHeader Cryptography::parsePacketHeader(std::span<const unsig
         {
             throw std::runtime_error("Rejected KDF parameters (out of accepted range)");
         }
-        std::memcpy(h.bytes.data(), data.data(), seal::cfg::HDR_LEN);
+        // Source length was validated (data.size() >= HDR_LEN) above, and the
+        // destination capacity is proven here, so neither buffer can overflow.
+        static_assert(sizeof(h.bytes) >= seal::cfg::HDR_LEN,
+                      "packet header buffer must hold the full header");
+        std::copy_n(data.data(), seal::cfg::HDR_LEN, h.bytes.begin());
         h.size = seal::cfg::HDR_LEN;
         return h;
     }
