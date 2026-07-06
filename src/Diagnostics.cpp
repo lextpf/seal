@@ -240,6 +240,11 @@ std::string reasonFromMessage(std::string_view message)
     return "exception";
 }
 
+std::string errorFields(std::string_view what)
+{
+    return kv("reason", reasonFromMessage(what)) + " " + kv("detail", sanitizeAscii(what));
+}
+
 std::string kv(std::string_view key, std::string_view value)
 {
     std::string out;
@@ -254,6 +259,11 @@ std::string kv(std::string_view key, std::string_view value)
 std::string kv(std::string_view key, const std::string& value)
 {
     return kv(key, std::string_view(value));
+}
+
+std::string kv(std::string_view key, const char* value)
+{
+    return kv(key, value != nullptr ? std::string_view(value) : std::string_view());
 }
 
 std::string kv(std::string_view key, bool value)

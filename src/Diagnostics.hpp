@@ -166,6 +166,21 @@ std::string pathSummary(std::string_view path, std::string_view prefix);
 std::string reasonFromMessage(std::string_view message);
 
 /**
+ * @brief Build the standard `reason=<token> detail=<text>` field pair for an
+ *        exception message.
+ * @ingroup Logging
+ *
+ * Combines reasonFromMessage() and sanitizeAscii() into the two whitespace-free
+ * tokens that every `result=fail` catch block appends. Returned pre-joined by a
+ * single space so it drops into a joinFields()/writeCliDiag() field list as one
+ * element and expands to two fields on output.
+ *
+ * @param what Free-form error text (typically `std::exception::what()`).
+ * @return The tokens `reason=<stable> detail=<sanitised>` joined by one space.
+ */
+std::string errorFields(std::string_view what);
+
+/**
  * @brief Format a `key=value` token from a string value.
  * @ingroup Logging
  *
@@ -181,6 +196,16 @@ std::string kv(std::string_view key, std::string_view value);
 
 /// @copydoc kv(std::string_view, std::string_view)
 std::string kv(std::string_view key, const std::string& value);
+
+/**
+ * @brief Format a `key=value` token from a C string.
+ * @ingroup Logging
+ *
+ * Required overload: without it a `const char*` (or string-literal) value binds
+ * to the `bool` overload via pointer-to-bool conversion and silently logs
+ * `true`. A null pointer normalises to `none`.
+ */
+std::string kv(std::string_view key, const char* value);
 
 /**
  * @brief Format a boolean `key=value` token as `key=true` or `key=false`.
