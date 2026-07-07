@@ -6,7 +6,9 @@
 
 using seal::signer::BrowserKind;
 using seal::signer::browserKindToken;
+using seal::signer::browserPublisherMatches;
 using seal::signer::identifyBrowser;
+using seal::signer::isShellImage;
 
 namespace
 {
@@ -55,6 +57,37 @@ TEST(SignerFamilyTest, TokensAreStableAndLowercase)
     EXPECT_EQ(browserKindToken(BrowserKind::Edge), "edge");
     EXPECT_EQ(browserKindToken(BrowserKind::Firefox), "firefox");
     EXPECT_EQ(browserKindToken(BrowserKind::Unknown), "unknown");
+}
+
+TEST(SignerFamilyTest, BrowserPublisherPolicyAcceptsExpectedVendors)
+{
+    EXPECT_TRUE(browserPublisherMatches(BrowserKind::Chrome, L"Google LLC"));
+    EXPECT_TRUE(browserPublisherMatches(BrowserKind::Edge, L"Microsoft Corporation"));
+    EXPECT_TRUE(browserPublisherMatches(BrowserKind::Brave, L"Brave Software, Inc."));
+    EXPECT_TRUE(browserPublisherMatches(BrowserKind::Firefox, L"Mozilla Corporation"));
+    EXPECT_TRUE(browserPublisherMatches(BrowserKind::Opera, L"Opera Norway AS"));
+    EXPECT_TRUE(browserPublisherMatches(BrowserKind::Vivaldi, L"Vivaldi Technologies AS"));
+}
+
+TEST(SignerFamilyTest, BrowserPublisherPolicyRejectsRenamedTrustedExecutable)
+{
+    EXPECT_FALSE(browserPublisherMatches(BrowserKind::Chrome, L"Contoso Code Signing LLC"));
+    EXPECT_FALSE(browserPublisherMatches(BrowserKind::Firefox, L"Google LLC"));
+    EXPECT_FALSE(browserPublisherMatches(BrowserKind::Unknown, L"Google LLC"));
+    EXPECT_FALSE(browserPublisherMatches(BrowserKind::Chrome, L""));
+}
+
+TEST(SignerFamilyTest, ShellHopPolicyRejectsBasenameOnlyAndUserWritablePaths)
+{
+    EXPECT_FALSE(isShellImage(L"cmd.exe"));
+    EXPECT_FALSE(isShellImage(L"powershell.exe"));
+    EXPECT_FALSE(isShellImage(L"pwsh.exe"));
+    EXPECT_FALSE(isShellImage(L"conhost.exe"));
+
+    EXPECT_FALSE(isShellImage(L"C:\\Users\\Alice\\AppData\\Local\\Temp\\cmd.exe"));
+    EXPECT_FALSE(isShellImage(L"C:\\Users\\Alice\\AppData\\Local\\Temp\\powershell.exe"));
+    EXPECT_FALSE(isShellImage(L"C:\\Users\\Alice\\AppData\\Local\\Temp\\pwsh.exe"));
+    EXPECT_FALSE(isShellImage(L"C:\\Users\\Alice\\AppData\\Local\\Temp\\conhost.exe"));
 }
 
 }  // namespace
