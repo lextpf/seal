@@ -17,6 +17,8 @@
  *  - @ref extractKey + @ref keysMatch - fuzzy match suitable for
  *    free-form record labels like "PayPal Login" or "Bob's Gmail". Both
  *    sides reduce to a single brand-name token; equality wins.
+ *  - @ref platformMatchesHostForSecretRelease - strict browser credential
+ *    release gate. Bare labels deliberately fail closed there.
  *
  * ## :material-link-variant: Matching Flow
  *
@@ -187,13 +189,21 @@ inline std::string extractHost(std::string_view input)
 }
 
 /**
- * @brief Compare two already-extracted hosts with dot-boundary suffix match.
+ * @brief Directional dot-boundary host match: does @p recordHost authorize
+ *        @p pageHost?
  *
- * Returns true when the hosts are identical, or when either is a
- * dot-aligned suffix of the other. The bidirectional match handles the
- * case where the user saved a more-specific URL in the record platform
- * (e.g., `accounts.google.com`) but lands on the eTLD+1 page
- * (`google.com`), and vice versa.
+ * Returns true when the hosts are identical, or when @p pageHost is a
+ * dot-aligned SUBDOMAIN of @p recordHost - the parent record authorizes its
+ * children (a record for `google.com` binds `accounts.google.com`). The
+ * reverse direction is deliberately NOT matched: a record for a specific
+ * subdomain (`login.example.com`) does NOT authorize its parent
+ * (`example.com`) or any sibling. This directionality closes the
+ * "child authorizes parent" widening flagged in security review while
+ * preserving the common "saved the apex, log in on a subdomain" flow.
+ *
+ * @note The parent->child direction still binds an apex record to ANY
+ *       subdomain, including third-party ones on shared-suffix hosts
+ *       (`github.io`); a public-suffix-aware pass is future work.
  *
  * Callers MUST pass strings already returned by extractHost() (or
  * already-normalised equivalents). Empty inputs return false.
@@ -208,17 +218,13 @@ inline bool hostsMatch(std::string_view recordHost, std::string_view pageHost) n
     {
         return true;
     }
-    // pageHost is more specific: e.g., accounts.google.com vs google.com.
+    // pageHost is a subdomain of recordHost: e.g., record google.com authorizes
+    // accounts.google.com. The reverse (recordHost more specific than pageHost)
+    // is intentionally NOT matched - a subdomain record must not authorize its
+    // parent domain or its siblings.
     if (pageHost.size() > recordHost.size() + 1 &&
         pageHost[pageHost.size() - recordHost.size() - 1] == '.' &&
         pageHost.compare(pageHost.size() - recordHost.size(), recordHost.size(), recordHost) == 0)
-    {
-        return true;
-    }
-    // recordHost is more specific.
-    if (recordHost.size() > pageHost.size() + 1 &&
-        recordHost[recordHost.size() - pageHost.size() - 1] == '.' &&
-        recordHost.compare(recordHost.size() - pageHost.size(), pageHost.size(), pageHost) == 0)
     {
         return true;
     }
@@ -464,6 +470,36 @@ inline bool platformMatchesHost(std::string_view recordPlatform, std::string_vie
     const std::string recordKey = extractKey(recordPlatform);
     const std::string pageKey = extractKey(page);
     return !recordKey.empty() && !pageKey.empty() && keysMatch(recordKey, pageKey);
+}
+
+/**
+ * @brief Strict browser credential release gate.
+ *
+ * Browser-fill secret release needs a stronger policy than display/search
+ * matching: the saved platform must itself contain a real domain/URL, and
+ * that domain must match the live page host by the dot-boundary
+ * @ref hostsMatch rule. Free-form labels such as "PayPal" return false even
+ * when their fuzzy key would match `paypal.com`; the user must store
+ * `paypal.com` or a URL to enable browser auto-stage/release.
+ *
+ * @param recordPlatform The record's stored platform label.
+ * @param pageHost       The live page hostname.
+ * @return true only for strict domain-bound matches.
+ */
+inline bool platformMatchesHostForSecretRelease(std::string_view recordPlatform,
+                                                std::string_view pageHost)
+{
+    const std::string page = extractHost(pageHost);
+    if (page.empty())
+    {
+        return false;
+    }
+    const std::string recordHost = extractHost(recordPlatform);
+    if (recordHost.empty() || !recordHost.contains('.'))
+    {
+        return false;
+    }
+    return hostsMatch(recordHost, page);
 }
 
 }  // namespace seal::url
