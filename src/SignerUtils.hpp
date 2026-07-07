@@ -69,6 +69,8 @@
 #include <windows.h>
 
 #include <bcrypt.h>
+#include <knownfolders.h>
+#include <shlobj_core.h>
 #include <tlhelp32.h>
 #include <wincrypt.h>
 #include <wintrust.h>
@@ -76,6 +78,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // Microsoft headers split SoftPub.h / wincrypt.h between SDK versions; declare
@@ -92,6 +95,7 @@
 #pragma comment(lib, "Crypt32.lib")
 #pragma comment(lib, "Advapi32.lib")
 #pragma comment(lib, "Bcrypt.lib")
+#pragma comment(lib, "Shell32.lib")
 
 namespace seal::signer
 {
@@ -245,6 +249,149 @@ inline std::string hexEncode(const unsigned char* data, std::size_t len)
     return out;
 }
 
+inline bool asciiIEquals(std::wstring_view a, std::wstring_view b) noexcept
+{
+    if (a.size() != b.size())
+    {
+        return false;
+    }
+    for (std::size_t i = 0; i < a.size(); ++i)
+    {
+        if (asciiLower(a[i]) != asciiLower(b[i]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+template <std::size_t N>
+inline bool matchesAnyAsciiI(std::wstring_view value,
+                             const std::array<std::wstring_view, N>& expected) noexcept
+{
+    if (value.empty())
+    {
+        return false;
+    }
+    for (const auto& item : expected)
+    {
+        if (asciiIEquals(value, item))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline std::wstring normalisedPathForCompare(std::wstring path)
+{
+    if (path.rfind(LR"(\\?\)", 0) == 0 || path.rfind(LR"(\??\)", 0) == 0)
+    {
+        path.erase(0, 4);
+    }
+
+    for (auto& c : path)
+    {
+        if (c == L'/')
+        {
+            c = L'\\';
+        }
+        c = asciiLower(c);
+    }
+
+    while (!path.empty() && path.back() == L'\\')
+    {
+        path.pop_back();
+    }
+    return path;
+}
+
+inline std::wstring appendNormalisedPath(std::wstring base, std::wstring_view tail)
+{
+    if (!base.empty() && base.back() != L'\\')
+    {
+        base.push_back(L'\\');
+    }
+    base.append(tail);
+    return normalisedPathForCompare(std::move(base));
+}
+
+inline bool pathEqualsOrIsUnder(std::wstring_view path, std::wstring_view root) noexcept
+{
+    if (root.empty() || path.size() < root.size() || path.substr(0, root.size()) != root)
+    {
+        return false;
+    }
+    return path.size() == root.size() || path[root.size()] == L'\\';
+}
+
+inline std::wstring windowsDirectory()
+{
+    wchar_t buf[MAX_PATH * 2]{};
+    const UINT chars = GetWindowsDirectoryW(buf, static_cast<UINT>(std::size(buf)));
+    if (chars == 0 || chars >= std::size(buf))
+    {
+        return {};
+    }
+    return std::wstring(buf, chars);
+}
+
+inline std::wstring knownFolderPath(REFKNOWNFOLDERID folderId)
+{
+    PWSTR raw = nullptr;
+    if (FAILED(SHGetKnownFolderPath(folderId, KF_FLAG_DEFAULT, nullptr, &raw)) || raw == nullptr)
+    {
+        return {};
+    }
+    std::wstring path(raw);
+    CoTaskMemFree(raw);
+    return path;
+}
+
+inline PCCERT_CONTEXT findSignerCertificate(const std::wstring& path, CryptQueryGuard& query)
+{
+    DWORD encoding = 0;
+    DWORD contentType = 0;
+    DWORD formatType = 0;
+    if (!CryptQueryObject(CERT_QUERY_OBJECT_FILE,
+                          path.c_str(),
+                          CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+                          CERT_QUERY_FORMAT_FLAG_BINARY,
+                          0,
+                          &encoding,
+                          &contentType,
+                          &formatType,
+                          &query.m_Store,
+                          &query.m_Msg,
+                          nullptr))
+    {
+        return nullptr;
+    }
+
+    DWORD signerInfoBytes = 0;
+    if (!CryptMsgGetParam(query.m_Msg, CMSG_SIGNER_INFO_PARAM, 0, nullptr, &signerInfoBytes))
+    {
+        return nullptr;
+    }
+    std::vector<BYTE> signerInfoBuf(signerInfoBytes);
+    if (!CryptMsgGetParam(
+            query.m_Msg, CMSG_SIGNER_INFO_PARAM, 0, signerInfoBuf.data(), &signerInfoBytes))
+    {
+        return nullptr;
+    }
+    const auto* signerInfo = reinterpret_cast<const CMSG_SIGNER_INFO*>(signerInfoBuf.data());
+
+    CERT_INFO certInfo{};
+    certInfo.Issuer = signerInfo->Issuer;
+    certInfo.SerialNumber = signerInfo->SerialNumber;
+    return CertFindCertificateInStore(query.m_Store,
+                                      X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+                                      0,
+                                      CERT_FIND_SUBJECT_CERT,
+                                      &certInfo,
+                                      nullptr);
+}
+
 }  // namespace detail
 
 /**
@@ -263,47 +410,8 @@ inline std::string hexEncode(const unsigned char* data, std::size_t len)
  */
 inline std::string extractSignerIdentityFromFile(const std::wstring& path)
 {
-    DWORD encoding = 0;
-    DWORD contentType = 0;
-    DWORD formatType = 0;
     detail::CryptQueryGuard query;
-    if (!CryptQueryObject(CERT_QUERY_OBJECT_FILE,
-                          path.c_str(),
-                          CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
-                          CERT_QUERY_FORMAT_FLAG_BINARY,
-                          0,
-                          &encoding,
-                          &contentType,
-                          &formatType,
-                          &query.m_Store,
-                          &query.m_Msg,
-                          nullptr))
-    {
-        return {};
-    }
-
-    DWORD signerInfoBytes = 0;
-    if (!CryptMsgGetParam(query.m_Msg, CMSG_SIGNER_INFO_PARAM, 0, nullptr, &signerInfoBytes))
-    {
-        return {};
-    }
-    std::vector<BYTE> signerInfoBuf(signerInfoBytes);
-    if (!CryptMsgGetParam(
-            query.m_Msg, CMSG_SIGNER_INFO_PARAM, 0, signerInfoBuf.data(), &signerInfoBytes))
-    {
-        return {};
-    }
-    const auto* signerInfo = reinterpret_cast<const CMSG_SIGNER_INFO*>(signerInfoBuf.data());
-
-    CERT_INFO certInfo{};
-    certInfo.Issuer = signerInfo->Issuer;
-    certInfo.SerialNumber = signerInfo->SerialNumber;
-    PCCERT_CONTEXT certContext = CertFindCertificateInStore(query.m_Store,
-                                                            X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
-                                                            0,
-                                                            CERT_FIND_SUBJECT_CERT,
-                                                            &certInfo,
-                                                            nullptr);
+    PCCERT_CONTEXT certContext = detail::findSignerCertificate(path, query);
     if (certContext == nullptr)
     {
         return {};
@@ -348,6 +456,40 @@ inline std::string extractSignerIdentityFromFile(const std::wstring& path)
         return {};
     }
     return detail::hexEncode(hash.data(), hash.size());
+}
+
+/**
+ * @brief Extract the Authenticode signer display name from a signed PE.
+ *
+ * This is used only for browser-vendor pinning. It is deliberately combined
+ * with @ref winVerifyTrustOk by callers; the display name alone is not a trust
+ * decision.
+ */
+inline std::wstring extractSignerPublisherFromFile(const std::wstring& path)
+{
+    detail::CryptQueryGuard query;
+    PCCERT_CONTEXT certContext = detail::findSignerCertificate(path, query);
+    if (certContext == nullptr)
+    {
+        return {};
+    }
+
+    const DWORD chars =
+        CertGetNameStringW(certContext, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, nullptr, nullptr, 0);
+    if (chars <= 1)
+    {
+        CertFreeCertificateContext(certContext);
+        return {};
+    }
+    std::vector<wchar_t> buf(chars, L'\0');
+    const DWORD written = CertGetNameStringW(
+        certContext, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, nullptr, buf.data(), chars);
+    CertFreeCertificateContext(certContext);
+    if (written <= 1)
+    {
+        return {};
+    }
+    return std::wstring(buf.data(), written - 1);
 }
 
 /**
@@ -590,25 +732,215 @@ inline std::string_view browserKindToken(BrowserKind kind) noexcept
 }
 
 /**
- * @brief Whether an image basename is a Windows shell that the bridge
- * tolerates as an intermediate hop in the host's launch chain.
+ * @brief Verify that a signer display name belongs to the expected browser vendor.
+ *
+ * The input is the Authenticode signer simple display name returned by
+ * @ref extractSignerPublisherFromFile. This is a second gate after
+ * @ref winVerifyTrustOk and defeats the "trusted executable renamed to
+ * chrome.exe" class: the filename must identify a browser family and the
+ * signer must be that family/vendor.
+ */
+inline bool browserPublisherMatches(BrowserKind kind, std::wstring_view publisher) noexcept
+{
+    switch (kind)
+    {
+        case BrowserKind::Chrome:
+            return detail::matchesAnyAsciiI(publisher,
+                                            std::array<std::wstring_view, 1>{L"Google LLC"});
+        case BrowserKind::Edge:
+            return detail::matchesAnyAsciiI(
+                publisher, std::array<std::wstring_view, 1>{L"Microsoft Corporation"});
+        case BrowserKind::Brave:
+            return detail::matchesAnyAsciiI(
+                publisher, std::array<std::wstring_view, 1>{L"Brave Software, Inc."});
+        case BrowserKind::Opera:
+            return detail::matchesAnyAsciiI(publisher,
+                                            std::array<std::wstring_view, 1>{L"Opera Norway AS"});
+        case BrowserKind::Vivaldi:
+            return detail::matchesAnyAsciiI(
+                publisher, std::array<std::wstring_view, 1>{L"Vivaldi Technologies AS"});
+        case BrowserKind::Chromium:
+            return detail::matchesAnyAsciiI(
+                publisher,
+                std::array<std::wstring_view, 2>{L"Google LLC", L"The Chromium Authors"});
+        case BrowserKind::Firefox:
+            return detail::matchesAnyAsciiI(
+                publisher, std::array<std::wstring_view, 1>{L"Mozilla Corporation"});
+        case BrowserKind::LibreWolf:
+            return detail::matchesAnyAsciiI(publisher,
+                                            std::array<std::wstring_view, 1>{L"LibreWolf"});
+        case BrowserKind::Waterfox:
+            return detail::matchesAnyAsciiI(
+                publisher,
+                std::array<std::wstring_view, 2>{L"Waterfox Limited", L"BrowserWorks Ltd"});
+        case BrowserKind::Floorp:
+            return detail::matchesAnyAsciiI(
+                publisher, std::array<std::wstring_view, 2>{L"Ablaze", L"Ablaze, Inc."});
+        case BrowserKind::Zen:
+            return detail::matchesAnyAsciiI(publisher,
+                                            std::array<std::wstring_view, 1>{L"Zen Browser"});
+        case BrowserKind::Thorium:
+            return detail::matchesAnyAsciiI(
+                publisher, std::array<std::wstring_view, 2>{L"Alex313031", L"The Thorium Authors"});
+        case BrowserKind::Unknown:
+        case BrowserKind::Count:
+        default:
+            return false;
+    }
+}
+
+/**
+ * @brief Full browser image trust check for the native-messaging boundary.
+ */
+inline bool isTrustedBrowserImage(const std::wstring& imagePath)
+{
+    const BrowserKind kind = identifyBrowser(imagePath);
+    if (kind == BrowserKind::Unknown)
+    {
+        return false;
+    }
+    if (!winVerifyTrustOk(imagePath))
+    {
+        return false;
+    }
+    return browserPublisherMatches(kind, extractSignerPublisherFromFile(imagePath));
+}
+
+/**
+ * @brief A specific Windows shell executable tolerated as a browser-launch hop.
+ */
+enum class ShellKind
+{
+    Unknown = 0,
+    Cmd,
+    WindowsPowerShell,
+    PowerShell,
+    ConsoleHost
+};
+
+/**
+ * @brief Classify a process image as a shell hop candidate by basename.
+ */
+inline ShellKind identifyShell(const std::wstring& imagePath)
+{
+    const std::wstring basename = detail::lowerBasename(imagePath);
+    if (basename == L"cmd.exe")
+    {
+        return ShellKind::Cmd;
+    }
+    if (basename == L"powershell.exe")
+    {
+        return ShellKind::WindowsPowerShell;
+    }
+    if (basename == L"pwsh.exe")
+    {
+        return ShellKind::PowerShell;
+    }
+    if (basename == L"conhost.exe")
+    {
+        return ShellKind::ConsoleHost;
+    }
+    return ShellKind::Unknown;
+}
+
+/**
+ * @brief Verify that a signer display name belongs to Microsoft.
+ *
+ * Windows inbox binaries commonly report "Microsoft Windows", while
+ * PowerShell 7 packages commonly report "Microsoft Corporation".
+ */
+inline bool shellPublisherMatches(ShellKind kind, std::wstring_view publisher) noexcept
+{
+    if (kind == ShellKind::Unknown)
+    {
+        return false;
+    }
+    return detail::matchesAnyAsciiI(
+        publisher,
+        std::array<std::wstring_view, 2>{L"Microsoft Windows", L"Microsoft Corporation"});
+}
+
+/**
+ * @brief Path allow-list for shell hop candidates.
+ *
+ * This is deliberately narrower than @ref identifyShell: basename alone is not
+ * enough for a trust decision. Inbox shells must be under the real Windows
+ * directory; PowerShell 7 must be under a machine-wide Program Files
+ * PowerShell install.
+ */
+inline bool isShellPathAllowed(ShellKind kind, const std::wstring& imagePath)
+{
+    const std::wstring image = detail::normalisedPathForCompare(imagePath);
+    if (image.empty())
+    {
+        return false;
+    }
+
+    const std::wstring windows = detail::normalisedPathForCompare(detail::windowsDirectory());
+    if (kind == ShellKind::Cmd)
+    {
+        return image == detail::appendNormalisedPath(windows, LR"(system32\cmd.exe)") ||
+               image == detail::appendNormalisedPath(windows, LR"(syswow64\cmd.exe)");
+    }
+    if (kind == ShellKind::WindowsPowerShell)
+    {
+        return image == detail::appendNormalisedPath(
+                            windows, LR"(system32\windowspowershell\v1.0\powershell.exe)") ||
+               image == detail::appendNormalisedPath(
+                            windows, LR"(syswow64\windowspowershell\v1.0\powershell.exe)");
+    }
+    if (kind == ShellKind::ConsoleHost)
+    {
+        return image == detail::appendNormalisedPath(windows, LR"(system32\conhost.exe)") ||
+               image == detail::appendNormalisedPath(windows, LR"(syswow64\conhost.exe)");
+    }
+    if (kind == ShellKind::PowerShell)
+    {
+        const std::wstring programFiles = detail::appendNormalisedPath(
+            detail::knownFolderPath(FOLDERID_ProgramFiles), L"PowerShell");
+        const std::wstring programFilesX86 = detail::appendNormalisedPath(
+            detail::knownFolderPath(FOLDERID_ProgramFilesX86), L"PowerShell");
+        return detail::pathEqualsOrIsUnder(image, programFiles) ||
+               detail::pathEqualsOrIsUnder(image, programFilesX86);
+    }
+    return false;
+}
+
+/**
+ * @brief Whether an image path is an allowed shell-hop location.
+ *
+ * This helper intentionally rejects basename-only and user-writable lookalike
+ * paths. It is only the path allow-list; use @ref isTrustedShellImage for a
+ * bridge trust decision.
+ */
+inline bool isShellImage(const std::wstring& imagePath)
+{
+    const ShellKind kind = identifyShell(imagePath);
+    return kind != ShellKind::Unknown && isShellPathAllowed(kind, imagePath);
+}
+
+/**
+ * @brief Full shell-hop image trust check for the native-messaging boundary.
  *
  * Chromium on Windows occasionally wraps native-messaging host launches
  * in cmd.exe (depends on Chrome version, manifest layout, and
  * intermediate path quoting - the bridge sees the host's parent as
  * cmd.exe and the real browser as the grandparent). The accept loop
- * walks the chain through these allow-listed shells looking for a
- * signed-browser ancestor.
+ * walks the chain through trusted shell hops looking for a signed-browser
+ * ancestor.
  */
-inline bool isShellImage(const std::wstring& imagePath)
+inline bool isTrustedShellImage(const std::wstring& imagePath)
 {
-    static constexpr std::array<std::wstring_view, 4> kShells = {{
-        L"cmd.exe",
-        L"powershell.exe",
-        L"pwsh.exe",
-        L"conhost.exe",
-    }};
-    return detail::matchesAny(detail::lowerBasename(imagePath), kShells);
+    const ShellKind kind = identifyShell(imagePath);
+    if (kind == ShellKind::Unknown || !isShellPathAllowed(kind, imagePath))
+    {
+        return false;
+    }
+    if (!winVerifyTrustOk(imagePath))
+    {
+        return false;
+    }
+    return shellPublisherMatches(kind, extractSignerPublisherFromFile(imagePath));
 }
 
 }  // namespace seal::signer
