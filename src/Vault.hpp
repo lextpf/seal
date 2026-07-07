@@ -179,6 +179,23 @@ DecryptedCredential decryptCredentialOnDemand(
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password);
 
 /**
+ * @brief Decrypt only the username portion of a credential record.
+ *
+ * The current packet format stores `username\0password` in one encrypted blob,
+ * so the blob plaintext is still produced transiently. This helper copies only
+ * the username into locked memory and wipes the combined plaintext buffer
+ * immediately, avoiding a second locked password field for username injection.
+ *
+ * @param record   The vault record whose username to decrypt.
+ * @param password Master password for key derivation.
+ * @return Decrypted username in locked memory.
+ * @throw std::runtime_error on authentication failure or malformed data.
+ */
+seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> decryptUsernameOnDemand(
+    const VaultRecord& record,
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password);
+
+/**
  * @brief Encrypt a credential pair into a new VaultRecord.
  *
  * The record is marked dirty so the next save writes it. The username and

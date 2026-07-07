@@ -792,6 +792,60 @@ DecryptedCredential decryptCredentialOnDemand(
     return cred;
 }
 
+seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> decryptUsernameOnDemand(
+    const VaultRecord& record,
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password)
+{
+#ifdef USE_QT_UI
+    qCDebug(logVault).noquote() << QString::fromStdString(seal::diag::joinFields(
+        {"event=credential.decrypt_username.begin",
+         seal::diag::kv("platform_len", record.platform.size()),
+         seal::diag::kv("encrypted_blob_len", record.encryptedBlob.size())}));
+#endif
+    auto plainBytes = seal::Cryptography::decryptPacket(
+        std::span<const unsigned char>(record.encryptedBlob), password);
+
+    const char* data = reinterpret_cast<const char*>(plainBytes.data());
+    const size_t len = plainBytes.size();
+
+    size_t sep = len;
+    for (size_t i = 0; i < len; ++i)
+    {
+        if (data[i] == '\0')
+        {
+            sep = i;
+            break;
+        }
+    }
+
+    if (sep == len)
+    {
+#ifdef USE_QT_UI
+        qCWarning(logVault).noquote() << QString::fromStdString(seal::diag::joinFields(
+            {"event=credential.decrypt_username.finish",
+             "result=fail",
+             "reason=malformed_blob",
+             seal::diag::kv("encrypted_blob_len", record.encryptedBlob.size())}));
+#endif
+        seal::Cryptography::cleanseString(plainBytes);
+        throw std::runtime_error("Malformed credential blob");
+    }
+
+    std::string userUtf8(data, sep);
+    seal::Cryptography::cleanseString(plainBytes);
+
+    auto username = seal::utils::utf8ToSecureWide(userUtf8);
+    wipeStdString(userUtf8);
+
+#ifdef USE_QT_UI
+    qCDebug(logVault).noquote() << QString::fromStdString(
+        seal::diag::joinFields({"event=credential.decrypt_username.finish",
+                                "result=ok",
+                                seal::diag::kv("username_chars", username.size())}));
+#endif
+    return username;
+}
+
 VaultRecord encryptCredential(
     const std::string& platform,
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& username,
