@@ -217,6 +217,17 @@ TEST_F(VaultRoundtripTest, RekeySwapsPasswordAtomicallyAndUpgradesPackets)
     fs::remove(tmp);
 }
 
+TEST_F(VaultRoundtripTest, UsernameOnlyDecryptReturnsUsernameWithoutCredentialPair)
+{
+    const auto pw = goldenPassword();
+    auto records = seal::loadVaultIndex(s_goldenVault, pw);
+    ASSERT_EQ(records.size(), std::size(kGoldenEntries));
+
+    auto username = seal::decryptUsernameOnDemand(records[0], pw);
+    EXPECT_EQ(seal::utils::secureWideToUtf8(username), kGoldenEntries[0].username);
+    seal::Cryptography::cleanseString(username);
+}
+
 TEST_F(VaultRoundtripTest, RekeyWithWrongCurrentPasswordLeavesFileUntouched)
 {
     const auto bad = wrongPassword();
