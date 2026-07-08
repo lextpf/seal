@@ -17,8 +17,8 @@ namespace
 std::string buildValid(const char* tag = "password", const std::string& host = "example.com")
 {
     return std::string("{\"v\":1,\"x\":100,\"y\":200,\"tag\":\"") + tag +
-           std::string("\",\"url_host\":\"") + host + std::string("\",\"url_path_hash\":\"") +
-           std::string(64, 'a') + std::string("\"}");
+           std::string("\",\"url_host\":\"") + host + std::string("\",\"secure\":1") +
+           std::string(",\"url_path_hash\":\"") + std::string(64, 'a') + std::string("\"}");
 }
 
 }  // namespace
@@ -37,10 +37,20 @@ TEST_F(BridgeSecurityTest, ValidMessageAccepted)
     EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::None);
 }
 
+TEST_F(BridgeSecurityTest, ClickMissingSecureRejected)
+{
+    const std::string body = std::string(
+                                 "{\"v\":1,\"x\":100,\"y\":200,\"tag\":\"password\","
+                                 "\"url_host\":\"example.com\",\"url_path_hash\":\"") +
+                             std::string(64, 'a') + std::string("\"}");
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::MissingKey);
+}
+
 // M6: WinVerifyTrust runs against real signed binaries elsewhere; the
 // actual call lives in BrowserBridge.cpp (USE_QT_UI-gated, not in
 // seal_tests) and host/browser/main.cpp via SignerUtils.hpp. Here we
-// only assert the parser's structural invariants -- a malformed peer
+// only assert the parser's structural invariants - a malformed peer
 // cannot bypass the schema.
 TEST_F(BridgeSecurityTest, ParserRejectsControlCharactersInHost)
 {
@@ -57,7 +67,7 @@ TEST_F(BridgeSecurityTest, ParserRejectsControlCharactersInHost)
 }
 
 // M7: per-start fresh HMAC key. BrowserBridge is USE_QT_UI-gated, so we
-// just verify the parser rejects extra keys -- including "token" -- so
+// just verify the parser rejects extra keys - including "token" - so
 // nothing can smuggle past the schema into the application layer.
 TEST_F(BridgeSecurityTest, TokenKeyInMessageRejected)
 {
