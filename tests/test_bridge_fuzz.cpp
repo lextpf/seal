@@ -17,7 +17,7 @@ namespace
 {
 
 // Canonical six-field body. Tests mutate one piece to probe a single
-// rejection path. The wire schema carries no browser_pid -- the bridge
+// rejection path. The wire schema carries no browser_pid - the bridge
 // resolves it out-of-band (GetNamedPipeClientProcessId + parent walk).
 std::string buildValid()
 {
@@ -27,6 +27,7 @@ std::string buildValid()
                "\"y\":200,"
                "\"tag\":\"password\","
                "\"url_host\":\"example.com\","
+               "\"secure\":1,"
                "\"url_path_hash\":\"") +
            std::string(64, 'a') + std::string("\"}");
 }
@@ -182,7 +183,7 @@ TEST_F(BridgeFuzzTest, TagEmail)
 {
     const std::string body = std::string(
                                  "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"email\","
-                                 "\"url_host\":\"a\",\"url_path_hash\":\"") +
+                                 "\"url_host\":\"a\",\"secure\":1,\"url_path_hash\":\"") +
                              std::string(64, 'a') + std::string("\"}");
     ParsedBridgeMessage parsed;
     EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::None);
@@ -193,7 +194,7 @@ TEST_F(BridgeFuzzTest, TagText)
 {
     const std::string body = std::string(
                                  "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"text\","
-                                 "\"url_host\":\"a\",\"url_path_hash\":\"") +
+                                 "\"url_host\":\"a\",\"secure\":1,\"url_path_hash\":\"") +
                              std::string(64, 'a') + std::string("\"}");
     ParsedBridgeMessage parsed;
     EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::None);
@@ -260,11 +261,35 @@ TEST_F(BridgeFuzzTest, UrlHostLength253Accepted)
     const std::string body = std::string(
                                  "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"password\","
                                  "\"url_host\":\"") +
-                             std::string(253, 'a') + std::string("\",\"url_path_hash\":\"") +
+                             std::string(253, 'a') +
+                             std::string("\",\"secure\":1,\"url_path_hash\":\"") +
                              std::string(64, 'a') + std::string("\"}");
     ParsedBridgeMessage parsed;
     EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::None);
     EXPECT_EQ(parsed.m_UrlHost.size(), 253u);
+}
+
+TEST_F(BridgeFuzzTest, UrlHostWithPortAccepted)
+{
+    const std::string body = std::string(
+                                 "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"password\","
+                                 "\"url_host\":\"example.com:8443\",\"secure\":1,"
+                                 "\"url_path_hash\":\"") +
+                             std::string(64, 'a') + std::string("\"}");
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::None);
+    EXPECT_EQ(parsed.m_UrlHost, std::string("example.com:8443"));
+}
+
+TEST_F(BridgeFuzzTest, UrlHostWithBadPortRejected)
+{
+    const std::string body = std::string(
+                                 "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"password\","
+                                 "\"url_host\":\"example.com:https\",\"secure\":1,"
+                                 "\"url_path_hash\":\"") +
+                             std::string(64, 'a') + std::string("\"}");
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::BadValue);
 }
 
 TEST_F(BridgeFuzzTest, PathHashWrongLengthRejected)
@@ -331,7 +356,7 @@ TEST_F(BridgeFuzzTest, UnknownKeyRejected)
 
 TEST_F(BridgeFuzzTest, LegacyBrowserPidKeyRejected)
 {
-    // browser_pid was removed from the schema -- a stale extension or
+    // browser_pid was removed from the schema - a stale extension or
     // confused peer sending the old field must hit UnknownKey so neither
     // side silently accepts a mismatched contract.
     const std::string body =
@@ -408,11 +433,32 @@ TEST_F(BridgeFuzzTest, ClickWithExplicitKindAccepted)
     const std::string body = std::string(
                                  "{\"v\":1,\"kind\":\"click\",\"x\":1,\"y\":2,"
                                  "\"tag\":\"password\","
-                                 "\"url_host\":\"a\",\"url_path_hash\":\"") +
+                                 "\"url_host\":\"a\",\"secure\":1,\"url_path_hash\":\"") +
                              std::string(64, 'a') + std::string("\"}");
     ParsedBridgeMessage parsed;
     EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::None);
     EXPECT_EQ(parsed.m_Kind, seal::BridgeKind::Click);
+}
+
+TEST_F(BridgeFuzzTest, ClickMissingSecureRejected)
+{
+    const std::string body = std::string(
+                                 "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"password\","
+                                 "\"url_host\":\"a\",\"url_path_hash\":\"") +
+                             std::string(64, 'a') + std::string("\"}");
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::MissingKey);
+}
+
+TEST_F(BridgeFuzzTest, ClickSecureZeroParsesForBridgeRejection)
+{
+    const std::string body = std::string(
+                                 "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"password\","
+                                 "\"url_host\":\"a\",\"secure\":0,\"url_path_hash\":\"") +
+                             std::string(64, 'a') + std::string("\"}");
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::None);
+    EXPECT_FALSE(parsed.m_Secure);
 }
 
 TEST_F(BridgeFuzzTest, NavWithClickKeyRejected)
@@ -440,11 +486,12 @@ TEST_F(BridgeFuzzTest, NavMissingFormRejected)
 
 TEST_F(BridgeFuzzTest, ClickWithNavFlagRejected)
 {
-    // secure/form are nav-only; present in a click report -> unknown key.
-    const std::string body = std::string(
-                                 "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"password\","
-                                 "\"url_host\":\"a\",\"secure\":1,\"url_path_hash\":\"") +
-                             std::string(64, 'a') + std::string("\"}");
+    // form is nav-only; present in a click report -> unknown key.
+    const std::string body =
+        std::string(
+            "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"password\","
+            "\"url_host\":\"a\",\"secure\":1,\"form\":1,\"url_path_hash\":\"") +
+        std::string(64, 'a') + std::string("\"}");
     ParsedBridgeMessage parsed;
     EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::UnknownKey);
 }
@@ -572,15 +619,48 @@ TEST_F(BridgeFuzzTest, NavVisitWrongTypeRejected)
     EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::Malformed);
 }
 
-TEST_F(BridgeFuzzTest, ClickWithVisitRejected)
+TEST_F(BridgeFuzzTest, ClickWithVisitTokenParses)
 {
-    // visit is nav-only; present in a click report -> unknown key.
+    // A click may now carry the per-document visit token; it binds a cached
+    // click authorization to the document it was reported from. Same charset
+    // as the nav token.
     const std::string body = std::string(
                                  "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"password\","
-                                 "\"url_host\":\"a\",\"visit\":\"abc\",\"url_path_hash\":\"") +
+                                 "\"url_host\":\"a\",\"secure\":1,\"visit\":\"3f2b-A9\","
+                                 "\"url_path_hash\":\"") +
                              std::string(64, 'a') + std::string("\"}");
     ParsedBridgeMessage parsed;
-    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::UnknownKey);
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::None);
+    EXPECT_EQ(parsed.m_Visit, std::string("3f2b-A9"));
+}
+
+TEST_F(BridgeFuzzTest, ClickVisitOptional)
+{
+    // A click WITHOUT a visit token still parses (older extension); the token
+    // defaults empty and the fill gate falls back to host-only binding.
+    const std::string body = std::string(
+                                 "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"password\","
+                                 "\"url_host\":\"a\",\"secure\":1,\"url_path_hash\":\"") +
+                             std::string(64, 'a') + std::string("\"}");
+    ParsedBridgeMessage parsed;
+    EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::None);
+    EXPECT_TRUE(parsed.m_Visit.empty());
+}
+
+TEST_F(BridgeFuzzTest, ClickVisitBadCharsetRejected)
+{
+    // The click visit token is validated identically to the nav token: only
+    // [A-Za-z0-9-]; underscores, spaces, dots are rejected fail-closed.
+    for (const char* bad : {"ab_c", "a b", "a.b"})
+    {
+        const std::string body = std::string(
+                                     "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"password\","
+                                     "\"url_host\":\"a\",\"secure\":1,\"visit\":\"") +
+                                 bad + std::string("\",\"url_path_hash\":\"") +
+                                 std::string(64, 'a') + std::string("\"}");
+        ParsedBridgeMessage parsed;
+        EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::BadValue) << bad;
+    }
 }
 
 TEST_F(BridgeFuzzTest, NavVisitDuplicateRejected)
@@ -595,7 +675,7 @@ TEST_F(BridgeFuzzTest, NavVisitDuplicateRejected)
 TEST_F(BridgeFuzzTest, RandomFuzzNeverCrashes)
 {
     // Random-byte fuzzer; deterministic seed for reproducibility. Random
-    // input almost never matches the schema -- assert no crash.
+    // input almost never matches the schema - assert no crash.
     std::mt19937 rng(0xfeedf00d);
     std::uniform_int_distribution<int> byteDist(0, 255);
     std::uniform_int_distribution<int> lenDist(0, 256);
@@ -641,7 +721,7 @@ TEST_F(BridgeFuzzTest, ParsedStructHasNoSecureStringMember)
     // Compile-time guard: the parser's output is plain C++ with no
     // locked allocator. secure_string is move-only, so a parser that
     // allocated one would have to store it (defeating type erasure) or
-    // leak it -- neither happens here.
+    // leak it - neither happens here.
     static_assert(std::is_trivially_destructible<decltype(ParsedBridgeMessage{}.m_Version)>::value,
                   "version field must be trivial");
     static_assert(std::is_same<decltype(ParsedBridgeMessage{}.m_UrlHost), std::string>::value,
