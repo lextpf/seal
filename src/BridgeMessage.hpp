@@ -43,15 +43,15 @@ enum class BridgeTag : std::uint8_t
  * @author Alex (https://github.com/lextpf)
  * @ingroup FillController
  *
- * A missing `kind` field means @c Click (the legacy 6-field click report),
- * so every pre-existing message parses byte-identically. A `kind:"nav"`
- * report carries the navigated host plus the `secure`/`form` flags and NO
- * click coordinates; it drives zero-gesture auto-staging and never enters
- * the positional verdict map.
+ * A missing `kind` field means @c Click. A click report carries the click
+ * coordinates, field tag, host, path hash, and `secure` bit so http and https
+ * are not indistinguishable downstream. A `kind:"nav"` report carries the
+ * navigated host plus the `secure`/`form` flags and NO click coordinates; it
+ * drives zero-gesture auto-staging and never enters the positional verdict map.
  */
 enum class BridgeKind : std::uint8_t
 {
-    Click,  ///< Legacy click report: {v,x,y,tag,url_host,url_path_hash}.
+    Click,  ///< Click report: {v,x,y,tag,url_host,secure,url_path_hash}.
     Nav,    ///< Navigation report: {v,kind,url_host,secure,form}.
 };
 
@@ -97,13 +97,14 @@ struct ParsedBridgeMessage
     std::int32_t m_X = 0;                ///< Screen-space click X (logical pixels per Qt). Click.
     std::int32_t m_Y = 0;                ///< Screen-space click Y (logical pixels per Qt). Click.
     BridgeTag m_Tag = BridgeTag::Other;  ///< Field classification reported by content.js. Click.
-    std::string m_UrlHost;               ///< Validated [A-Za-z0-9.-] hostname, <= 253 bytes.
+    std::string m_UrlHost;               ///< Validated hostname with optional :port, <= 253 bytes.
     std::string m_UrlPathHash;           ///< 64-hex SHA-256 of the URL path (Click; not used yet).
-    bool m_Secure = false;               ///< Nav: page is an https/secure context.
+    bool m_Secure = false;               ///< Click/Nav: page is an https/secure context.
     bool m_HasPasswordForm = false;      ///< Nav: a visible <input type=password> exists.
     bool m_HasUsernameField = false;  ///< Nav: a visible login identifier field exists (optional).
-    std::string m_Visit;  ///< Nav: per-document page-load token, [A-Za-z0-9-] <= 64 (optional;
-                          ///< empty when absent - staging then fails closed downstream).
+    std::string m_Visit;  ///< Click/Nav: per-document page-load token, [A-Za-z0-9-] <= 64
+                          ///< (optional; empty when absent - a nav then fails staging closed,
+                          ///< and a click falls back to host-only binding).
 };
 
 /**
@@ -119,10 +120,11 @@ const char* bridgeParseErrorToken(BridgeParseError error);
  *
  * Bounded recursive-descent parser. Accepts a top-level JSON object in one
  * of two kind-selected shapes: a @b click report (`kind` absent or
- * `"click"`) with exactly @c v, @c x, @c y, @c tag, @c url_host,
- * @c url_path_hash; or a @b nav report (`kind:"nav"`) with exactly @c v,
- * @c kind, @c url_host, @c secure, @c form plus the optional @c user and
- * @c visit keys. Keys legal in the other shape are rejected as unknown.
+ * `"click"`) with @c v, @c x, @c y, @c tag, @c url_host, @c secure,
+ * @c url_path_hash plus the optional @c visit key; or a @b nav report
+ * (`kind:"nav"`) with @c v, @c kind, @c url_host, @c secure, @c form plus the
+ * optional @c user and @c visit keys. Keys legal in the other shape are
+ * rejected as unknown.
  * Rejects messages > 4 KB, nesting depth > 4, unknown keys, duplicate keys,
  * or any value outside the validated shape (see @c BrowserBridge
  * documentation for the schema).
@@ -151,10 +153,10 @@ const char* bridgeParseErrorToken(BridgeParseError error);
  * | `tag`           | required | reject   |
  * | `url_host`      | required | required |
  * | `url_path_hash` | required | reject   |
- * | `secure`        | reject   | required |
+ * | `secure`        | required | required |
  * | `form`          | reject   | required |
  * | `user`          | reject   | optional |
- * | `visit`         | reject   | optional |
+ * | `visit`         | optional | optional |
  *
  * @par Per-field validation
  * | Field                  | Accepted value                             |
@@ -163,7 +165,7 @@ const char* bridgeParseErrorToken(BridgeParseError error);
  * | `kind`                 | `"click"` or `"nav"` (absent -> click)     |
  * | `x`, `y`               | integer in [-50000, 50000]                 |
  * | `tag`                  | password / username / email / text / other |
- * | `url_host`             | 1..253 chars, `[A-Za-z0-9.-]`              |
+ * | `url_host`             | 1..253 chars, hostname chars plus optional numeric `:port` |
  * | `url_path_hash`        | exactly 64 chars, `[0-9a-f]`               |
  * | `secure`, `form`, `user` | integer 0 or 1                           |
  * | `visit`                | 1..64 chars, `[A-Za-z0-9-]`                |

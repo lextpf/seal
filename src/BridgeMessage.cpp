@@ -1,5 +1,6 @@
 #include "BridgeMessage.hpp"
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <cstdint>
@@ -34,11 +35,15 @@ constexpr std::uint32_t kKeyForm = 1U << 8;
 constexpr std::uint32_t kKeyUser = 1U << 9;
 constexpr std::uint32_t kKeyVisit = 1U << 10;
 
-// Click report: the legacy six-field shape. `kind` is optional (absent ==
-// click); `secure`/`form`/`user`/`visit` are forbidden.
+// Click report: the field-click shape. `kind` is optional (absent == click);
+// `secure` is required so http and https are not indistinguishable downstream;
+// `visit` is OPTIONAL - the per-document page-load token that binds a cached
+// click authorization to the document it was reported from (absent on an older
+// extension, which then falls back to host-only binding). `form`/`user` remain
+// forbidden on the click shape.
 constexpr std::uint32_t kClickRequired =
-    kKeyV | kKeyX | kKeyY | kKeyTag | kKeyUrlHost | kKeyUrlPathHash;
-constexpr std::uint32_t kClickAllowed = kClickRequired | kKeyKind;
+    kKeyV | kKeyX | kKeyY | kKeyTag | kKeyUrlHost | kKeyUrlPathHash | kKeySecure;
+constexpr std::uint32_t kClickAllowed = kClickRequired | kKeyKind | kKeyVisit;
 
 // Nav report: host + secure/form flags, no click coordinates. `user` (a login-identifier
 // field for email-first / multi-step logins) and `visit` (the per-document page-load token
@@ -312,12 +317,12 @@ private:
         return BridgeParseError::None;
     }
 
-    // True for a token byte: alnum or '-', plus '.' when allowDot (host labels
-    // are dotted; the visit token is not).
-    static bool isTokenChar(char c, bool allowDot) noexcept
+    // True for a token byte: alnum or '-', plus '.' for host labels and ':'
+    // for a numeric host port. The visit token allows neither dot nor colon.
+    static bool isTokenChar(char c, bool allowDot, bool allowColon) noexcept
     {
         return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-               c == '-' || (allowDot && c == '.');
+               c == '-' || (allowDot && c == '.') || (allowColon && c == ':');
     }
 
     // Non-empty, length-bounded token whose bytes are all isTokenChar().
@@ -325,7 +330,8 @@ private:
     static BridgeParseError validateToken(const char* buf,
                                           std::size_t len,
                                           std::size_t maxLen,
-                                          bool allowDot) noexcept
+                                          bool allowDot,
+                                          bool allowColon) noexcept
     {
         if (len == 0 || len > maxLen)
         {
@@ -333,10 +339,45 @@ private:
         }
         for (std::size_t i = 0; i < len; ++i)
         {
-            if (!isTokenChar(buf[i], allowDot))
+            if (!isTokenChar(buf[i], allowDot, allowColon))
             {
                 return BridgeParseError::BadValue;
             }
+        }
+        return BridgeParseError::None;
+    }
+
+    static BridgeParseError validateHostToken(const char* buf,
+                                              std::size_t len,
+                                              std::size_t maxLen) noexcept
+    {
+        const BridgeParseError tokenErr =
+            validateToken(buf, len, maxLen, /*allowDot=*/true, /*allowColon=*/true);
+        if (tokenErr != BridgeParseError::None)
+        {
+            return tokenErr;
+        }
+
+        const char* begin = buf;
+        const char* end = buf + len;
+        const char* firstColon = std::find(begin, end, ':');
+        if (firstColon == end)
+        {
+            return BridgeParseError::None;
+        }
+        if (firstColon == begin || firstColon + 1 == end)
+        {
+            return BridgeParseError::BadValue;
+        }
+        if (std::find(firstColon + 1, end, ':') != end)
+        {
+            return BridgeParseError::BadValue;
+        }
+        std::uint32_t port = 0;
+        const auto result = std::from_chars(firstColon + 1, end, port);
+        if (result.ec != std::errc{} || result.ptr != end || port > 65535)
+        {
+            return BridgeParseError::BadValue;
         }
         return BridgeParseError::None;
     }
@@ -345,7 +386,7 @@ private:
     // `dest`. The +1 buffer slack turns an in-cap overrun into a BadValue
     // length rejection rather than TooLarge. Shared by url_host and visit.
     template <std::size_t MaxLen>
-    BridgeParseError parseTokenInto(std::string* dest, bool allowDot) noexcept
+    BridgeParseError parseTokenInto(std::string* dest, bool allowDot, bool allowColon) noexcept
     {
         std::array<char, MaxLen + 1> buf{};
         std::size_t len = 0;
@@ -354,7 +395,12 @@ private:
         {
             return err;
         }
-        const BridgeParseError valErr = validateToken(buf.data(), len, MaxLen, allowDot);
+        const BridgeParseError valErr = allowColon ? validateHostToken(buf.data(), len, MaxLen)
+                                                   : validateToken(buf.data(),
+                                                                   len,
+                                                                   MaxLen,
+                                                                   allowDot,
+                                                                   /*allowColon=*/false);
         if (valErr != BridgeParseError::None)
         {
             return valErr;
@@ -506,9 +552,11 @@ private:
                 return parseEnumValue(kTagTable, &out->m_Tag);
             }
             case kKeyUrlHost:
-                // Hosts cap at 253 bytes (dotted labels allow '.'); parsed into
-                // a stack buffer, no secure_string.
-                return parseTokenInto<kMaxHostLen>(&out->m_UrlHost, /*allowDot=*/true);
+                // Hosts cap at 253 bytes (dotted labels allow '.', optional
+                // numeric port allows ':'); parsed into a stack buffer, no secure_string.
+                return parseTokenInto<kMaxHostLen>(&out->m_UrlHost,
+                                                   /*allowDot=*/true,
+                                                   /*allowColon=*/true);
             case kKeyUrlPathHash:
             {
                 std::array<char, kHashLen + 1> buf{};
@@ -547,7 +595,9 @@ private:
                 // chars), no dots. Anything else is fail-closed rejected. The +1
                 // buffer slack turns an in-cap overrun into a BadValue length
                 // rejection rather than TooLarge, matching url_host.
-                return parseTokenInto<kMaxVisitLen>(&out->m_Visit, /*allowDot=*/false);
+                return parseTokenInto<kMaxVisitLen>(&out->m_Visit,
+                                                    /*allowDot=*/false,
+                                                    /*allowColon=*/false);
             case kKeySecure:
             case kKeyForm:
             case kKeyUser:
