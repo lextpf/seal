@@ -24,16 +24,12 @@ namespace seal
  * policy is unit-testable in the no-Qt test target; StagingController feeds
  * it the navigated host and the live record vector on the GUI thread.
  *
- * ## Matching policy (see @ref seal::url::platformMatchesHost)
+ * ## Matching policy (see @ref seal::url::platformMatchesHostForSecretRelease)
  *
- * Matching is TIERED and lives in one shared function so this selector and
- * FillController's fail-closed release gate agree exactly:
- *  - a record carrying a real DOMAIN ("paypal.com") is matched STRICTLY
- *    (eTLD-boundary, TLD-sensitive) - a typosquat on another TLD is rejected;
- *  - a bare brand label or free-form label ("PayPal", "My PayPal") falls back
- *    to fuzzy registrable-name matching, which is TLD-BLIND - the deliberate
- *    relaxation that lets the common brand-label vault auto-fill at all, at
- *    the same phishing exposure the manual Ctrl+Click path already has.
+ * Browser auto-stage uses the strict secret-release matcher: a record must
+ * store a real domain/URL, and that host must match the live page by
+ * dot-boundary suffix rules. Bare labels stay useful for display/search but
+ * do not provide enough binding material for browser credential release.
  *
  * The page host always arrives as a real `location.hostname`.
  */
@@ -55,12 +51,10 @@ struct StageResolution
  * @ingroup FillController
  *
  * Counts non-deleted records whose `platform` binds to @p navHost under the
- * tiered @ref seal::url::platformMatchesHost: a record storing a real domain
- * is matched strictly (TLD-sensitive @ref seal::url::hostsMatch), while a bare
- * brand label falls back to a fuzzy, TLD-blind registrable-name match. Exactly
+ * strict @ref seal::url::platformMatchesHostForSecretRelease policy. Exactly
  * one -> Single(index); zero -> None; two or more -> Multiple. An empty /
- * unparseable @p navHost, or a set with no matching records, yields None (fail
- * closed).
+ * unparseable @p navHost, a bare-label record, or a set with no matching
+ * records yields None (fail closed).
  *
  * @par Resolution outcomes
  * | Non-deleted matches for navHost | Kind     | m_Index | Caller action            |
@@ -93,8 +87,8 @@ inline StageResolution resolveStageRecord(std::span<const VaultRecord> records,
         {
             continue;
         }
-        // Tiered: strict for domain records, fuzzy (TLD-blind) for bare labels.
-        if (url::platformMatchesHost(records[i].platform, navHost))
+        // Browser secret release: strict domain/URL records only.
+        if (url::platformMatchesHostForSecretRelease(records[i].platform, navHost))
         {
             if (++matchCount == 1)
             {
@@ -152,6 +146,40 @@ inline StageResolution resolveStageRecord(std::span<const VaultRecord> records,
 inline bool navShouldInjectUsername(bool hasUsernameField, bool hasPasswordForm)
 {
     return hasUsernameField || hasPasswordForm;
+}
+
+/**
+ * @brief Whether a cached click authorization may fill the current document.
+ * @ingroup FillController
+ *
+ * A browser click bridge entry now carries the per-document visit token that
+ * was live when the extension reported the click. At fill time the gate
+ * compares that stored token against the visit of the document currently
+ * loaded in the same browser process (the freshest nav report). This is the
+ * guard against the cross-document REPLAY where a stale entry - a legitimate
+ * site's earlier focus-click - survives a navigation or tab switch at the same
+ * screen location and would otherwise authorize typing into a different
+ * document.
+ *
+ * The rule blocks ONLY on a positive mismatch: both tokens are known
+ * (non-empty) and differ. When either token is unknown - an older extension
+ * that does not tag clicks with a visit, or no navigation seen yet for the
+ * process - it returns true and defers to the other gates (host binding,
+ * dual-PID, M5). A caller that needs a strict document match (the fail-closed
+ * auto-release path) must additionally require both tokens to be non-empty.
+ *
+ * @param entryVisit   The visit token stored on the click bridge entry.
+ * @param currentVisit The visit token of the document currently loaded in the
+ *                     click's browser process.
+ * @return false only when both tokens are non-empty and differ.
+ */
+inline bool visitAuthorizes(std::string_view entryVisit, std::string_view currentVisit) noexcept
+{
+    if (entryVisit.empty() || currentVisit.empty())
+    {
+        return true;  // Unknown on either side -> defer to the other gates.
+    }
+    return entryVisit == currentVisit;
 }
 
 /**
