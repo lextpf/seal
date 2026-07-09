@@ -263,6 +263,7 @@ void StagingController::onNavPollTick()
                                             m_Workspace.records(),
                                             m_Workspace.session(),
                                             nav->m_Host,
+                                            nav->m_Visit,
                                             nav->m_BrowserPid))
                 {
                     m_Tracker.noteUsernameInjected(nav->m_Visit);
