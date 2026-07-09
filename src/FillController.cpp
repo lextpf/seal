@@ -1,6 +1,7 @@
 #ifdef USE_QT_UI
 
 #include "FillController.hpp"
+#include "AutoStagePolicy.hpp"
 #include "Clipboard.hpp"
 #include "Diagnostics.hpp"
 #include "FusionDecider.hpp"
@@ -128,6 +129,11 @@ void FillController::enableBridge()
 bool FillController::isBridgeEnabled() const
 {
     return !m_BrowserBridge.isDisabled();
+}
+
+bool FillController::isBridgePeerAuthEnforced() const
+{
+    return m_BrowserBridge.isPeerAuthEnforced();
 }
 
 bool FillController::isBridgePeerConnected() const
@@ -320,6 +326,7 @@ bool FillController::injectUsername(int recordIndex,
                                     const std::vector<seal::VaultRecord>& records,
                                     seal::CredentialSession& session,
                                     const std::string& host,
+                                    const std::string& visit,
                                     DWORD browserPid)
 {
     if (recordIndex < 0 || recordIndex >= static_cast<int>(records.size()))
@@ -331,11 +338,13 @@ bool FillController::injectUsername(int recordIndex,
     {
         return false;
     }
-    // Host binding (fail-closed): same tiered matcher as selector + password gate -
-    // strict for a domain record ("paypal.com"), fuzzy/TLD-blind for a bare label.
-    // User-chosen relaxation: a bare label is TLD-blind, so a lookalike-TLD page
-    // (paypal.co) gets the low-sensitivity email with no click - never the password.
-    if (!seal::url::platformMatchesHost(record.platform, host))
+    if (visit.empty())
+    {
+        return false;
+    }
+    // Host binding (fail-closed): same strict browser secret-release matcher as
+    // the selector + password gate. Bare labels do not release into a browser.
+    if (!seal::url::platformMatchesHostForSecretRelease(record.platform, host))
     {
         qCInfo(logFill).noquote() << QString::fromStdString(seal::diag::joinFields(
             {"event=fill.autostage.username", "result=skip", "reason=host_mismatch"}));
@@ -346,10 +355,10 @@ bool FillController::injectUsername(int recordIndex,
         return false;  // M8.
     }
 
-    // JIT-decrypt the username into locked memory; the master key is plaintext
-    // only for this decrypt. Then convert to a transient UTF-8 copy for the
-    // wire and wipe it after the send.
-    seal::DecryptedCredential cred;
+    // JIT-decrypt only the username into locked memory; the master key is plaintext
+    // only for this decrypt. Then convert to a transient UTF-8 copy for the wire
+    // and wipe it after the send.
+    seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> username;
     try
     {
         auto access = session.unlock();
@@ -359,7 +368,7 @@ bool FillController::injectUsername(int recordIndex,
                 {"event=fill.autostage.username", "result=fail", "reason=dpapi_unprotect"}));
             return false;
         }
-        cred = seal::decryptCredentialOnDemand(record, access.password());
+        username = seal::decryptUsernameOnDemand(record, access.password());
     }
     catch (const std::exception& e)
     {
@@ -372,12 +381,12 @@ bool FillController::injectUsername(int recordIndex,
         return false;
     }
 
-    std::string usernameUtf8 = wideToUtf8(cred.username.data(), cred.username.size());
-    cred.cleanse();
+    std::string usernameUtf8 = wideToUtf8(username.data(), username.size());
+    seal::Cryptography::cleanseString(username);
     seal::Cryptography::trimWorkingSet();
 
-    const bool sent =
-        !usernameUtf8.empty() && m_BrowserBridge.sendFillUsername(browserPid, host, usernameUtf8);
+    const bool sent = !usernameUtf8.empty() &&
+                      m_BrowserBridge.sendFillUsername(browserPid, host, visit, usernameUtf8);
     if (!usernameUtf8.empty())
     {
         SecureZeroMemory(usernameUtf8.data(), usernameUtf8.size());
@@ -638,12 +647,41 @@ void FillController::performType()
             if (m_State.load() != State::Typing)
                 return;
 
+            const POINT manualClickPoint{m_ClickX.load(), m_ClickY.load()};
+            HWND manualClickWindow = WindowFromPoint(manualClickPoint);
+            DWORD manualClickPid = 0;
+            if (manualClickWindow != nullptr)
+            {
+                GetWindowThreadProcessId(manualClickWindow, &manualClickPid);
+            }
+            DWORD manualForegroundPid = 0;
+            HWND manualForegroundWindow = GetForegroundWindow();
+            if (manualForegroundWindow != nullptr)
+            {
+                GetWindowThreadProcessId(manualForegroundWindow, &manualForegroundPid);
+            }
+            if (manualClickPid == 0 || manualForegroundPid == 0 ||
+                manualForegroundPid != manualClickPid)
+            {
+                qCWarning(logFill).noquote() << QString::fromStdString(
+                    seal::diag::joinFields({"event=fill.manual.release",
+                                            "result=blocked",
+                                            "reason=manual_foreground_pid_mismatch"}));
+                emit fillError(QStringLiteral("Focused window changed before typing."));
+                cancel();
+                return;
+            }
+
             // Resolve target. Shift/Alt already resolved in the hook; Auto
-            // means probe the element via UI Automation.
+            // means probe the element via UI Automation. Compute the detailed
+            // fusion outcome once: Auto resolution reads its verdict, and the
+            // browser password M5 gate below reuses its corroboration flags.
+            const seal::FusionOutcome fusion =
+                runProbeRegistryDetailed(m_ClickX.load(), m_ClickY.load());
             TypeTarget target = pendingTarget;
             if (target == TypeTarget::Auto)
             {
-                const seal::Verdict verdict = runProbeRegistry(m_ClickX.load(), m_ClickY.load());
+                const seal::Verdict verdict = fusion.m_Verdict;
                 if (verdict == seal::Verdict::Password)
                 {
                     target = TypeTarget::Password;
@@ -703,41 +741,82 @@ void FillController::performType()
                 return;
             }
 
-            // URL/platform binding (phishing resistance): bridge-reported host vs
-            // record platform via extractKey's fuzzy reduction ("paypal.com"/"My
-            // PayPal" -> "paypal"). A mismatch CANCELS the fill BEFORE decrypt (no
-            // plaintext); skipped when no bridge entry or key reduces to empty (fail open).
-            const POINT urlClickPoint{m_ClickX.load(), m_ClickY.load()};
-            HWND urlFocusWindow = WindowFromPoint(urlClickPoint);
-            DWORD urlFocusPid = 0;
-            if (urlFocusWindow != nullptr)
+            // URL/platform binding (phishing resistance): browser fills require a fresh
+            // bridge URL and the shared tiered matcher. Domain records stay TLD-sensitive;
+            // non-browser targets still fill without URL context.
+            if (manualClickPid != 0)
             {
-                GetWindowThreadProcessId(urlFocusWindow, &urlFocusPid);
-            }
-            if (urlFocusPid != 0)
-            {
-                const auto bridgeEntry = m_BrowserBridge.lookup(urlFocusPid, urlClickPoint);
+                const auto bridgeEntry = m_BrowserBridge.lookup(manualClickPid, manualClickPoint);
                 if (bridgeEntry.has_value() && !bridgeEntry->m_UrlHost.isEmpty())
                 {
-                    const std::string recordKey = seal::url::extractKey(record.platform);
-                    const std::string pageKey =
-                        seal::url::extractKey(bridgeEntry->m_UrlHost.toStdString());
-                    if (!recordKey.empty() && !pageKey.empty() &&
-                        !seal::url::keysMatch(recordKey, pageKey))
+                    const std::string manualPageHost = bridgeEntry->m_UrlHost.toStdString();
+                    if (!seal::url::platformMatchesHostForSecretRelease(record.platform,
+                                                                        manualPageHost))
                     {
-                        // Keys are already privacy-friendly (no TLD/path/subdomain
-                        // noise), but the log still uses SHA-256 fingerprints for
-                        // shared bug reports; the user-facing message keeps readable
-                        // keys so the operator sees what tried where.
-                        qCWarning(logFill).noquote()
-                            << QString::fromStdString(seal::diag::joinFields(
-                                   {"event=fill.url_mismatch_block",
-                                    seal::diag::kv("record_key_fp", hostLogFingerprint(recordKey)),
-                                    seal::diag::kv("page_key_fp", hostLogFingerprint(pageKey))}));
-                        emit fillError(QString("Site mismatch: '%1' record cannot fill on '%2'. "
-                                               "Cancel and re-arm a record that matches this site.")
-                                           .arg(QString::fromStdString(recordKey),
-                                                QString::fromStdString(pageKey)));
+                        qCWarning(logFill).noquote() << QString::fromStdString(
+                            seal::diag::joinFields(
+                                {"event=fill.url_mismatch_block",
+                                 seal::diag::kv(
+                                     "record_fp",
+                                     hostLogFingerprint(seal::url::extractHost(record.platform))),
+                                 seal::diag::kv(
+                                     "page_fp",
+                                     hostLogFingerprint(seal::url::extractHost(manualPageHost)))}));
+                        emit fillError(QStringLiteral(
+                            "Site mismatch: selected record does not match this site."));
+                        cancel();
+                        return;
+                    }
+                    // Cross-document replay veto: the cached entry (from the
+                    // earlier focus-click - the Ctrl+Click is swallowed by the
+                    // hook, so no fresh report exists for it) must belong to the
+                    // document now loaded in this browser. Blocks only on a
+                    // positive mismatch; an older extension that omits the click
+                    // token falls back to the host check above.
+                    const std::optional<std::string> curVisit =
+                        m_BrowserBridge.currentVisit(manualClickPid);
+                    if (curVisit.has_value() &&
+                        !seal::visitAuthorizes(bridgeEntry->m_Visit, *curVisit))
+                    {
+                        qCWarning(logFill).noquote() << QString::fromStdString(
+                            seal::diag::joinFields({"event=fill.url_mismatch_block",
+                                                    "result=blocked",
+                                                    "reason=visit_mismatch_manual"}));
+                        emit fillError(QStringLiteral(
+                            "Site changed since the field was detected. Click the field again."));
+                        cancel();
+                        return;
+                    }
+                    // M5 corroboration for the PASSWORD release: a browser
+                    // password fill must be backed by an on-disk Tier-1 probe,
+                    // not the bridge (extension) alone - parity with the staged
+                    // auto path (see performTypeAuto's G-corroborate gate). The
+                    // username half (less sensitive, weaker on-disk signal)
+                    // keeps the host+visit binding only.
+                    if (target == TypeTarget::Password &&
+                        !(fusion.m_Tier1ShortCircuit && fusion.m_BridgeCorroborated))
+                    {
+                        qCWarning(logFill).noquote() << QString::fromStdString(
+                            seal::diag::joinFields({"event=fill.url_mismatch_block",
+                                                    "result=blocked",
+                                                    "reason=weak_fusion_manual"}));
+                        emit fillError(QStringLiteral(
+                            "Could not confirm a password field here. Click the field again."));
+                        cancel();
+                        return;
+                    }
+                }
+                else
+                {
+                    const std::wstring imagePath = seal::signer::resolveProcessPath(manualClickPid);
+                    if (seal::signer::isKnownBrowserImage(imagePath))
+                    {
+                        qCWarning(logFill).noquote() << QString::fromStdString(
+                            seal::diag::joinFields({"event=fill.url_mismatch_block",
+                                                    "result=blocked",
+                                                    "reason=no_bridge_entry_manual"}));
+                        emit fillError(QStringLiteral(
+                            "Browser site could not be verified. Check the companion extension."));
                         cancel();
                         return;
                     }
@@ -950,12 +1029,12 @@ void FillController::performTypeAuto()
             }
 
             // G-URL (fail-closed): the fresh entry's host must bind to the staged record
-            // under the SAME tiered seal::url::platformMatchesHost the selector uses (strict
-            // domains, fuzzy/TLD-blind bare labels). Unlike the manual fail-open veto, no
-            // match => abort before decrypt (no plaintext); shared fn keeps both in lockstep.
+            // under the SAME strict secret-release matcher the selector uses. Unlike the
+            // manual fail-open veto, no match => abort before decrypt (no plaintext).
             const std::string pageHost =
                 entry->m_UrlHost.isEmpty() ? std::string() : entry->m_UrlHost.toStdString();
-            if (pageHost.empty() || !seal::url::platformMatchesHost(record.platform, pageHost))
+            if (pageHost.empty() ||
+                !seal::url::platformMatchesHostForSecretRelease(record.platform, pageHost))
             {
                 qCWarning(logFill).noquote() << QString::fromStdString(seal::diag::joinFields(
                     {"event=fill.autostage.release",
@@ -971,6 +1050,25 @@ void FillController::performTypeAuto()
                 return;
             }
 
+            // G-visit (fail-closed): the authorizing entry must belong to the
+            // document currently loaded in this browser. A stale entry from a
+            // prior document (an earlier page at the same coordinates that was
+            // navigated away from) is refused before decrypt. The release click
+            // itself produces a fresh same-document entry, so this holds on the
+            // armed page and fails after any navigation (whose login page mints
+            // a new token). Both tokens must be known and equal.
+            const std::optional<std::string> curVisit = m_BrowserBridge.currentVisit(clickPid);
+            if (entry->m_Visit.empty() || !curVisit.has_value() ||
+                !seal::visitAuthorizes(entry->m_Visit, *curVisit))
+            {
+                qCWarning(logFill).noquote() << QString::fromStdString(seal::diag::joinFields(
+                    {"event=fill.autostage.release", "result=blocked", "reason=visit_mismatch"}));
+                emit fillError(
+                    QStringLiteral("Page changed since the field was detected. Try again."));
+                cancel();
+                return;
+            }
+
             // Generation abort: any owner mutation since arm may have
             // reallocated or freed the borrowed pointers.
             if (m_OwnerGeneration && *m_OwnerGeneration != m_SnapshotGeneration)
@@ -980,10 +1078,17 @@ void FillController::performTypeAuto()
                 return;
             }
 
-            // G-corroborate: the fused verdict must be decisive AND on-disk
-            // corroborated (M5). Bridge-alone (e.g. a planted Password entry aliasing
-            // a metadata-stripped text field) is refused: the password releases only
-            // when UIA independently confirms the field. No untyped-field fallback here.
+            // G-corroborate (M5): the fused verdict must be decisive AND on-disk
+            // corroborated. This refuses a bridge-alone hit (e.g. a lying/compromised
+            // extension planting a Password entry that aliases a metadata-stripped
+            // text field): the password releases only when an on-disk Tier-1 probe
+            // also reads Password. NOTE: in a browser the sole on-disk corroborator
+            // is UiaIsPasswordProbe, whose IsPassword/Protected verdict is itself
+            // derived from the page DOM (<input type=password>) - the same fact the
+            // bridge classified. So this is NOT an independent check against a
+            // *hostile page* (a page showing a real password input satisfies it); it
+            // hardens against a lying *extension*. What actually prevents wrong-site
+            // release is the strict host binding above (G-URL). No fallback here.
             transitionTo(State::Typing);
             const seal::FusionOutcome outcome =
                 runProbeRegistryDetailed(clickPoint.x, clickPoint.y);

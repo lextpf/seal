@@ -240,13 +240,10 @@ public:
      *        zero-click DOM injection by the extension.
      *
      * The higher-risk half of staged auto-fill (the username value crosses into
-     * the browser). Host-bound via @ref seal::url::platformMatchesHost, the same
-     * tiered matcher the selector and the password click-gate use: a record
-     * storing a real domain ("paypal.com") binds strictly (TLD-sensitive), while
-     * a bare brand label ("PayPal") falls back to a fuzzy, TLD-blind match. That
-     * fallback is a deliberate relaxation -- a lookalike-TLD page ("paypal.co")
-     * could receive the low-sensitivity username with no click -- but the
-     * PASSWORD is never sent this way, only typed locally on a real click.
+     * the browser). Host-bound via
+     * @ref seal::url::platformMatchesHostForSecretRelease, the same strict
+     * matcher the selector and the password click-gate use: a record must store
+     * a real domain/URL before any browser credential value is released.
      * Decryption is JIT in a tight unlock() window here (StagingController stays
      * decrypt-free); the plaintext UTF-8 copy is wiped after the reverse-channel
      * send.
@@ -255,6 +252,7 @@ public:
      * @param records     Borrowed vault records (must outlive the call).
      * @param session     Borrowed session; unlocked only for the decrypt.
      * @param host        The navigated host (strict-matched, echoed to the peer).
+     * @param visit       The per-document visit token to bind browser injection.
      * @param browserPid  The validated browser PID whose peer receives it.
      * @return true iff the directive was written to a live peer - the signal
      *         StagingController uses to latch its once-per-visit guarantee
@@ -264,6 +262,7 @@ public:
                                       const std::vector<seal::VaultRecord>& records,
                                       seal::CredentialSession& session,
                                       const std::string& host,
+                                      const std::string& visit,
                                       DWORD browserPid);
 
     /**
@@ -315,6 +314,16 @@ public:
      * @brief Whether the bridge is currently enabled (not in panic mode).
      */
     bool isBridgeEnabled() const;
+
+    /**
+     * @brief Whether the bridge enforces peer signer authentication.
+     *
+     * False when this binary is unsigned (the M6 signer gate then accepts any
+     * peer). Fixed at startup from the running binary's Authenticode identity;
+     * surfaced by the UI so an unsigned build shows a "peer auth disabled"
+     * warning. See @ref BrowserBridge::isPeerAuthEnforced.
+     */
+    bool isBridgePeerAuthEnforced() const;
 
     /**
      * @brief Whether any browser-companion native messaging host is currently
@@ -485,7 +494,7 @@ private:
      * The single decrypt+type site shared by @ref performType (manual) and
      * @ref performTypeAuto. Opens a scoped @c session.unlock() only around the
      * on-demand decrypt, types the field, cleanses immediately, then either
-     * completes -- tears down hooks and emits fillCompleted -- when both fields
+     * completes - tears down hooks and emits fillCompleted - when both fields
      * have been typed or the fill is an auto (staged) one, or (manual mode, one
      * field still pending) resets the countdown and stays Armed for the other
      * field's Ctrl+Click. Callers must have already validated the record and
