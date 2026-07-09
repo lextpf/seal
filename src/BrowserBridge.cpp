@@ -382,6 +382,12 @@ struct BrowserBridge::Impl
     NavSnapshot m_PendingNav;
     std::uint64_t m_NavSeq = 0;  // guarded by m_NavMutex
 
+    // Latest per-document visit token seen per browser PID (from nav reports),
+    // guarded by m_NavMutex. The click-fill gate consults this to reject a
+    // cached click entry whose document (visit) differs from the page now
+    // loaded in that browser - the cross-document replay guard.
+    std::unordered_map<DWORD, std::string> m_CurrentVisitByPid;  // guarded by m_NavMutex
+
     // A live, authenticated peer connection for the reverse-channel write (username injection).
     // The worker owns the read side; sendFillUsername (GUI thread) takes m_WriteMutex, checks
     // m_Alive, then overlapped-writes the full-duplex pipe. The worker sets m_Alive=false under
@@ -448,6 +454,19 @@ bool BrowserBridge::Impl::startImpl()
     {
         return true;
     }
+#ifdef SEAL_REQUIRE_SIGNED_PEER
+    // Fail closed: a production build refuses to run the bridge while unsigned
+    // rather than degrade to accept-all-peers (verifySignerMatches returns true
+    // for every peer when the expected identity is empty). Dev builds (flag off)
+    // keep the degraded mode with the constructor's warning. Reached from both
+    // start() and enable(), so the guard lives here, not in start().
+    if (m_ExpectedSignerIdentity.empty())
+    {
+        qCCritical(logBridge).noquote() << QString::fromStdString(seal::diag::joinFields(
+            {"event=fill.bridge.signer_check", "result=fail", "reason=unsigned_production"}));
+        return false;
+    }
+#endif
     if (!generateRandom(m_HmacKey.data(), m_HmacKey.size()))
     {
         qCWarning(logBridge).noquote() << QString::fromStdString(
@@ -596,6 +615,12 @@ void BrowserBridge::Impl::noteBrowserDisconnected(DWORD browserPid)
                 ++mit;
             }
         }
+        // Drop the remembered document token too (lock order: m_MapMutex ->
+        // m_NavMutex; no path takes them in the reverse order).
+        {
+            std::lock_guard<std::mutex> navLock(m_NavMutex);
+            m_CurrentVisitByPid.erase(browserPid);
+        }
     }
 }
 
@@ -643,6 +668,15 @@ void BrowserBridge::Impl::handleMessage(DWORD browserPid,
         return;
     }
 
+    if (!parsed.m_Secure)
+    {
+        qCWarning(logBridge).noquote() << QString::fromStdString(seal::diag::joinFields(
+            {"event=fill.bridge.reject",
+             "reason=insecure_click",
+             seal::diag::kv("browser_pid", static_cast<unsigned int>(browserPid))}));
+        return;
+    }
+
     const VerdictMapping mapping = mapTag(parsed.m_Tag);
     if (!mapping.m_ShouldInsert)
     {
@@ -656,6 +690,9 @@ void BrowserBridge::Impl::handleMessage(DWORD browserPid,
     entry.m_ExpiresAt = now + kEntryLifetime;
     entry.m_UrlHost =
         QString::fromUtf8(parsed.m_UrlHost.data(), static_cast<int>(parsed.m_UrlHost.size()));
+    // Per-document token (may be empty on an older extension). The fill gate
+    // requires it to match the current document; empty falls back to host-only.
+    entry.m_Visit = parsed.m_Visit;
 
     BridgeKey key;
     key.m_BrowserPid = browserPid;
@@ -697,6 +734,9 @@ void BrowserBridge::Impl::notePendingNavigation(DWORD browserPid, const ParsedBr
         m_PendingNav.m_BrowserPid = browserPid;
         m_PendingNav.m_At = now;
         m_PendingNav.m_Seq = ++m_NavSeq;
+        // Persist the current document token for this browser so the click-fill
+        // gate can detect a navigation between the reported click and the fill.
+        m_CurrentVisitByPid[browserPid] = parsed.m_Visit;
     }
     // One info line per accepted nav. The host stays off the line (privacy);
     // the fingerprint is enough to correlate with a later fill.decide.
@@ -1143,13 +1183,23 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
                 failSubReason = "winverifytrust_failed";
                 break;
             }
+            const seal::signer::BrowserKind kind = seal::signer::identifyBrowser(curPath);
+            const std::wstring publisher = seal::signer::extractSignerPublisherFromFile(curPath);
+            if (!seal::signer::browserPublisherMatches(kind, publisher))
+            {
+                failSubReason = "browser_publisher_mismatch";
+                break;
+            }
             browser = std::move(cur);
             browserPath = curPath;
             break;
         }
-        if (!seal::signer::isShellImage(curPath))
+        if (!seal::signer::isTrustedShellImage(curPath))
         {
-            failSubReason = "image_not_in_browser_list";
+            failSubReason =
+                (seal::signer::identifyShell(curPath) == seal::signer::ShellKind::Unknown)
+                    ? "image_not_in_browser_list"
+                    : "shell_not_trusted";
             break;
         }
 
@@ -1332,6 +1382,11 @@ bool BrowserBridge::isRunning() const noexcept
     return m_Impl->m_Running.load();
 }
 
+bool BrowserBridge::isPeerAuthEnforced() const noexcept
+{
+    return !m_Impl->m_ExpectedSignerIdentity.empty();
+}
+
 void BrowserBridge::disable()
 {
     m_Impl->m_Disabled.store(true);
@@ -1350,6 +1405,7 @@ void BrowserBridge::disable()
         // disabled; this clears the slot so a later enable() starts clean.
         std::lock_guard<std::mutex> navLock(m_Impl->m_NavMutex);
         m_Impl->m_PendingNav = NavSnapshot{};
+        m_Impl->m_CurrentVisitByPid.clear();
     }
     qCInfo(logBridge).noquote() << QString::fromStdString(
         seal::diag::joinFields({"event=fill.bridge.disabled"}));
@@ -1464,6 +1520,21 @@ std::optional<NavSnapshot> BrowserBridge::takeNavSince(std::uint64_t& lastSeenSe
     return m_Impl->m_PendingNav;
 }
 
+std::optional<std::string> BrowserBridge::currentVisit(DWORD browserPid) const
+{
+    if (m_Impl->m_Disabled.load())
+    {
+        return std::nullopt;
+    }
+    std::lock_guard<std::mutex> lock(m_Impl->m_NavMutex);
+    const auto it = m_Impl->m_CurrentVisitByPid.find(browserPid);
+    if (it == m_Impl->m_CurrentVisitByPid.end() || it->second.empty())
+    {
+        return std::nullopt;  // No navigation seen (or empty token) -> unknown.
+    }
+    return it->second;
+}
+
 namespace
 {
 // Minimal JSON string-body escaper. UTF-8 bytes >= 0x80 are valid inside a
@@ -1519,11 +1590,16 @@ std::string jsonEscape(std::string_view s)
 
 bool BrowserBridge::sendFillUsername(DWORD browserPid,
                                      const std::string& host,
+                                     const std::string& visit,
                                      const std::string& usernameUtf8)
 {
     if (m_Impl->m_Disabled.load())
     {
         return false;  // M8 panic: no reverse traffic.
+    }
+    if (visit.empty())
+    {
+        return false;
     }
 
     // Find the live connection for this browser PID; hold a shared_ptr so the
@@ -1545,10 +1621,13 @@ bool BrowserBridge::sendFillUsername(DWORD browserPid,
     // below; the host is not a secret.
     std::string escapedUser = jsonEscape(usernameUtf8);
     const std::string escapedHost = jsonEscape(host);
+    const std::string escapedVisit = jsonEscape(visit);
     std::string json;
-    json.reserve(escapedHost.size() + escapedUser.size() + 80);  // > full literal length
+    json.reserve(escapedHost.size() + escapedVisit.size() + escapedUser.size() + 92);
     json += "{\"v\":1,\"kind\":\"fill_username\",\"url_host\":\"";
     json += escapedHost;
+    json += "\",\"visit\":\"";
+    json += escapedVisit;
     json += "\",\"username\":\"";
     json += escapedUser;  // capacity reserved above -> no realloc frees plaintext
     json += "\"}";

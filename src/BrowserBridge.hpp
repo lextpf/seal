@@ -50,7 +50,9 @@ struct BridgeEntry
 {
     Verdict m_Verdict = Verdict::Unknown;               ///< Mapped from BridgeTag at insert time.
     std::chrono::steady_clock::time_point m_ExpiresAt;  ///< Steady-clock prune deadline.
-    QString m_UrlHost;  ///< Validated host name (no full URL ever crosses the pipe).
+    QString m_UrlHost;    ///< Validated host name (no full URL ever crosses the pipe).
+    std::string m_Visit;  ///< Per-document token from the click report; empty on an older
+                          ///< extension. The fill gate requires it to match the current document.
 };
 
 /**
@@ -240,6 +242,20 @@ public:
     bool isRunning() const noexcept;
 
     /**
+     * @brief Whether peer signer authentication is active (this binary is signed).
+     *
+     * When false, the binary is unsigned, so the M6 signer-identity gate accepts
+     * any peer (dev-mode degradation, see @ref BrowserBridge.cpp verifySignerMatches).
+     * The UI surfaces this as a warning so a user running an unsigned build knows
+     * peer authentication is off. A release build compiled with
+     * @c SEAL_REQUIRE_SIGNED_PEER refuses to start the bridge in this state
+     * instead of degrading.
+     *
+     * @return true iff this binary carries an Authenticode signer identity.
+     */
+    bool isPeerAuthEnforced() const noexcept;
+
+    /**
      * @brief Panic-mode disable: drop the map and refuse further activity.
      *
      * Lookups return @c std::nullopt immediately; incoming messages are
@@ -312,15 +328,34 @@ public:
     std::optional<NavSnapshot> takeNavSince(std::uint64_t& lastSeenSeq) const;
 
     /**
+     * @brief The per-document visit token of the page currently loaded in a
+     *        browser process, if known.
+     *
+     * Returns the visit token from the most recent navigation report for
+     * @p browserPid - the identity of the document now on screen. The
+     * click-fill gate compares this against the token stored on a cached
+     * @ref BridgeEntry: a mismatch means the entry belongs to a different
+     * document (a stale focus-click that survived a navigation or tab switch)
+     * and must not authorize a fill. Unlike @ref takeNavSince this does NOT
+     * consume the snapshot - it can be queried repeatedly.
+     *
+     * @param browserPid The validated browser PID to query.
+     * @return The current document token, or @c std::nullopt when the bridge is
+     *         disabled, no navigation has been seen for @p browserPid, or the
+     *         last report carried no token (older extension).
+     */
+    std::optional<std::string> currentVisit(DWORD browserPid) const;
+
+    /**
      * @brief Push a username-injection directive to a connected browser peer.
      *
      * The ONE reverse-channel write (bridge -> extension) besides the
-     * handshake. Sends a framed `{"v":1,"kind":"fill_username","url_host",
-     * "username"}` message to the authenticated peer serving @p browserPid, if
-     * one is connected. The caller (FillController) MUST have already
-     * JIT-decrypted the username and confirmed a STRICT domain match; this
-     * method only routes to the correct, already-signer/parent-gated
-     * connection and frames the bytes.
+     * handshake. Sends a framed
+     * `{"v":1,"kind":"fill_username","url_host","visit","username"}` message
+     * to the authenticated peer serving @p browserPid, if one is connected.
+     * The caller (FillController) MUST have already JIT-decrypted the username
+     * and confirmed a STRICT domain match; this method only routes to the
+     * correct, already-signer/parent-gated connection and frames the bytes.
      *
      * Thread-safe: called on the GUI thread while a worker thread reads the
      * same full-duplex pipe. Returns false when the bridge is disabled (M8),
@@ -329,12 +364,15 @@ public:
      * @param browserPid   The validated browser PID whose peer to send to.
      * @param host         The page host (echoed so the content script can
      *                     re-verify its own location before injecting).
+     * @param visit        Per-document visit token echoed so the content
+     *                     script can reject same-host different-document routes.
      * @param usernameUtf8 The plaintext username (UTF-8). Copied into the wire
      *                     frame; the caller and this method wipe their copies.
      * @return true iff a framed directive was written to a live peer.
      */
     bool sendFillUsername(DWORD browserPid,
                           const std::string& host,
+                          const std::string& visit,
                           const std::string& usernameUtf8);
 
     /**
