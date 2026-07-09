@@ -100,6 +100,13 @@ struct FusionOutcome
  * `*` browser_extension is Tier-1 eligible but rule M5 forbids it from
  * short-circuiting alone - an on-disk Tier-1 probe must corroborate.
  *
+ * @note In a browser the only on-disk corroborator that fires is
+ *       UiaIsPasswordProbe, whose verdict derives from the same page DOM
+ *       (`<input type=password>`) as browser_extension - so M5 corroboration
+ *       is NOT page-independent there. It hardens against a lying extension,
+ *       not a hostile page; strict host binding (FillController's release
+ *       gates) is what prevents wrong-site release.
+ *
  * @par Tier-2 weighted vote
  * With @f$ w_i @f$ the probe weight and @f$ c_i @f$ its confidence in
  * @f$ [0,1] @f$, summing over every non-Unknown probe with a known profile:
