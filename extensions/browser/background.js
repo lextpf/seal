@@ -41,7 +41,7 @@ const HOST_NAME = "com.seal.fill";
 
 // Per-event SW traces. Logs go to the SW DevTools console
 // (chrome://extensions -> seal companion -> Inspect views: service worker).
-const DEBUG_LOGS = true;
+const DEBUG_LOGS = false;
 
 let port = null;
 let reconnectDelayMs = 1000;
@@ -52,16 +52,37 @@ let sessionNonce = null;
 // Pending scheduleReconnect timer; the click-time fast-path checks this
 // to avoid double-scheduling.
 let reconnectTimer = null;
-// host -> last tab that reported a nav there, to route the reverse
-// fill_username directive back. Content re-verifies its own hostname before
-// injecting, so a stale entry fails closed, never leaks to the wrong site.
-const navTabs = new Map();
+// (host, visit) -> tab/frame that reported that exact document. The visit token
+// is random per content-script document; content re-verifies it before injecting.
+const navRoutes = new Map();
+const MAX_NAV_ROUTES = 256;
+
+function isVisitToken(value) {
+    return /^[A-Za-z0-9-]{1,64}$/.test(value);
+}
+
+function routeKey(host, visit) {
+    return host + "\n" + visit;
+}
+
+function rememberNavRoute(host, visit, tabId, frameId) {
+    if (!isVisitToken(visit)) {
+        return;
+    }
+    if (navRoutes.size >= MAX_NAV_ROUTES) {
+        const oldest = navRoutes.keys().next().value;
+        if (oldest !== undefined) {
+            navRoutes.delete(oldest);
+        }
+    }
+    navRoutes.set(routeKey(host, visit), { tabId, frameId });
+}
 
 // Reclaim entries on tab close so the map can't grow unbounded.
 chrome.tabs.onRemoved.addListener((closedTabId) => {
-    for (const [host, id] of navTabs) {
-        if (id === closedTabId) {
-            navTabs.delete(host);
+    for (const [key, route] of navRoutes) {
+        if (route.tabId === closedTabId) {
+            navRoutes.delete(key);
         }
     }
 });
@@ -128,7 +149,7 @@ function kickReconnect() {
 }
 
 function onHostMessage(msg) {
-    // Log only the message TYPE -- never the raw object, which for a
+    // Log only the message TYPE - never the raw object, which for a
     // fill_username directive contains the plaintext username.
     dbg("host -> extension kind:", msg && (msg.hello ? "handshake" : msg.kind));
     // First message is the bridge handshake bearing a per-connection
@@ -148,17 +169,25 @@ function onHostMessage(msg) {
         return;
     }
     // Reverse directive: seal pushes a username to inject (strict-domain only,
-    // gated seal-side). Route to the tab that reported this host; content
-    // re-verifies its hostname + secure context, so a stale route fails closed.
+    // gated seal-side). Route to the document that reported this host + visit;
+    // content re-verifies both before writing into the DOM.
     if (msg && msg.v === 1 && msg.kind === "fill_username" && typeof msg.username === "string") {
         const host = String(msg.url_host || "");
-        const tabId = navTabs.get(host);
-        if (tabId !== undefined) {
+        const visit = String(msg.visit || "");
+        if (!isVisitToken(visit)) {
+            dbg("fill_username: missing/invalid visit");
+            return;
+        }
+        const route = navRoutes.get(routeKey(host, visit));
+        if (route !== undefined) {
             chrome.tabs
-                .sendMessage(tabId, { v: 1, kind: "fill_username", url_host: host, username: msg.username })
+                .sendMessage(
+                    route.tabId,
+                    { v: 1, kind: "fill_username", url_host: host, visit: visit, username: msg.username },
+                    { frameId: route.frameId })
                 .catch((err) => dbg("fill_username relay failed:", err && err.message));
         } else {
-            dbg("fill_username: no known tab for host", host);
+            dbg("fill_username: no known route for host/visit");
         }
         return;
     }
@@ -178,7 +207,7 @@ async function hashPath(path) {
 
 // Receive click reports from content scripts; forward to host.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    dbg("content -> bg:", msg,
+    dbg("content -> bg kind:", msg && msg.kind,
         "from tab", sender && sender.tab ? sender.tab.id : "<none>");
     // Origin checks: own-extension only, tab-attached (content script) only.
     if (!sender || sender.id !== chrome.runtime.id) {
@@ -217,13 +246,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // (never sent empty) when absent/malformed: the bridge rejects empty, an
         // omitted key parses fine, and seal then stages nothing (fail-closed).
         const visit = String(msg.visit || "");
-        if (/^[A-Za-z0-9-]{1,64}$/.test(visit)) {
+        if (isVisitToken(visit)) {
             navPayload.visit = visit;
         }
-        // Remember which tab is on this host so a later fill_username directive
-        // can be routed back to it.
-        if (sender.tab && typeof sender.tab.id === "number") {
-            navTabs.set(navPayload.url_host, sender.tab.id);
+        // Remember the exact document route so a later fill_username directive
+        // cannot be delivered to another same-host page.
+        if (navPayload.visit && sender.tab && typeof sender.tab.id === "number") {
+            rememberNavRoute(navPayload.url_host, navPayload.visit, sender.tab.id, sender.frameId || 0);
         }
         dbg("bg -> host (nav):", navPayload);
         try {
@@ -246,8 +275,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             y: msg.y | 0,
             tag: String(msg.tag || "other"),
             url_host: String(msg.url_host || "").slice(0, 253),
+            secure: msg.secure ? 1 : 0,
             url_path_hash
         };
+        // Per-document visit token: binds this click authorization to its
+        // document. OMITTED (never sent empty) when absent/malformed - the
+        // bridge rejects an empty token, an omitted key parses fine, and seal
+        // then falls back to host-only binding for the click.
+        const visit = String(msg.visit || "");
+        if (isVisitToken(visit)) {
+            payload.visit = visit;
+        }
         dbg("bg -> host:", payload);
         try {
             port.postMessage(payload);
