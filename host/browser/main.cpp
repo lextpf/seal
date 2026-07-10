@@ -102,6 +102,19 @@ int wmain()
     const std::string ownIdentity = seal::signer::readOwnSignerIdentity();
     const bool inProductionMode = !ownIdentity.empty();
 
+#ifdef SEAL_REQUIRE_SIGNED_PEER
+    // Fail closed: a production host build refuses to run while unsigned rather
+    // than let openBridgePipe degrade to "first candidate pipe wins" (which
+    // would skip the server signer check). Dev builds (flag off) keep the
+    // degraded mode. This makes the fail-closed posture symmetric with the
+    // seal.exe bridge's startImpl guard.
+    if (!inProductionMode)
+    {
+        emitExitDiag(13, "unsigned_production");
+        return 13;
+    }
+#endif
+
     // Strict ownership check: enumerate the parent's handles and confirm
     // one points at our stdin's kernel pipe object. Closes the puppet
     // hole that isStdHandleFromProcess's anonymous-pipe soft-pass leaves
@@ -236,7 +249,7 @@ int wmain()
     CloseHandle(pipeReadEvent);
     CloseHandle(pipeWriteEvent);
     CloseHandle(shutdownEvent);
-    // Log the happy path too -- a clean-exit line is positive evidence
+    // Log the happy path too - a clean-exit line is positive evidence
     // that the host launched, ran, and wasn't killed at a gate.
     writeExitLog(0, loopExitReason);
     return 0;
