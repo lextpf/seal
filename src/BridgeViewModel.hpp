@@ -48,6 +48,7 @@ class BridgeViewModel : public QObject
     Q_PROPERTY(QString bridgeStatusText READ bridgeStatusText NOTIFY bridgeStatusTextChanged)
     Q_PROPERTY(bool autoStageEnabled READ autoStageEnabled WRITE setAutoStageEnabled NOTIFY
                    autoStageEnabledChanged)
+    Q_PROPERTY(bool bridgePeerAuthEnforced READ bridgePeerAuthEnforced CONSTANT)
 
 public:
     /**
@@ -61,6 +62,13 @@ public:
 
     /// @brief Whether the browser bridge is enabled (M8 panic-mode off).
     bool bridgeEnabled() const;
+
+    /**
+     * @brief Whether peer signer authentication is active (this binary is signed).
+     *        False in an unsigned build, where the M6 signer gate accepts any
+     *        peer; the settings panel shows a warning when this is false.
+     */
+    bool bridgePeerAuthEnforced() const;
 
     /// @brief Whether any browser-companion peer is currently connected.
     bool bridgePeerConnected() const;

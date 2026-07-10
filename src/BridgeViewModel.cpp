@@ -91,6 +91,11 @@ bool BridgeViewModel::bridgeEnabled() const
     return m_FillController->isBridgeEnabled();
 }
 
+bool BridgeViewModel::bridgePeerAuthEnforced() const
+{
+    return m_FillController->isBridgePeerAuthEnforced();
+}
+
 bool BridgeViewModel::bridgePeerConnected() const
 {
     return m_FillController->isBridgePeerConnected();
