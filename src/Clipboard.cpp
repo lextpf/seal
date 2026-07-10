@@ -381,9 +381,15 @@ bool typeSecret(const wchar_t* bytes, int len, DWORD delay_ms)
     // Send one event at a time; 5..12 ms jitter after each down/up pair
     // stops rate-limiters in web apps / RDP from dropping or reordering
     // keystrokes.
+    bool allSent = true;
     for (size_t i = 0; i < seq.size(); ++i)
     {
-        SendInput(1, &seq[i], sizeof(INPUT));
+        const UINT sent = SendInput(1, &seq[i], sizeof(INPUT));
+        if (sent != 1)
+        {
+            allSent = false;
+            break;
+        }
         if ((i & 1) == 1)
         {
             Sleep(5 + (GetTickCount64() & 7));
@@ -392,7 +398,7 @@ bool typeSecret(const wchar_t* bytes, int len, DWORD delay_ms)
 
     // Scrub keystroke data; SecureZeroMemory cannot be elided (unlike memset).
     SecureZeroMemory(seq.data(), seq.size() * sizeof(INPUT));
-    return true;
+    return allSent;
 }
 
 bool openInputInNotepad()
