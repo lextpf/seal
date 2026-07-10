@@ -47,7 +47,7 @@
 
     // Per-click breakdown. Logs land in the PAGE's DevTools console
     // (F12 -> Console), not the SW console.
-    const DEBUG_LOGS = true;
+    const DEBUG_LOGS = false;
     function dbg(...args) {
         if (DEBUG_LOGS) {
             console.log("[seal content]", ...args);
@@ -79,7 +79,7 @@
         return parts.join(" ");
     }
 
-    const TAG_PASSWORD = "password";  // gitleaks:allow -- field-kind label, not a credential
+    const TAG_PASSWORD = "password";  // gitleaks:allow - field-kind label, not a credential
     const TAG_USERNAME = "username";
     const TAG_TEXT = "text";
     const TAG_EMAIL = "email";
@@ -94,10 +94,163 @@
     // they clicked.
     const MIN_DIMENSION_PX = 2;
 
-    // M9 visibility gate vs hidden-overlay attacks: own computed style, then
-    // ancestors for display:none / visibility:hidden. Ancestor opacity is NOT
-    // walked (needs stacking-context math, false-negatives). Returns { ok, reason }.
-    function isUserVisible(el) {
+    function rectFromDomRect(rect) {
+        return {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+            width: rect.right - rect.left,
+            height: rect.bottom - rect.top
+        };
+    }
+
+    function rectIsFinite(rect) {
+        return Number.isFinite(rect.left) && Number.isFinite(rect.top) &&
+            Number.isFinite(rect.right) && Number.isFinite(rect.bottom) &&
+            Number.isFinite(rect.width) && Number.isFinite(rect.height);
+    }
+
+    function rectHasMinimumSize(rect) {
+        return rect.width >= MIN_DIMENSION_PX && rect.height >= MIN_DIMENSION_PX;
+    }
+
+    function intersectRects(a, b) {
+        const left = Math.max(a.left, b.left);
+        const top = Math.max(a.top, b.top);
+        const right = Math.min(a.right, b.right);
+        const bottom = Math.min(a.bottom, b.bottom);
+        if (right <= left || bottom <= top) {
+            return null;
+        }
+        return {
+            left,
+            top,
+            right,
+            bottom,
+            width: right - left,
+            height: bottom - top
+        };
+    }
+
+    function viewportRect() {
+        const doc = document.documentElement;
+        const width = window.innerWidth || (doc && doc.clientWidth) || 0;
+        const height = window.innerHeight || (doc && doc.clientHeight) || 0;
+        return { left: 0, top: 0, right: width, bottom: height, width, height };
+    }
+
+    function clipsOverflow(style) {
+        const clipping = new Set(["hidden", "clip", "auto", "scroll", "overlay"]);
+        return clipping.has(style.overflowX) || clipping.has(style.overflowY);
+    }
+
+    function pointInRect(point, rect) {
+        return point.x >= rect.left && point.x <= rect.right &&
+            point.y >= rect.top && point.y <= rect.bottom;
+    }
+
+    function centerPoint(rect) {
+        return {
+            x: Math.floor(rect.left + rect.width / 2),
+            y: Math.floor(rect.top + rect.height / 2)
+        };
+    }
+
+    function relatedHitElement(hit, el) {
+        return hit === el || el.contains(hit);
+    }
+
+    function hitTestVisibleElement(el, point, visibleRect) {
+        const probe = point || centerPoint(visibleRect);
+        if (!Number.isFinite(probe.x) || !Number.isFinite(probe.y)) {
+            return { ok: false, reason: "hit_point_invalid" };
+        }
+        if (!pointInRect(probe, visibleRect) || !pointInRect(probe, viewportRect())) {
+            return { ok: false, reason: "hit_point_outside_visible_rect" };
+        }
+
+        const hits = typeof document.elementsFromPoint === "function"
+            ? document.elementsFromPoint(probe.x, probe.y)
+            : [document.elementFromPoint(probe.x, probe.y)].filter(Boolean);
+        const top = hits.find((hit) => hit instanceof Element) || null;
+        if (!top) {
+            return { ok: false, reason: "hit_test_empty" };
+        }
+        if (!relatedHitElement(top, el)) {
+            return { ok: false, reason: "hit_test_blocked " + describeElement(top) };
+        }
+        return { ok: true, reason: "" };
+    }
+
+    function visibleViewportRect(el, rect) {
+        const viewport = viewportRect();
+        let visible = intersectRects(rectFromDomRect(rect), viewport);
+        if (!visible) {
+            return { ok: false, reason: "viewport_intersection_empty" };
+        }
+        if (!rectHasMinimumSize(visible)) {
+            return {
+                ok: false,
+                reason: "viewport_size " + visible.width.toFixed(1) + "x" +
+                    visible.height.toFixed(1)
+            };
+        }
+
+        let cur = el.parentElement;
+        while (cur) {
+            const ps = getComputedStyle(cur);
+            if (clipsOverflow(ps)) {
+                const parentRect = rectFromDomRect(cur.getBoundingClientRect());
+                if (!rectIsFinite(parentRect)) {
+                    return { ok: false, reason: "transform_invalid ancestor " + cur.tagName };
+                }
+                visible = intersectRects(visible, parentRect);
+                if (!visible) {
+                    return { ok: false, reason: "clipped_empty " + cur.tagName };
+                }
+                if (!rectHasMinimumSize(visible)) {
+                    return {
+                        ok: false,
+                        reason: "clipped_size " + visible.width.toFixed(1) + "x" +
+                            visible.height.toFixed(1) + " (" + cur.tagName + ")"
+                    };
+                }
+            }
+            cur = cur.parentElement;
+        }
+        return { ok: true, reason: "", rect: visible };
+    }
+
+    // Product of every `opacity(...)` function in a computed `filter` value, or
+    // 1 when there are none. `filter: opacity(0)` renders an element fully
+    // transparent while leaving style.opacity at 1, so without this an
+    // opacity-filtered field would slip through the M9 opacity gate below. Only
+    // opacity() is folded in (it maps exactly onto the CSS opacity semantics);
+    // other filter functions (blur/brightness/drop-shadow) are common on legit
+    // inputs and don't reliably hide a field, so they're left untouched.
+    function filterOpacityFactor(filter) {
+        if (!filter || filter === "none") {
+            return 1;
+        }
+        let factor = 1;
+        const re = /opacity\(\s*([0-9]*\.?[0-9]+)(%?)\s*\)/gi;
+        let m;
+        while ((m = re.exec(filter)) !== null) {
+            let v = parseFloat(m[1]);
+            if (!Number.isFinite(v)) {
+                continue;
+            }
+            if (m[2] === "%") {
+                v /= 100;
+            }
+            factor *= v;
+        }
+        return factor;
+    }
+
+    // M9 visibility gate vs hidden-overlay attacks. Returns { ok, reason }.
+    function isUserVisible(el, point) {
         if (!el || !el.isConnected) {
             return { ok: false, reason: "not_connected" };
         }
@@ -106,6 +259,9 @@
         }
 
         const rect = el.getBoundingClientRect();
+        if (!rectIsFinite(rectFromDomRect(rect))) {
+            return { ok: false, reason: "transform_invalid" };
+        }
         if (rect.width < MIN_DIMENSION_PX || rect.height < MIN_DIMENSION_PX) {
             return {
                 ok: false,
@@ -120,15 +276,13 @@
         if (style.visibility === "hidden" || style.visibility === "collapse") {
             return { ok: false, reason: "visibility:" + style.visibility };
         }
-        if (parseFloat(style.opacity) < MIN_OPACITY) {
-            return { ok: false, reason: "opacity=" + style.opacity };
-        }
         if (style.pointerEvents === "none") {
             // Clicks fall through, so the user can't think they clicked this.
             return { ok: false, reason: "pointer-events:none" };
         }
 
-        let cur = el.parentElement;
+        let effectiveOpacity = 1;
+        let cur = el;
         while (cur) {
             const ps = getComputedStyle(cur);
             if (ps.display === "none") {
@@ -143,7 +297,31 @@
                     reason: "ancestor visibility:" + ps.visibility + " (" + cur.tagName + ")"
                 };
             }
+            const opacity = parseFloat(ps.opacity);
+            if (Number.isFinite(opacity)) {
+                effectiveOpacity *= opacity;
+            }
+            // Fold `filter: opacity(...)` in too - it hides without touching
+            // the opacity property (see filterOpacityFactor).
+            effectiveOpacity *= filterOpacityFactor(ps.filter);
+            if (effectiveOpacity < MIN_OPACITY) {
+                return {
+                    ok: false,
+                    reason: (cur === el ? "opacity=" : "ancestor opacity=") +
+                        effectiveOpacity.toFixed(3) + " (" + cur.tagName + ")"
+                };
+            }
             cur = cur.parentElement;
+        }
+
+        const visible = visibleViewportRect(el, rect);
+        if (!visible.ok) {
+            return visible;
+        }
+
+        const hit = hitTestVisibleElement(el, point, visible.rect);
+        if (!hit.ok) {
+            return hit;
         }
         return { ok: true, reason: "" };
     }
@@ -227,6 +405,17 @@
         return { tag: TAG_OTHER, reason: "non-input " + el.tagName };
     }
 
+    // One random token per DOCUMENT lifetime; seal keys its once-per-visit
+    // latches on it (username injects once, password fills once, then inert)
+    // and binds each click report to the document it came from. Reload/reopen
+    // = fresh token (re-enables staging); SPA churn keeps it. 16 bytes -> 32
+    // hex, within the bridge's [A-Za-z0-9-]{1,64} cap.
+    const VISIT_TOKEN = (() => {
+        const bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+    })();
+
     // One bridge report per mousedown. Silent on failure (SW asleep / host
     // down); FusionDecider needs probe agreement anyway, so a missed report
     // just falls through to other probes.
@@ -255,14 +444,14 @@
             }
 
             // M9 - user-visible targets only.
-            const vis = isUserVisible(e.target);
+            const vis = isUserVisible(e.target, { x: e.clientX, y: e.clientY });
             dbg("visibility:", vis.ok ? "ok" : "REJECT -> " + vis.reason);
             if (!vis.ok) {
                 return;
             }
 
             // Cross-check: elementFromPoint should agree with e.target.
-            // Allow ancestor<->descendant relationships -- a click on an
+            // Allow ancestor<->descendant relationships - a click on an
             // <input>'s internal node varies by engine.
             const topAtPoint = document.elementFromPoint(e.clientX, e.clientY);
             const topRelation = !topAtPoint ? "<null>"
@@ -283,6 +472,10 @@
                 dbg("REJECT: tag=other (no bridge insert for neutral signal)");
                 return;
             }
+            if (!window.isSecureContext || location.protocol !== "https:") {
+                dbg("REJECT: reason=insecure_click");
+                return;
+            }
 
             // screenX/Y already match seal's WH_MOUSE_LL coord space (Qt6 marks
             // seal DPI-aware, so its hook gets logical-pixel coords).
@@ -291,10 +484,17 @@
                 x: Math.round(e.screenX),
                 y: Math.round(e.screenY),
                 tag: c.tag,
-                url_host: location.hostname,
+                url_host: location.host,
+                secure: 1,
+                // Per-document token: binds this cached click authorization to
+                // the document it came from, so seal can reject a stale entry
+                // that survived a navigation/tab-switch at the same location.
+                visit: VISIT_TOKEN,
                 url_path: location.pathname
             };
-            dbg("PAYLOAD ->", JSON.stringify(payload),
+            dbg("PAYLOAD -> tag", payload.tag,
+                "host_len", location.host.length,
+                "path_len", location.pathname.length,
                 "(devicePixelRatio=" + window.devicePixelRatio + ")");
 
             // M2 -- only chrome.runtime.sendMessage. .catch swallows the
@@ -311,8 +511,16 @@
         }
     }
 
-    // Capture phase fires before any page handler, so a page calling
-    // e.stopPropagation() in its own mousedown can't suppress our report.
+    // Registered in the capture phase on `document`. This beats a page handler
+    // in the bubble phase or on a descendant node, but it is NOT unsuppressable:
+    // a page capture-phase listener on `window` (an ancestor in the propagation
+    // path) runs first and can stopPropagation/stopImmediatePropagation before
+    // the event reaches `document`; so can a `document` capture-phase page
+    // listener registered before us that stops immediate propagation. That only
+    // DENIES this click's bridge probe vote, which fails safe: with no bridge
+    // entry the staged auto-fill is a silent no-op (M5 needs an on-disk probe to
+    // agree) and the manual path falls through to the on-disk probes. Suppression
+    // cannot forge a classification or redirect a fill.
     document.addEventListener("mousedown", reportClick, true);
 
     // ---- Navigation reports (zero-gesture staged auto-fill) ----
@@ -346,16 +554,6 @@
         return false;
     }
 
-    // One random token per DOCUMENT lifetime; seal keys its once-per-visit
-    // latches on it (username injects once, password fills once, then inert).
-    // Reload/reopen = fresh token (re-enables staging); SPA churn keeps it.
-    // 16 bytes -> 32 hex, within the bridge's [A-Za-z0-9-]{1,64} cap.
-    const VISIT_TOKEN = (() => {
-        const bytes = new Uint8Array(16);
-        crypto.getRandomValues(bytes);
-        return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-    })();
-
     let lastNavKey = "";
     let navDebounceTimer = null;
 
@@ -371,24 +569,26 @@
         // Coalesce on the FULL field composition so an email-first step 1
         // (user=1,pw=0) and its password step 2 (pw=1) each fire exactly once,
         // while SPA route churn and the polling fallback don't spam the bridge.
-        const key = location.hostname + "|" + (pw ? "1" : "0") + "|" + (user ? "1" : "0");
+        const key = location.host + "|" + (pw ? "1" : "0") + "|" + (user ? "1" : "0");
         if (key === lastNavKey) {
             return;
         }
         lastNavKey = key;
         if (!pw && !user) {
-            return;  // Not a login page -- nothing to stage.
+            return;  // Not a login page - nothing to stage.
         }
         const payload = {
             v: 1,
             kind: "nav",
-            url_host: location.hostname,
+            url_host: location.host,
             secure: 1,
             form: pw ? 1 : 0,
             user: user ? 1 : 0,
             visit: VISIT_TOKEN
         };
-        dbg("NAV PAYLOAD ->", JSON.stringify(payload));
+        dbg("NAV PAYLOAD -> host_len", location.host.length,
+            "form", payload.form,
+            "user", payload.user);
         chrome.runtime.sendMessage(payload).catch((err) => {
             dbg("nav sendMessage rejected:", err && err.message);
         });
@@ -436,7 +636,7 @@
         for (const m of mutations) {
             if (m.type === "attributes") {
                 // React only to an <input>'s own attribute toggling (a hidden/
-                // disabled/type/style reveal of the field itself) -- cheap, and
+                // disabled/type/style reveal of the field itself) - cheap, and
                 // ignores the style/class churn of unrelated elements.
                 const t = m.target;
                 if (t && t.nodeType === 1 && t.tagName === "INPUT") {
@@ -515,7 +715,7 @@
     // Defence in depth for seal's once-per-visit guarantee: even if the app
     // side re-sends (e.g. seal restarted mid-visit and lost its latches), this
     // document accepts exactly ONE injection into a found field. Deliberately
-    // NOT set when no field is found yet -- a lazily rendered form may retry.
+    // NOT set when no field is found yet - a lazily rendered form may retry.
     let usernameInjected = false;
 
     function injectUsername(username) {
@@ -549,9 +749,13 @@
         }
         // Re-verify this tab is actually on the host seal matched, so a stale
         // route or a since-navigated tab can't receive another site's username.
-        if (msg.url_host !== location.hostname) {
-            dbg("injectUsername: host mismatch (tab is", location.hostname,
+        if (msg.url_host !== location.host) {
+            dbg("injectUsername: host mismatch (tab is", location.host,
                 "msg is", msg.url_host, ")");
+            return;
+        }
+        if (msg.visit !== VISIT_TOKEN) {
+            dbg("injectUsername: visit mismatch");
             return;
         }
         if (typeof msg.username === "string" && msg.username.length > 0) {
