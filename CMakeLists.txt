@@ -28,6 +28,13 @@ endif()
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 option(ENABLE_TESTS "Enable test builds" ON)
 
+# When ON, a build whose own binary is unsigned (empty Authenticode signer
+# identity) fails CLOSED - the browser bridge refuses to start and the host
+# refuses to connect - instead of degrading to accept-all-peers. Leave OFF for
+# local/dev builds (unsigned, still usable); release packaging turns it ON so an
+# unsigned production binary can never silently run with peer authentication off.
+option(SEAL_REQUIRE_SIGNED_PEER "Fail closed when the binary is unsigned (production)" OFF)
+
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -65,7 +72,7 @@ endif()
 # (FluentWinUI3, NativeStyle) but omits the compiled .obj resource files
 # they reference. Qt6QmlPlugins.cmake unconditionally includes every
 # QmlPlugin Config file, so broken targets must be removed before
-# find_package sees them. We only use the Basic style — remove all
+# find_package sees them. We only use the Basic style - remove all
 # unused style configs to avoid present and future breakage.
 if(VCPKG_TARGET_TRIPLET MATCHES "static")
     set(_vcpkg_installed "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}")
@@ -238,6 +245,9 @@ target_compile_definitions(seal PRIVATE
     _WIN32_WINNT=0x0A00
     USE_QT_UI
 )
+if(SEAL_REQUIRE_SIGNED_PEER)
+    target_compile_definitions(seal PRIVATE SEAL_REQUIRE_SIGNED_PEER)
+endif()
 
 file(GLOB SEAL_DUOTONE_SVGS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} assets/duotone/*.svg)
 file(GLOB SEAL_BRAND_SVGS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} assets/brands/*.svg)
@@ -364,6 +374,9 @@ if(ENABLE_BROWSER_HOST)
         NOMINMAX
         _WIN32_WINNT=0x0A00
     )
+    if(SEAL_REQUIRE_SIGNED_PEER)
+        target_compile_definitions(seal_browser PRIVATE SEAL_REQUIRE_SIGNED_PEER)
+    endif()
 
     # Console subsystem: the browser pipes stdin/stdout, so we need a console
     # entry point (wmain), not WinMain.
