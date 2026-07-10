@@ -10,7 +10,7 @@ namespace seal::browser_host
 
 // Kernel-level pipe name for a handle. CreatePipe() pipes get an internal
 // name like `\Device\NamedPipe\Win32Pipes.<tid>.<seq>`; both ends share
-// it. Empty on any failure -- callers treat empty as "unverifiable" and
+// it. Empty on any failure - callers treat empty as "unverifiable" and
 // fall back to the surrounding policy (fail closed in production, soft-
 // pass in dev).
 std::wstring getHandlePipeName(HANDLE handle)
@@ -128,7 +128,7 @@ bool parentOwnsPipe(DWORD parentPid, const std::wstring& expectedPipeName)
 }
 
 // Verify a stdio handle is a pipe from a trusted process. Soft-passes:
-// (1) anonymous pipes -- GetNamedPipeServerProcessId fails, bridge-side
+// (1) anonymous pipes - GetNamedPipeServerProcessId fails, bridge-side
 // parent check still applies; (2) Chrome's split-process model where the
 // server (browser) and our parent (utility) are different chrome.exe --
 // accept iff the server is itself a known signed browser. Untrusted
@@ -146,24 +146,20 @@ bool isStdHandleFromProcess(HANDLE handle, DWORD expectedPid)
     DWORD serverPid = 0;
     if (!GetNamedPipeServerProcessId(handle, &serverPid))
     {
-        return true;  // anonymous pipe -- soft-pass (see header comment).
+        return true;  // anonymous pipe - soft-pass (see header comment).
     }
     if (serverPid == 0 || serverPid == expectedPid)
     {
         return true;
     }
-    // Server diverged from parent -- accept only if it's a known signed
-    // browser (Chrome's utility-process split).
+    // Server diverged from parent - accept only if it's a known browser
+    // signed by that browser's expected publisher (Chrome's utility-process split).
     const std::wstring serverPath = seal::signer::resolveProcessPath(serverPid);
     if (serverPath.empty())
     {
         return false;
     }
-    if (!seal::signer::isKnownBrowserImage(serverPath))
-    {
-        return false;
-    }
-    if (!seal::signer::winVerifyTrustOk(serverPath))
+    if (!seal::signer::isTrustedBrowserImage(serverPath))
     {
         return false;
     }
