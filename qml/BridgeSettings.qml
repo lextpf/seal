@@ -233,4 +233,52 @@ Row {
                           "\nThe password is never sent to the browser."
         }
     }
+
+    // Visible only in an unsigned build: peer signer authentication (M6) is
+    // degraded to accept-all-peers, so any local process can talk to the
+    // bridge. Shown as a bare amber warning sign (not a status chip) so it
+    // reads as a caution rather than another pill. A signed release hides it
+    // entirely (Row skips invisible items) and shows no "signed" indicator.
+    Item {
+        id: authWarn
+        visible: !Bridge.bridgePeerAuthEnforced
+        implicitWidth: authWarnRow.implicitWidth
+        implicitHeight: 22
+        anchors.verticalCenter: parent.verticalCenter
+
+        Row {
+            id: authWarnRow
+            anchors.centerIn: parent
+            spacing: 6
+
+            SvgIcon {
+                source: Theme.iconTriangleExclamation
+                width: Theme.px(12)
+                height: Theme.px(12)
+                anchors.verticalCenter: parent.verticalCenter
+                color: Theme.textWarning
+            }
+
+            Text {
+                text: "Unsigned build"
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.fontSizeSmall
+                font.weight: Font.Medium
+                color: Theme.textWarning
+                anchors.verticalCenter: parent.verticalCenter
+            }
+        }
+
+        MouseArea {
+            id: authWarnMouse
+            anchors.fill: parent
+            hoverEnabled: true
+        }
+
+        ToolTip.visible: authWarnMouse.containsMouse
+        ToolTip.delay: 600
+        ToolTip.text: "This build is unsigned, so the browser bridge accepts any local" +
+                      "\npeer - peer signer authentication (M6) is disabled. Use a signed" +
+                      "\nrelease build for full protection."
+    }
 }
