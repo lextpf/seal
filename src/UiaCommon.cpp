@@ -65,29 +65,15 @@ bool containsPasswordHint(const QString& rawText)
     if (text.isEmpty())
         return false;
 
-    // Substring-match against lowercased UIA property values. \u escapes
-    // keep the source ASCII-only (MSVC codepage-independent). ASCII
-    // fallback variants cover sites that strip diacritics.
-    static const std::array<QStringView, 27> kPasswordHints = {
-        QStringView{u"password"},     QStringView{u"passwd"},   QStringView{u"passcode"},
-        QStringView{u"pwd"},          QStringView{u"passwort"}, QStringView{u"kennwort"},
-        QStringView{u"contraseña"},    // es
-        QStringView{u"mot de passe"},  // fr
-        QStringView{u"motdepasse"},    // fr (compact)
-        QStringView{u"senha"},         // pt
-        QStringView{u"wachtwoord"},    // nl
-        QStringView{u"hasło"},         // pl
-        QStringView{u"haslo"},         // pl (ASCII fallback)
-        QStringView{u"lösenord"},      // sv
-        QStringView{u"losenord"},      // sv (ASCII fallback)
-        QStringView{u"passord"},       // no
-        QStringView{u"adgangskode"},   // da
-        QStringView{u"salasana"},      // fi
-        QStringView{u"heslo"},         // cs
-        QStringView{u"jelszó"},        // hu
-        QStringView{u"jelszo"},        // hu (ASCII fallback)
-        QStringView{u"şifre"},         // tr
-        QStringView{u"sifre"},         // tr (ASCII fallback)
+    // Substring-match against lowercased UIA property values. English and
+    // German keywords only; all entries are ASCII.
+    static const std::array<QStringView, 6> kPasswordHints = {
+        QStringView{u"password"},
+        QStringView{u"passwd"},
+        QStringView{u"passcode"},
+        QStringView{u"pwd"},
+        QStringView{u"passwort"},
+        QStringView{u"kennwort"},
     };
 
     for (const QStringView hint : kPasswordHints)
@@ -106,9 +92,8 @@ bool containsUsernameHint(const QString& rawText)
         return false;
 
     // Compound forms only - bare "user" would false-positive on user-agent,
-    // user-profile-pic, etc. Multi-word entries contain-match the full
-    // lowercased property value.
-    static const std::array<QStringView, 28> kUsernameHints = {
+    // user-profile-pic, etc. English and German keywords only.
+    static const std::array<QStringView, 15> kUsernameHints = {
         QStringView{u"username"},
         QStringView{u"user-name"},
         QStringView{u"userid"},
@@ -124,19 +109,6 @@ bool containsUsernameHint(const QString& rawText)
         QStringView{u"nutzer"},
         QStringView{u"konto"},
         QStringView{u"kennung"},
-        QStringView{u"usuario"},             // es
-        QStringView{u"correo electrónico"},  // es
-        QStringView{u"iniciar sesión"},      // es
-        QStringView{u"cuenta"},              // es
-        QStringView{u"utilisateur"},         // fr
-        QStringView{u"nom d'utilisateur"},   // fr
-        QStringView{u"identifiant"},         // fr
-        QStringView{u"courriel"},            // fr
-        QStringView{u"compte"},              // fr
-        QStringView{u"nome utente"},         // it
-        QStringView{u"accesso"},             // it
-        QStringView{u"nome de usuário"},     // pt
-        QStringView{u"usuário"},             // pt
     };
 
     for (const QStringView hint : kUsernameHints)
