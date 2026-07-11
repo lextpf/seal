@@ -76,7 +76,7 @@ Popup {
                 autoPaddingEnabled: false
             }
 
-            DialogBlobs { }
+            DialogBlobs { active: root.visible }
 
             Rectangle {
                 anchors.top: parent.top
