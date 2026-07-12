@@ -18,7 +18,7 @@
  *   QQuickStyle::setStyle("Basic");   QGuiApplication app;
  *   uiScale = computeUiScale();                          // DPI-aware text factor
  *
- *   // 1. Qt-free core -- constructed first, outlives every ViewModel below.
+ *   // 1. Qt-free core - constructed first, outlives every ViewModel below.
  *   CredentialWorkspace workspace;
  *   AsyncRunner         async;
  *   FillController      fillEngine;
@@ -26,7 +26,7 @@
  *   // 2. ViewModels + collaborators in dependency order.
  *   //    Declared later => destructed earlier (borrowers die before owners).
  *   AppViewModel      appViewModel(workspace, async);  // hub  -> "AppViewModel"
- *   TypeController    fill(...);                        //      -> "Fill"
+ *   TypeController    fill(...);                       //      -> "Fill"
  *   BridgeViewModel   bridge(&fillEngine);             //      -> "Bridge"
  *   StagingController staging(...);   // owned collaborator, NOT a ctx property
  *   WindowController  window;                          //      -> "WindowVM"

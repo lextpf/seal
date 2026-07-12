@@ -80,7 +80,7 @@ bool overlappedPipeWrite(HANDLE pipe, HANDLE ev, const void* buf, DWORD n)
 }
 
 // Overlapped read of exactly n bytes from the duplex bridge pipe, waking early
-// when `shutdownEvent` is signaled -- deterministic teardown with no CancelIoEx
+// when `shutdownEvent` is signaled - deterministic teardown with no CancelIoEx
 // timing race and no file-object-lock serialization against concurrent writes.
 bool overlappedPipeRead(HANDLE pipe, HANDLE ev, HANDLE shutdownEvent, void* buf, DWORD n)
 {
@@ -136,7 +136,7 @@ DWORD decodeLen(const std::array<unsigned char, 4>& b)
 }
 
 // Read one length-prefixed frame via `read(buf, n) -> bool`. Empty vector on
-// EOF / oversized / read error -- the contract both public readers share.
+// EOF / oversized / read error - the contract both public readers share.
 template <typename ReadFn>
 std::vector<char> readFrame(ReadFn read)
 {

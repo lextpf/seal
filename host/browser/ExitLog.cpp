@@ -17,7 +17,7 @@ namespace seal::browser_host
 // Append a timestamped exit line to
 // %LOCALAPPDATA%\seal\bridge-host-last-exit.log so host-only failures
 // (argv-origin, parent-pid, pipe enumeration) can be diagnosed without
-// the host's stderr -- Chrome captures stderr but doesn't surface it in
+// the host's stderr - Chrome captures stderr but doesn't surface it in
 // the SW console (the extension just sees "Native host has exited.").
 //
 // Best-effort; never fail-loud, so a logging error can't mask the real

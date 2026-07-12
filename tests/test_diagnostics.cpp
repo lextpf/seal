@@ -44,7 +44,7 @@ TEST(DiagnosticsErrorFields, EmptyMessageYieldsNoneDetail)
 }
 
 // The single returned string must expand to exactly two logfmt fields when
-// dropped into a joinFields list -- the diag module's round-trip invariant.
+// dropped into a joinFields list - the diag module's round-trip invariant.
 TEST(DiagnosticsErrorFields, ExpandsToTwoFieldsInJoinFields)
 {
     const std::string line = joinFields({"event=x.finish", "result=fail", errorFields("timeout")});

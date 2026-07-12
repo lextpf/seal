@@ -16,7 +16,7 @@ constexpr int kPipeBruteForceLimit = 32;
 }  // namespace
 
 // Open the seal bridge pipe. Each `seal-fill-*` candidate's server must
-// match our publisher's SPKI thumbprint -- a same-user attacker can pre-
+// match our publisher's SPKI thumbprint - a same-user attacker can pre-
 // create a sorting-earlier pipe but cannot sign with seal's key. Dev mode
 // (empty expectedIdentity) accepts the first pipe (mirrors bridge M6).
 HANDLE openBridgePipe(const std::string& expectedIdentity)
@@ -43,7 +43,7 @@ HANDLE openBridgePipe(const std::string& expectedIdentity)
         // username-injection directives) and writes (forward click/nav
         // reports) this one duplex handle from two threads concurrently. On a
         // synchronous handle a pending blocking ReadFile holds the file-object
-        // lock and would serialize -- in fact deadlock -- the forward WriteFile.
+        // lock and would serialize - in fact deadlock - the forward WriteFile.
         HANDLE pipe = CreateFileW(fullName.c_str(),
                                   GENERIC_READ | GENERIC_WRITE,
                                   0,

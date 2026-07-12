@@ -450,7 +450,7 @@ Item {
             }
         }
 
-        // Crisp breathing core -- the bright point the ripples emanate from.
+        // Crisp breathing core - the bright point the ripples emanate from.
         Rectangle {
             anchors.centerIn: parent
             visible: root.coreLevel > 0.001
@@ -684,7 +684,7 @@ Item {
                 opacity: (fp < 0.12 ? fp / 0.12 : Math.pow((1.0 - fp) / 0.88, 1.15))
                 antialiasing: true
                 preferredRendererType: Shape.CurveRenderer
-                // Rotational shear per arc -- the break twists as it flies.
+                // Rotational shear per arc - the break twists as it flies.
                 rotation: [14, -16, 11][index] * flightP
                 transform: Translate {
                     x: Math.cos(frag.midAng) * Theme.pxf(52) * frag.flightP
