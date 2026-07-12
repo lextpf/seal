@@ -1,6 +1,6 @@
 # Contributing Guide
 
-This guide defines contribution standards for the project’s human authors, co-authors, and AI agents acting as contributing entities.
+This guide defines contribution standards for the project's human authors, co-authors, and AI agents acting as contributing entities.
 
 Formatting is enforced by `.clang-format`. Contributors should run the formatter instead of manually debating whitespace, wrapping, brace placement, pointer alignment, or similar layout rules.
 
@@ -68,7 +68,7 @@ Do not restate or fight these rules in review. Run the formatter and move on.
 | Functions / Methods              | PascalCase                                  | `LoadTexture()`, `Logger::Write()`                        |
 | Namespaces                       | PascalCase                                  | `Rendering`, `MathUtils`                                  |
 | Local variables                  | camelCase                                   | `itemCount`, `deltaTime`, `isReady`                       |
-| Parameters                       | camelCase                                   | `int itemCount`, `const std::string& filePath`           |
+| Parameters                       | camelCase                                   | `int itemCount`, `const std::string& filePath`            |
 | Class member variables           | `m_` + PascalCase                           | `m_Buffer`, `m_Window`, `m_ItemCount`                     |
 | Struct fields (plain data)       | camelCase, no prefix                        | `position`, `velocity`, `lifetime`                        |
 | Macros / constants               | UPPER_SNAKE_CASE                            | `MAX_RETRIES`, `DEFAULT_TIMEOUT`                          |
@@ -354,13 +354,13 @@ Documentation comments are written for a **Doxygen-style documentation generator
 
 |                       | `.hpp`                                                  | `.cpp`                                            |
 |-----------------------|---------------------------------------------------------|---------------------------------------------------|
-| Doc-comment styles    | `/** … */` blocks, `///` one-liners, `///<` trailing    | plain `//` only                                   |
-| Doxygen commands      | yes (`@brief`, `@param`, `@ingroup`, …)                 | **no** — with a single exception: `@author`       |
+| Doc-comment styles    | `/** ... */` blocks, `///` one-liners, `///<` trailing  | plain `//` only                                   |
+| Doxygen commands      | yes (`@brief`, `@param`, `@ingroup`, ...)               | **no** - with a single exception: `@author`       |
 | `@author`             | file/type-level, `[NAME] (https://github.com/[USER])`   | optional `// @author <Name> (<url>)` line         |
 
 ### General comment rule
 
-Comment the reason, constraint, or non-obvious behavior. Do not comment what the code already says plainly. Preserve ASCII diagrams and worked-example traces in algorithm-heavy code — they are house style, not clutter.
+Comment the reason, constraint, or non-obvious behavior. Do not comment what the code already says plainly. Preserve ASCII diagrams and worked-example traces in algorithm-heavy code - they are house style, not clutter.
 
 Bad:
 
@@ -386,7 +386,7 @@ count++; // Includes the sentinel slot reserved during parsing.
 #### Block vs. one-line form
 
 * A doc comment that spans **more than one line** is a Javadoc **block**: `/**` on its own line, a leading ` * ` on every continuation line, a bare ` *` for blank separator lines, and ` */` to close.
-* A doc comment that fits on **one physical line** uses `///` (e.g. a lone `/// @brief …` above a simple declaration, or a group marker).
+* A doc comment that fits on **one physical line** uses `///` (e.g. a lone `/// @brief ...` above a simple declaration, or a group marker).
 * Use only these two styles in headers. Do **not** use the `//!` or `/*! */` "bang" variants.
 
 ```cpp
@@ -405,10 +405,10 @@ void Resize(std::size_t newSize, bool zeroFill);
 
 The block documenting a header's primary type (or namespace) uses a **fixed tag order**:
 
-1. **Kind tag** — `@struct Name`, `@class Name`, or `@enum Name`. Present when the header defines one primary type; **omit** it for namespace / free-function headers, which lead with `@brief`.
-2. `@brief` — a one-line summary ending in a period.
-3. `@author [NAME] (https://github.com/[USER])` — the same attribution string everywhere. **File / type-level only**; never repeated on a function, method, or member.
-4. `@ingroup <Module>` — one of the modules your project defines (see below).
+1. **Kind tag** - `@struct Name`, `@class Name`, or `@enum Name`. Present when the header defines one primary type; **omit** it for namespace / free-function headers, which lead with `@brief`.
+2. `@brief` - a one-line summary ending in a period.
+3. `@author [NAME] (https://github.com/[USER])` - the same attribution string everywhere. **File / type-level only**; never repeated on a function, method, or member.
+4. `@ingroup <Module>` - one of the modules your project defines (see below).
 5. a blank ` *`, then prose.
 
 ```cpp
@@ -438,11 +438,11 @@ A namespace / free-function header drops the kind tag and leads with `@brief`:
  */
 ```
 
-Do **not** use `@file` — leave file identity implicit.
+Do **not** use `@file` - leave file identity implicit.
 
 #### Modules (`@ingroup`)
 
-Every documented entity is grouped under a module with `@ingroup <Module>`. Modules are declared **once** — each as an `@addtogroup <Id> <Title>` block in a single group-definitions header — and every other file only *references* them with `@ingroup`. Never add a new `@addtogroup` outside that one header.
+Every documented entity is grouped under a module with `@ingroup <Module>`. Modules are declared **once** - each as an `@addtogroup <Id> <Title>` block in a single group-definitions header - and every other file only *references* them with `@ingroup`. Never add a new `@addtogroup` outside that one header.
 
 Choose the module by **subsystem role, not filename**: a rendering helper belongs to the rendering module even when its filename names the feature it serves rather than the module.
 
@@ -467,7 +467,7 @@ float Lerp(float a, float b, float t);
 
 #### Members and enum values
 
-Document a struct field or enumerator **inline with a trailing `///<`** when the text fits on the member's line. `///<` is the **only** trailing style this guide uses — not `/**< */`, `//!<`, or `/*!< */`.
+Document a struct field or enumerator **inline with a trailing `///<`** when the text fits on the member's line. `///<` is the **only** trailing style this guide uses - not `/**< */`, `//!<`, or `/*!< */`.
 
 ```cpp
 struct Color
@@ -498,7 +498,7 @@ bool postProcessEnabled{true};
 
 #### Grouping related members
 
-Group members with a `@name` section fenced by `@{` … `@}`. The **opener** is either a `/** … @{ */` block (when it carries `@name`/`@brief`) or two one-line `/// @name` + `/// @{` lines. The **closer** is always a single physical line — `/// @}` (a one-line `/** @} */` is also acceptable). Never expand a closer into a multi-line block, and balance every `@{` with a `@}`.
+Group members with a `@name` section fenced by `@{` ... `@}`. The **opener** is either a `/** ... @{ */` block (when it carries `@name`/`@brief`) or two one-line `/// @name` + `/// @{` lines. The **closer** is always a single physical line - `/// @}` (a one-line `/** @} */` is also acceptable). Never expand a closer into a multi-line block, and balance every `@{` with a `@}`.
 
 ```cpp
 /**
@@ -516,7 +516,7 @@ bool m_Initialized = false;  ///< Whether creation succeeded (for safe teardown)
 
 Documentation commands to use where useful:
 
-`@brief`, `@author`, `@ingroup` (plus `@addtogroup` in the group-definitions header only), `@struct` / `@class` / `@enum`, `@param`, `@return`, `@tparam`, `@pre` / `@post`, `@note` / `@warning`, `@p` / `@c` / `@ref` / `@see`, `@par <Title>`, `@name` / `@{` / `@}`, `@code` / `@endcode` (and `@code{.cpp}`), `@verbatim` / `@endverbatim` for ASCII diagrams, and LaTeX math `@f[ … @f]` / inline `@f$ … @f$`.
+`@brief`, `@author`, `@ingroup` (plus `@addtogroup` in the group-definitions header only), `@struct` / `@class` / `@enum`, `@param`, `@return`, `@tparam`, `@pre` / `@post`, `@note` / `@warning`, `@p` / `@c` / `@ref` / `@see`, `@par <Title>`, `@name` / `@{` / `@}`, `@code` / `@endcode` (and `@code{.cpp}`), `@verbatim` / `@endverbatim` for ASCII diagrams, and LaTeX math `@f[ ... @f]` / inline `@f$ ... @f$`.
 
 Do **not** use: `@file`, `@returns`, `@union`, `@short`, `@defgroup`, `@def`, `@fn`, `@var`, `@internal`.
 
@@ -524,10 +524,10 @@ Do **not** use: `@file`, `@returns`, `@union`, `@short`, `@defgroup`, `@def`, `@
 
 ### Source (`.cpp`) documentation
 
-* **`//` line comments only.** No `/** */` blocks, no `///` (not even trailing `///<`), and no Doxygen commands (`@brief`, `@param`, `@return`, `@ingroup`, `@par`, `@note`, …).
+* **`//` line comments only.** No `/** */` blocks, no `///` (not even trailing `///<`), and no Doxygen commands (`@brief`, `@param`, `@return`, `@ingroup`, `@par`, `@note`, ...).
 * The **one exception** is an authorship line, written as a plain `// @author <Name> (<url>)` (e.g. `// @author [NAME] (https://github.com/[USER])`). Keep existing attributions as-is; don't rewrite them.
-* When moving header prose into a `.cpp`, **strip the Doxygen markup**: `@p name` → `name` (or backtick-quote it: `` `name` ``), `@c Buffer{}` → plain `Buffer{}`, `@ref Foo` → `Foo`. Backtick-quoting an identifier is the house substitute for `@c` / `@p` inside `//` comments.
-* A file-header contract block is optional: complex files (algorithms, pipelines) carry a top-of-file `//` summary — often with an ASCII diagram or worked example — while simpler files go straight from includes to code. Either way, add a one-line `//` intent comment above a function whenever its purpose isn't self-evident.
+* When moving header prose into a `.cpp`, **strip the Doxygen markup**: `@p name` -> `name` (or backtick-quote it: `` `name` ``), `@c Buffer{}` -> plain `Buffer{}`, `@ref Foo` -> `Foo`. Backtick-quoting an identifier is the house substitute for `@c` / `@p` inside `//` comments.
+* A file-header contract block is optional: complex files (algorithms, pipelines) carry a top-of-file `//` summary - often with an ASCII diagram or worked example - while simpler files go straight from includes to code. Either way, add a one-line `//` intent comment above a function whenever its purpose isn't self-evident.
 
 ```cpp
 // RingBuffer - fixed-capacity FIFO used by the audio mixer.
