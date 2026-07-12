@@ -335,7 +335,7 @@ TEST(FillPlaintextWindow, NarrowedToDecryptInstant)
 
     // The 60s fill reprotect safety net is gone. Neither AppViewModel.cpp nor
     // TypeController.cpp uses QTimer::singleShot; an absent (not merely
-    // "unique") singleShot is the robust signal -- re-introducing the timer
+    // "unique") singleShot is the robust signal - re-introducing the timer
     // would re-add a singleShot and fail this assertion.
     EXPECT_EQ(vmSrc.find("singleShot"), std::string::npos);
     EXPECT_EQ(tcSrc.find("singleShot"), std::string::npos);
@@ -346,6 +346,7 @@ TEST(StagedAutofillBoundary, StagingNeverDecryptsAndReleaseFailsClosed)
     const std::string scSrc = readSourceFile("src/StagingController.cpp");
     const std::string fcSrc = readSourceFile("src/FillController.cpp");
     const std::string bvmSrc = readSourceFile("src/BridgeViewModel.cpp");
+    const std::string clipboardSrc = readSourceFile("src/Clipboard.cpp");
     const std::string qm = readSourceFile("src/QmlMain.cpp");
 
     // Staging only selects + arms; it never decrypts, unlocks, or prompts for
@@ -365,10 +366,16 @@ TEST(StagedAutofillBoundary, StagingNeverDecryptsAndReleaseFailsClosed)
     expectPresent(fcSrc, "reason=no_bridge_entry");
     expectPresent(fcSrc, "reason=host_mismatch");
     expectPresent(fcSrc, "reason=foreground_pid_mismatch");
-    // Nav-mode host binding goes through the shared tiered matcher (strict for
-    // domain records, fuzzy for bare labels) that the selector also uses, so
-    // the release gate and the selector can never diverge.
-    expectPresent(fcSrc, "url::platformMatchesHost(record.platform, pageHost)");
+    // Nav-mode host binding goes through the shared secret-release matcher:
+    // only records storing a real domain/URL can release browser credentials.
+    expectPresent(fcSrc, "url::platformMatchesHostForSecretRelease(record.platform, pageHost)");
+    // Manual Ctrl+Click uses the same strict domain-aware matcher and refuses
+    // browser fills when no fresh bridge URL exists.
+    expectPresent(fcSrc, "reason=no_bridge_entry_manual");
+    expectPresent(fcSrc, "reason=manual_foreground_pid_mismatch");
+    expectPresent(fcSrc, "url::platformMatchesHostForSecretRelease(record.platform,");
+    expectPresent(fcSrc, "manualPageHost))");
+    expectAbsent(fcSrc, "keysMatch(recordKey, pageKey)");
     // armAuto is a distinct entry (keeps the manual arm() call string intact).
     expectPresent(fcSrc, "armAuto");
 
@@ -387,10 +394,10 @@ TEST(StagedAutofillBoundary, StagingNeverDecryptsAndReleaseFailsClosed)
     // decrypt-free StagingController.
     expectAbsent(scSrc, "sendFillUsername");
     expectPresent(fcSrc, "injectUsername");
-    // Username injection binds the host via the shared tiered matcher (same
-    // predicate as the selector + password gate): strict for domain records,
-    // fuzzy/TLD-blind for bare labels (the user-chosen relaxation).
-    expectPresent(fcSrc, "platformMatchesHost(record.platform, host)");
+    // Username injection uses the same strict browser secret-release matcher
+    // as the password gate.
+    expectPresent(fcSrc, "platformMatchesHostForSecretRelease(record.platform, host)");
+    expectPresent(fcSrc, "decryptUsernameOnDemand(record, access.password())");
     // Only the USERNAME crosses the reverse channel; the password is never sent
     // to the browser (no such method exists).
     expectPresent(fcSrc, "sendFillUsername");
@@ -398,9 +405,69 @@ TEST(StagedAutofillBoundary, StagingNeverDecryptsAndReleaseFailsClosed)
     expectAbsent(bbSrc, "sendFillPassword");
     // The bridge wipes the plaintext username wire buffer after sending.
     expectPresent(bbSrc, "SecureZeroMemory(json.data()");
-    // The content script re-verifies its own host before injecting, so a stale
-    // route can only fail closed, never leak to the wrong site.
-    expectPresent(contentJs, "msg.url_host !== location.hostname");
+    // The content script re-verifies its own host and per-document visit token
+    // before injecting, so a stale or same-host different-document route fails closed.
+    expectPresent(contentJs, "msg.url_host !== location.host");
+    expectPresent(contentJs, "msg.visit !== VISIT_TOKEN");
+
+    // typeSecret must report SendInput failure instead of marking fills complete.
+    expectPresent(clipboardSrc, "if (sent != 1)");
+}
+
+TEST(BrowserExtensionBoundary, ClicksAreSecureAndUsernameRoutesByVisit)
+{
+    const std::string contentJs = readSourceFile("extensions/browser/content.js");
+    const std::string backgroundJs = readSourceFile("extensions/browser/background.js");
+    const std::string bridgeSrc = readSourceFile("src/BrowserBridge.cpp");
+
+    expectPresent(contentJs, "const DEBUG_LOGS = false");
+    expectPresent(backgroundJs, "const DEBUG_LOGS = false");
+    expectAbsent(contentJs, "const DEBUG_LOGS = true");
+    expectAbsent(backgroundJs, "const DEBUG_LOGS = true");
+    expectAbsent(contentJs, "JSON.stringify(payload)");
+    expectAbsent(backgroundJs, "content -> bg:\", msg");
+
+    expectPresent(contentJs, "reason=insecure_click");
+    expectPresent(contentJs, "url_host: location.host");
+    expectPresent(contentJs, "secure: 1");
+    expectPresent(contentJs, "visit: VISIT_TOKEN");
+    expectPresent(contentJs, "msg.visit !== VISIT_TOKEN");
+    expectPresent(backgroundJs, "secure: msg.secure ? 1 : 0");
+    expectPresent(backgroundJs, "rememberNavRoute(navPayload.url_host, navPayload.visit");
+    expectPresent(backgroundJs, "navRoutes.set(routeKey(host, visit)");
+    expectPresent(backgroundJs, "routeKey(host, visit)");
+    expectPresent(backgroundJs, "visit: visit");
+    expectPresent(bridgeSrc, "reason=insecure_click");
+    expectPresent(bridgeSrc, "visit\\\":\\\"");
+}
+
+TEST(BrowserBridgeBoundary, ShellHopsRequireTrustedShellImages)
+{
+    const std::string bridgeSrc = readSourceFile("src/BrowserBridge.cpp");
+    const std::string signerHpp = readSourceFile("src/SignerUtils.hpp");
+
+    expectPresent(bridgeSrc, "isTrustedShellImage(curPath)");
+    expectAbsent(bridgeSrc, "if (!seal::signer::isShellImage(curPath))");
+
+    expectPresent(signerHpp, "inline bool isTrustedShellImage");
+    expectPresent(signerHpp, "shellPublisherMatches");
+    expectPresent(signerHpp, "isShellPathAllowed");
+    expectPresent(signerHpp, "winVerifyTrustOk(imagePath)");
+}
+
+TEST(BrowserExtensionBoundary, VisibleFieldGateUsesRenderedViewportAndClippingChecks)
+{
+    const std::string contentJs = readSourceFile("extensions/browser/content.js");
+
+    expectPresent(contentJs, "function visibleViewportRect");
+    expectPresent(contentJs, "function intersectRects");
+    expectPresent(contentJs, "function clipsOverflow");
+    expectPresent(contentJs, "viewport_intersection_empty");
+    expectPresent(contentJs, "ancestor opacity=");
+    expectPresent(contentJs, "document.elementsFromPoint");
+    expectPresent(contentJs, "hit_test_blocked");
+    expectPresent(contentJs, "transform_invalid");
+    expectPresent(contentJs, "isUserVisible(e.target, { x: e.clientX, y: e.clientY })");
 }
 
 TEST(Phase2aBoundaryTest, AppViewModelImplementsSeams)
