@@ -325,6 +325,28 @@ cd seal
 
 Output: `build/bin/Release/seal.exe`
 
+### Release signing (required for production)
+
+The browser bridge authenticates its peer (`seal-browser.exe` ↔ `seal.exe`) by
+comparing Authenticode signer identities: each side derives its *expected* identity
+from its own signature and requires the peer to match. **Both binaries must therefore
+be Authenticode-signed by the same publisher key for release.**
+
+An *unsigned* binary has an empty signer identity, which disables that check
+(**dev-mode degradation** — the bridge accepts any local peer so local builds stay
+usable). To keep an unsigned binary from ever shipping with peer authentication off,
+configure a release build with:
+
+```powershell
+cmake -B build -DSEAL_REQUIRE_SIGNED_PEER=ON   # (plus your normal toolchain args)
+```
+
+With `SEAL_REQUIRE_SIGNED_PEER=ON`, an unsigned `seal.exe` refuses to start its bridge
+and an unsigned `seal-browser.exe` refuses to connect (both fail closed) instead of
+degrading. The default is `OFF` for local development. Sign the two binaries out-of-band
+after the build (e.g. `signtool sign /fd sha256 …`) on a trusted machine; when running
+unsigned, the GUI shows an **"Unsigned build"** warning on the bridge chip.
+
 ## Architecture
 
 ```mermaid
