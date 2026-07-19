@@ -9,6 +9,26 @@ REM   3. clang-tidy   - static analysis for diagnosing and fixing typical progra
 REM   4. build        - release build of the Release configuration via cmake --build
 REM   5. doxide       - API documentation generation via doxide + mkdocs build
 REM
+REM Options:
+REM   --static        static /MT build - a single portable seal.exe (no Qt DLLs)
+REM   --skip-tidy     skip step 3 (clang-tidy static analysis)
+REM   --help, -h      print usage and exit
+REM
+REM Environment overrides (each applied only when not already defined):
+REM   VCPKG_ROOT              default <repo>/../vcpkg
+REM   VCPKG_TRIPLET           default from the msvc143 overlay (static or dynamic)
+REM   VCPKG_MAX_CONCURRENCY   default 1 (raise at your own risk; see the ICE note)
+REM   VCVARS_VER              default 14.43 when that toolset is installed
+REM   VCPKG_BUILDTREES_ROOT   default C:\b\seal-vcpkg
+REM
+REM MSVC_ROOT (near the top of this file) has no override and assumes the
+REM Community edition. Edit it for Professional, Enterprise or Build Tools,
+REM otherwise the run stops at "vcvars64.bat not found".
+REM
+REM Step 2 deletes build/CMakeCache.txt first, so every run is a full
+REM reconfigure. Step 3 aborts the whole pipeline on the first clang-tidy
+REM finding; use --skip-tidy to build past it.
+REM
 REM   MSVC has Internal Compiler Errors (ICEs) when building Qt6 via vcpkg.
 REM   This forces us to pin the compiler to 14.43 (14.44 crashes), disable
 REM   precompiled headers, limit parallelism to 1, and redirect vcpkg
@@ -22,9 +42,43 @@ setlocal enabledelayedexpansion
 
 REM --- Parse command-line flags ---
 set "STATIC_BUILD=0"
-for %%A in (%*) do (
-    if /I "%%A"=="--static" set "STATIC_BUILD=1"
+set "SKIP_TIDY=0"
+
+:parse_args
+if "%~1"=="" goto args_done
+if /i "%~1"=="--static" (
+    set "STATIC_BUILD=1"
+    shift
+    goto parse_args
 )
+if /i "%~1"=="--skip-tidy" (
+    set "SKIP_TIDY=1"
+    shift
+    goto parse_args
+)
+if /i "%~1"=="--help" (
+    set USAGE_RC=0
+    goto usage
+)
+if /i "%~1"=="-h" (
+    set USAGE_RC=0
+    goto usage
+)
+echo ERROR: unknown option "%~1"
+set USAGE_RC=1
+goto usage
+
+:usage
+echo.
+echo Usage: build.bat [--static] [--skip-tidy] [--help]
+echo.
+echo   --static       Static /MT build - a single portable seal.exe (no Qt DLLs)
+echo   --skip-tidy    Skip the clang-tidy static analysis step
+echo   --help, -h     Show this message
+echo.
+exit /b !USAGE_RC!
+
+:args_done
 
 REM --- Visual Studio paths ---
 set "MSVC_ROOT=C:\Program Files\Microsoft Visual Studio\2022\Community\VC"
@@ -185,6 +239,22 @@ REM ============================================================================
 echo [3/5] Running clang-tidy...
 echo ----------------------------------------------------------------------------
 
+if !SKIP_TIDY!==1 (
+    echo SKIP: clang-tidy disabled by --skip-tidy
+    goto :tidy_done
+)
+
+REM clang-tidy reads the Ninja compile-DB sidecar (build-cdb), which is pinned to
+REM the dynamic triplet and shares build\vcpkg_installed. A static configure evicts
+REM the dynamic Qt tree from that shared dir, so the sidecar's include paths vanish
+REM (e.g. 'QObject' file not found). Regenerating it here would reinstall the dynamic
+REM triplet over the static one and corrupt the static build. Static is a packaging
+REM build - lint runs on the default (dynamic) build.bat instead.
+if "%STATIC_BUILD%"=="1" (
+    echo SKIP: clang-tidy is not run for static builds ^(lint runs on the default build^).
+    goto :tidy_done
+)
+
 where clang-tidy >nul 2>&1
 if errorlevel 1 (
     echo SKIP: clang-tidy not found in PATH
@@ -210,6 +280,8 @@ if errorlevel 1 (
     )
     echo clang-tidy complete.
 )
+
+:tidy_done
 echo.
 
 REM ============================================================================
