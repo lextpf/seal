@@ -3,6 +3,8 @@ Language: Cpp
 Standard: Latest
 ColumnLimit: 100
 
+ReflowComments: Never
+
 IndentWidth: 4
 TabWidth: 4
 UseTab: Never
