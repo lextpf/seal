@@ -27,3 +27,6 @@ com.seal.fill*.json
 *.p12
 *.crx
 *.reg
+
+# Local scratch output
+.tmp/
