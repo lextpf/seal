@@ -7,9 +7,12 @@
 using seal::url::extractHost;
 using seal::url::extractKey;
 using seal::url::hostsMatch;
+using seal::url::isPublicSuffix;
 using seal::url::keysMatch;
+using seal::url::platformDisplayName;
 using seal::url::platformMatchesHost;
 using seal::url::platformMatchesHostForSecretRelease;
+using seal::url::registrableDomain;
 
 class UrlBindingTest : public ::testing::Test
 {
@@ -201,10 +204,23 @@ TEST_F(UrlBindingTest, MatchDeepSubdomain)
     // Parent->child still binds at any depth (an apex record authorizes its
     // subdomains).
     EXPECT_TRUE(hostsMatch("example.com", "a.b.c.example.com"));
-    // The accepted, unchanged residual: an apex record authorizes ANY subdomain,
-    // including a third-party one on a shared-suffix host. Tightening this needs
-    // a public-suffix list (future work).
+    // A privately controlled apex still authorizes its own children.
     EXPECT_TRUE(hostsMatch("example.com", "evil.example.com"));
+}
+
+TEST_F(UrlBindingTest, PublicSuffixCannotAuthorizeTenants)
+{
+    EXPECT_FALSE(hostsMatch("github.io", "github.io"));
+    EXPECT_FALSE(hostsMatch("github.io", "evil.github.io"));
+    EXPECT_FALSE(hostsMatch("pages.dev", "tenant.pages.dev"));
+    EXPECT_FALSE(hostsMatch("vercel.app", "tenant.vercel.app"));
+    EXPECT_FALSE(hostsMatch("co.uk", "example.co.uk"));
+}
+
+TEST_F(UrlBindingTest, RegistrableTenantCanAuthorizeItsOwnChildren)
+{
+    EXPECT_TRUE(hostsMatch("alice.github.io", "login.alice.github.io"));
+    EXPECT_FALSE(hostsMatch("alice.github.io", "bob.github.io"));
 }
 
 // hostsMatch - phishing-resistance rejections
@@ -269,6 +285,62 @@ TEST_F(UrlBindingTest, EndToEnd_RecordIsFreeForm_SkipBinding)
     EXPECT_FALSE(hostsMatch(recordHost, pageHost));
 }
 
+// Public-suffix and registrable-domain analysis.
+TEST_F(UrlBindingTest, RecognisesCuratedPublicSuffixes)
+{
+    EXPECT_TRUE(isPublicSuffix("co.uk"));
+    EXPECT_TRUE(isPublicSuffix("com.au"));
+    EXPECT_TRUE(isPublicSuffix("gov.br"));
+    EXPECT_TRUE(isPublicSuffix("github.io"));
+    EXPECT_TRUE(isPublicSuffix("pages.dev"));
+    EXPECT_TRUE(isPublicSuffix("vercel.app"));
+    EXPECT_FALSE(isPublicSuffix("google.co.uk"));
+    EXPECT_FALSE(isPublicSuffix("alice.github.io"));
+}
+
+TEST_F(UrlBindingTest, RegistrableDomainUsesLongestSuffixRule)
+{
+    EXPECT_EQ(registrableDomain("google.co.uk"), "google.co.uk");
+    EXPECT_EQ(registrableDomain("accounts.google.co.uk"), "google.co.uk");
+    EXPECT_EQ(registrableDomain("service.example.com.au"), "example.com.au");
+    EXPECT_EQ(registrableDomain("alice.github.io"), "alice.github.io");
+    EXPECT_EQ(registrableDomain("https://login.example.com/path"), "example.com");
+}
+
+TEST_F(UrlBindingTest, RegistrableDomainRejectsSuffixAndSingleLabel)
+{
+    EXPECT_EQ(registrableDomain("co.uk"), "");
+    EXPECT_EQ(registrableDomain("github.io"), "");
+    EXPECT_EQ(registrableDomain("localhost"), "");
+    EXPECT_EQ(registrableDomain(""), "");
+}
+
+TEST_F(UrlBindingTest, WildcardAndExceptionRulesFollowPslSemantics)
+{
+    EXPECT_TRUE(isPublicSuffix("tenant.ck"));
+    EXPECT_FALSE(isPublicSuffix("www.ck"));
+    EXPECT_EQ(registrableDomain("www.ck"), "www.ck");
+    EXPECT_EQ(registrableDomain("www.ck."), "www.ck");
+    EXPECT_EQ(registrableDomain("login.www.ck"), "www.ck");
+}
+
+TEST_F(UrlBindingTest, PlatformDisplayNameStripsTheFullPublicSuffix)
+{
+    EXPECT_EQ(platformDisplayName("github.com"), "github");
+    EXPECT_EQ(platformDisplayName("accounts.google.co.uk"), "google");
+    EXPECT_EQ(platformDisplayName("alice.github.io"), "alice");
+    EXPECT_EQ(platformDisplayName("https://login.my-site.com/path"), "my-site");
+    EXPECT_EQ(platformDisplayName("xn--pypal-4ve.com"), "xn--pypal-4ve");
+}
+
+TEST_F(UrlBindingTest, PlatformDisplayNamePreservesLabelsAndUnbindableSuffixes)
+{
+    EXPECT_EQ(platformDisplayName("GitHub"), "GitHub");
+    EXPECT_EQ(platformDisplayName("My GitHub"), "My GitHub");
+    EXPECT_EQ(platformDisplayName("github.io"), "github.io");
+    EXPECT_EQ(platformDisplayName("co.uk"), "co.uk");
+}
+
 // extractKey - fuzzy normalisation (TLD strip, lowercase, dashes/
 // underscores stripped) that reduces a hostname/URL to one registrable
 // label. Used by the URL-binding warning (not a hard block).
@@ -290,6 +362,20 @@ TEST_F(UrlBindingTest, ExtractKey_ThreeLabelHost)
     EXPECT_EQ(extractKey("accounts.google.com"), "google");
     EXPECT_EQ(extractKey("mail.google.com"), "google");
     EXPECT_EQ(extractKey("login.paypal.com"), "paypal");
+}
+
+TEST_F(UrlBindingTest, ExtractKey_PublicSuffixAwareCountryDomain)
+{
+    EXPECT_EQ(extractKey("google.co.uk"), "google");
+    EXPECT_EQ(extractKey("accounts.google.co.uk"), "google");
+    EXPECT_EQ(extractKey("example.com.au"), "example");
+    EXPECT_EQ(extractKey("co.uk"), "");
+}
+
+TEST_F(UrlBindingTest, PunycodeBehaviourIsUnchanged)
+{
+    EXPECT_EQ(registrableDomain("login.xn--pypal-4ve.com"), "xn--pypal-4ve.com");
+    EXPECT_EQ(extractKey("xn--pypal-4ve.com"), "xnpypal4ve");
 }
 
 TEST_F(UrlBindingTest, ExtractKey_FromUrl)
