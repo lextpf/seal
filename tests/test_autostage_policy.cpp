@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+using seal::previewSiteBinding;
 using seal::resolveStageRecord;
 using seal::StageResolution;
 using seal::VaultRecord;
@@ -149,10 +150,69 @@ TEST(AutoStagePolicyTest, BareBrandLabelDoesNotMatchDomainForAutoStage)
 
 TEST(AutoStagePolicyTest, CcTldDistinctHostsDoNotCollide)
 {
-    // Documented extractKey ccTLD imperfection (google.co.uk -> key "co") does
-    // NOT affect strict hostsMatch: google.com and google.co.uk are distinct.
+    // Registrable-name extraction is PSL-aware, while strict host matching
+    // still keeps google.com and google.co.uk distinct.
     const std::vector<VaultRecord> records = {rec("google.com")};
     EXPECT_EQ(resolveStageRecord(records, "google.co.uk").m_Kind, StageResolution::Kind::None);
+}
+
+TEST(AutoStagePolicyTest, CcTldRecordMatchesPageAndSubdomain)
+{
+    const std::vector<VaultRecord> records = {rec("google.co.uk")};
+    EXPECT_EQ(resolveStageRecord(records, "google.co.uk").m_Kind, StageResolution::Kind::Single);
+    EXPECT_EQ(resolveStageRecord(records, "accounts.google.co.uk").m_Kind,
+              StageResolution::Kind::Single);
+}
+
+TEST(AutoStagePolicyTest, PublicSuffixRecordNeverStages)
+{
+    const std::vector<VaultRecord> records = {rec("github.io"), rec("co.uk")};
+    EXPECT_EQ(resolveStageRecord(records, "evil.github.io").m_Kind, StageResolution::Kind::None);
+    EXPECT_EQ(resolveStageRecord(records, "example.co.uk").m_Kind, StageResolution::Kind::None);
+}
+
+TEST(SiteBindingPreviewTest, DomainAndUrlAreBindable)
+{
+    const std::vector<VaultRecord> records;
+    const auto domain = previewSiteBinding(records, "github.com");
+    EXPECT_TRUE(domain.m_Bindable);
+    EXPECT_EQ(domain.m_Host, "github.com");
+
+    const auto url = previewSiteBinding(records, "https://login.example.co.uk/sign-in");
+    EXPECT_TRUE(url.m_Bindable);
+    EXPECT_EQ(url.m_Host, "login.example.co.uk");
+}
+
+TEST(SiteBindingPreviewTest, BareLabelAndPublicSuffixAreUnbindable)
+{
+    const std::vector<VaultRecord> records;
+    EXPECT_FALSE(previewSiteBinding(records, "GitHub").m_Bindable);
+    EXPECT_FALSE(previewSiteBinding(records, "github.io").m_Bindable);
+    EXPECT_FALSE(previewSiteBinding(records, "co.uk").m_Bindable);
+}
+
+TEST(SiteBindingPreviewTest, CountsLiveExactHostDuplicates)
+{
+    const std::vector<VaultRecord> records = {
+        rec("github.com"),
+        rec("https://github.com/login"),
+        rec("login.github.com"),
+        rec("github.com", /*deleted=*/true),
+    };
+    const auto preview = previewSiteBinding(records, "GITHUB.COM");
+    EXPECT_TRUE(preview.m_Bindable);
+    EXPECT_EQ(preview.m_DuplicateCount, 2U);
+
+    const auto editingFirst = previewSiteBinding(records, "github.com", 0);
+    EXPECT_EQ(editingFirst.m_DuplicateCount, 1U);
+}
+
+TEST(SiteBindingPreviewTest, DeletedRecordsAreExcluded)
+{
+    const std::vector<VaultRecord> records = {rec("example.com", /*deleted=*/true)};
+    const auto preview = previewSiteBinding(records, "example.com");
+    EXPECT_TRUE(preview.m_Bindable);
+    EXPECT_EQ(preview.m_DuplicateCount, 0U);
 }
 
 // ---------------------------------------------------------------------------
