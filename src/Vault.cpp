@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <set>
 #include <span>
 #include <sstream>
 #include <stdexcept>
@@ -30,9 +31,9 @@
 namespace
 {
 
-// Securely wipe a std::string including its SSO inline buffer, then release.
-// Unlike SecureZeroMemory(&obj), this zeroes only the character data, not
-// the metadata, so the destructor sees a valid (empty) object.
+// Wipe a std::string, SSO inline buffer included, then release its storage.
+// Unlike SecureZeroMemory(&obj), this zeroes only the character data, not the
+// metadata, so the destructor still sees a valid (empty) object.
 void wipeStdString(std::string& s)
 {
     if (!s.empty())
@@ -45,10 +46,10 @@ void wipeStdString(std::string& s)
     s.shrink_to_fit();
 }
 
-// FlushFileBuffers a path so the temp file's data blocks reach stable storage
-// before the rename commits: rename persists directory metadata, not file data,
-// so a power loss after it could leave a renamed-but-empty vault (total loss).
-// Mirrors flushFileToDisk in FileOperations.cpp (wide variant for vault paths).
+// Flush a path's data blocks to stable storage before the rename commits: a
+// rename persists directory metadata, not file data, so a power loss right
+// after it could leave a renamed but empty vault. Wide-path counterpart of
+// flushFileToDisk in FileOperations.cpp.
 bool flushPathToDisk(const std::filesystem::path& path)
 {
     HANDLE h = CreateFileW(path.c_str(),
@@ -111,8 +112,10 @@ std::string pathMetaString(const std::filesystem::path& p)
     return seal::diag::pathSummary(reinterpret_cast<const char*>(p.generic_u8string().c_str()));
 }
 
-// ASCII-lowercase copy for case-insensitive comparisons (platform names are
-// compared, not collated; ASCII folding matches the search-filter behavior).
+// ASCII-lowercase copy: platform names are compared, not collated. Bytes
+// outside 'A'-'Z' pass through unchanged, so a non-ASCII UTF-8 name matches
+// only byte for byte. The account-list filter uses a different rule:
+// VaultListModel folds through Qt::CaseInsensitive.
 std::string asciiLowerCopy(std::string_view s)
 {
     std::string out(s);
@@ -126,7 +129,10 @@ std::string asciiLowerCopy(std::string_view s)
     return out;
 }
 
-// Alphabetically-first *.seal file in a directory; empty when none.
+// First *.seal file in a directory, by ordinal filename order (case-sensitive,
+// no locale collation); empty when none. The match is on the extension, so a
+// file named exactly ".seal" has no extension and is never returned. The scan
+// is one level deep and skips everything that is not a regular file.
 std::filesystem::path firstSealFileIn(const std::filesystem::path& dir)
 {
     std::error_code ec;
@@ -152,10 +158,10 @@ std::filesystem::path firstSealFileIn(const std::filesystem::path& dir)
     return best;
 }
 
-// Vault diagnostics sink: one logfmt line to the `vault` Qt category, compiled
-// out to a no-op in non-Qt (CLI/test) builds. Shared by the vault load / save /
-// rekey / directory operations. (The initializer_list is still built at the
-// call site in non-Qt builds, matching the previous no-op-lambda behaviour.)
+// Vault diagnostics sink: one logfmt line to the `vault` Qt category, shared by
+// the vault load, save, rekey and directory operations. In non-Qt (CLI/test)
+// builds only the emit compiles out; the initializer_list is still built at the
+// call site.
 void logVaultInfo([[maybe_unused]] std::initializer_list<std::string> fields)
 {
 #ifdef USE_QT_UI
@@ -174,6 +180,90 @@ void logVaultWarn([[maybe_unused]] std::initializer_list<std::string> fields)
 namespace seal
 {
 
+bool looksLikeVault(const std::filesystem::path& path) noexcept
+{
+    try
+    {
+        // Nine decoded bytes cover magic(4), version(1) and record_count(4).
+        // Requiring the whole fixed header, not just the magic, rejects a file
+        // that carries the four magic bytes and is otherwise truncated.
+        constexpr std::size_t kHeaderHexCharacters = 18;
+        std::ifstream in(path, std::ios::in | std::ios::binary);
+        if (!in)
+        {
+            return false;
+        }
+
+        std::string compactHeader;
+        compactHeader.reserve(kHeaderHexCharacters);
+        char ch = '\0';
+        // This is a sniff, not a parser: cap the physical read so a huge
+        // whitespace-only payload cannot make an inventory walk read the whole
+        // file. A normal vault has its header at byte zero; the small allowance
+        // keeps the loader's tolerance for stray leading space.
+        constexpr std::size_t kMaximumBytesToRead = 4096;
+        std::size_t bytesRead = 0;
+        while (compactHeader.size() < kHeaderHexCharacters && bytesRead < kMaximumBytesToRead &&
+               in.get(ch))
+        {
+            ++bytesRead;
+            const unsigned char byte = static_cast<unsigned char>(ch);
+            if (std::isspace(byte) != 0)
+            {
+                continue;
+            }
+            if (std::isxdigit(byte) == 0)
+            {
+                return false;
+            }
+            compactHeader.push_back(ch);
+        }
+        if (compactHeader.size() != kHeaderHexCharacters)
+        {
+            return false;
+        }
+
+        std::vector<unsigned char> decoded;
+        if (!seal::utils::from_hex(std::string_view{compactHeader}, decoded) || decoded.size() < 4)
+        {
+            return false;
+        }
+        return std::equal(std::begin(kVaultMagic), std::end(kVaultMagic), decoded.begin());
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+bool isVaultCandidateName(const std::filesystem::path& path) noexcept
+{
+    try
+    {
+        const std::wstring fileName = path.filename().wstring();
+        const std::wstring extension = path.extension().wstring();
+        const auto equalsSeal = [](const std::wstring& value)
+        {
+            return CompareStringOrdinal(
+                       value.data(), static_cast<int>(value.size()), L".seal", 5, TRUE) ==
+                   CSTR_EQUAL;
+        };
+        return equalsSeal(fileName) || equalsSeal(extension);
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+std::filesystem::path selectVaultCandidate(std::span<const VaultCandidate> candidates)
+{
+    const auto found = std::find_if(candidates.begin(),
+                                    candidates.end(),
+                                    [](const VaultCandidate& item) { return item.vault; });
+    return found != candidates.end() ? found->path : std::filesystem::path{};
+}
+
 void DecryptedCredential::cleanse()
 {
     seal::Cryptography::cleanseString(username, password);
@@ -191,9 +281,9 @@ static std::vector<unsigned char> encryptString(
         kdf);
 }
 
-// Decrypt to a regular std::string. Used only for platform names (non-
-// secret, displayed in the list). Secret fields go through
-// decryptCredentialOnDemand() into locked-memory secure_string.
+// Decrypt into a regular std::string. Platform names only: they are not secret
+// and the list view displays them. Secret fields go through
+// decryptCredentialOnDemand() into a locked-memory secure_string.
 static std::string decryptToString(
     const std::vector<unsigned char>& packet,
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password)
@@ -436,7 +526,8 @@ bool saveVault(const std::filesystem::path& vaultPath,
         if (rec.deleted)
             continue;
 
-        // Use existing encrypted platform if available, otherwise encrypt it
+        // Reuse the stored platform packet unless the record is dirty or has no
+        // packet yet; a fresh encrypt costs one scrypt derivation.
         std::vector<unsigned char> platformBlob;
         if (!rec.encryptedPlatform.empty() && !rec.dirty)
         {
@@ -682,9 +773,9 @@ size_t rekeyVault(
             }
         }
 
-        // Durable flush so the rekeyed temp is on stable storage before we
-        // atomically swap it over the live vault (rename persists metadata,
-        // not file data); otherwise a power-loss here could lose every record.
+        // Durable flush so the rekeyed temp is on stable storage before the
+        // atomic swap over the live vault (a rename persists metadata, not
+        // file data); a power loss here could otherwise lose every record.
         flushPathToDisk(tmpPath);
 
         if (!ReplaceFileW(vaultPath.c_str(),
@@ -777,8 +868,7 @@ DecryptedCredential decryptCredentialOnDemand(
     cred.username = seal::utils::utf8ToSecureWide(userUtf8);
     cred.password = seal::utils::utf8ToSecureWide(passUtf8);
 
-    // Wipe the intermediate UTF-8 strings including SSO buffers; the prior
-    // SecureZeroMemory(&obj) approach was UB (corrupted metadata).
+    // Wipe the intermediate UTF-8 strings, SSO buffers included.
     wipeStdString(userUtf8);
     wipeStdString(passUtf8);
 
@@ -897,91 +987,354 @@ VaultRecord encryptCredential(
     return rec;
 }
 
-// Shared body for encryptDirectory()/decryptDirectory(): recursively collect
-// eligible files (skipping symlinks/dirs), then op each one and delete the
-// source on success. `encrypt` selects the extension filter, the destination
-// name, and the crypto op; behaviour is otherwise identical.
-static int processDirectoryFiles(
-    const std::filesystem::path& dirPath,
+ProtectedFolderScan scanProtectedFolder(const std::filesystem::path& root)
+{
+    namespace fs = std::filesystem;
+
+    ProtectedFolderScan scan;
+    std::error_code ec;
+    if (root.empty() || !fs::is_directory(root, ec))
+    {
+        scan.failures = 1;
+        return scan;
+    }
+
+    fs::recursive_directory_iterator iterator(root, fs::directory_options::none, ec);
+    const fs::recursive_directory_iterator end;
+    if (ec)
+    {
+        scan.failures = 1;
+        return scan;
+    }
+
+    while (iterator != end)
+    {
+        const fs::directory_entry item = *iterator;
+        const DWORD attributes = GetFileAttributesW(item.path().c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES)
+        {
+            iterator.disable_recursion_pending();
+            ++scan.failures;
+        }
+        else if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+        {
+            // Never follow a symlink, junction, or other reparse point out of
+            // the protected root. Keep the entry in the inventory so policy
+            // diagnostics explain it with the stable "symlink" token.
+            iterator.disable_recursion_pending();
+            const fs::path relative = item.path().lexically_relative(root);
+            if (!relative.empty())
+            {
+                scan.entries.push_back({relative, 0, true, false});
+            }
+            else
+            {
+                ++scan.failures;
+            }
+        }
+        else
+        {
+            std::error_code statusError;
+            if (item.is_regular_file(statusError))
+            {
+                const fs::path relative = item.path().lexically_relative(root);
+                if (relative.empty())
+                {
+                    ++scan.failures;
+                }
+                else
+                {
+                    std::error_code sizeError;
+                    const std::uintmax_t size = item.file_size(sizeError);
+                    if (sizeError)
+                    {
+                        ++scan.failures;
+                    }
+                    scan.entries.push_back(
+                        {relative, sizeError ? 0 : size, false, looksLikeVault(item.path())});
+                }
+            }
+            else if (statusError)
+            {
+                ++scan.failures;
+            }
+        }
+
+        iterator.increment(ec);
+        if (ec)
+        {
+            ++scan.failures;
+            // Continuing after an iterator error is implementation-dependent
+            // and may silently omit the remainder of a subtree. A partial
+            // inventory is already unsafe, so stop and let preflight/exit fail
+            // closed on the recorded error.
+            break;
+        }
+    }
+
+    std::sort(scan.entries.begin(),
+              scan.entries.end(),
+              [](const protected_folder::Entry& lhs, const protected_folder::Entry& rhs)
+              { return lhs.relativePath.generic_wstring() < rhs.relativePath.generic_wstring(); });
+    return scan;
+}
+
+namespace
+{
+
+bool isSafeRelativeEntry(const std::filesystem::path& relative)
+{
+    if (relative.empty() || relative.is_absolute() || relative.has_root_path())
+    {
+        return false;
+    }
+    for (const auto& component : relative.lexically_normal())
+    {
+        if (component == L"..")
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+enum class PathProbe
+{
+    Missing,
+    Present,
+    Error,
+};
+
+PathProbe probePathWithoutFollowing(const std::filesystem::path& path)
+{
+    std::error_code error;
+    const std::filesystem::file_status status = std::filesystem::symlink_status(path, error);
+    if (!error)
+    {
+        return status.type() == std::filesystem::file_type::not_found ? PathProbe::Missing
+                                                                      : PathProbe::Present;
+    }
+    if (error == std::errc::no_such_file_or_directory)
+    {
+        return PathProbe::Missing;
+    }
+    return PathProbe::Error;
+}
+
+struct WindowsPathLess
+{
+    bool operator()(const std::wstring& lhs, const std::wstring& rhs) const noexcept
+    {
+        const int result = CompareStringOrdinal(lhs.data(),
+                                                static_cast<int>(lhs.size()),
+                                                rhs.data(),
+                                                static_cast<int>(rhs.size()),
+                                                TRUE);
+        // CompareStringOrdinal is invariant and case-insensitive here. It
+        // returns 0 only on failure, for example an input longer than INT_MAX;
+        // the lexical fallback then keeps the comparator ordered for those
+        // inputs instead of reporting every pair as equivalent.
+        return result == CSTR_LESS_THAN || (result == 0 && lhs < rhs);
+    }
+};
+
+std::filesystem::path transformDestination(const std::filesystem::path& source, bool encrypt)
+{
+    std::filesystem::path destination = source;
+    if (encrypt)
+    {
+        destination += L".seal";
+    }
+    else
+    {
+        destination.replace_extension();
+    }
+    return destination;
+}
+
+}  // namespace
+
+DirectoryProcessResult processFolderPlan(
+    const std::filesystem::path& root,
+    const protected_folder::FolderPlan& plan,
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password,
     bool encrypt)
 {
-    int count = 0;
+    namespace fs = std::filesystem;
+
+    DirectoryProcessResult result;
     const std::string opId =
         seal::diag::nextOpId(encrypt ? "vault_dir_encrypt" : "vault_dir_decrypt");
     const auto started = std::chrono::steady_clock::now();
-    const std::string pathMeta = pathMetaString(dirPath);
+    const std::string pathMeta = pathMetaString(root);
     const char* eventBase = encrypt ? "directory.encrypt" : "directory.decrypt";
 
     logVaultInfo({std::string("event=") + eventBase + ".begin",
                   "result=start",
                   seal::diag::kv("op", opId),
+                  seal::diag::kv("planned", plan.act.size()),
+                  seal::diag::kv("skipped", plan.skipped.size()),
                   pathMeta});
-    try
+
+    // A FileOperations staging name collides with its own parent transform,
+    // and during encryption it otherwise looks like an independent plaintext
+    // payload. Reserve every planned staging name up front so the executor
+    // never consumes that user-owned file later in the same snapshot.
+    std::set<std::wstring, WindowsPathLess> reservedTemporaryPaths;
+    for (const protected_folder::Entry& entry : plan.act)
     {
-        // Collect paths first, rename in a second pass. Renaming during
-        // recursive_directory_iterator can skip or double-visit entries.
-        namespace fs = std::filesystem;
-        std::vector<std::string> filePaths;
-        for (const auto& entry : fs::recursive_directory_iterator(
-                 dirPath, fs::directory_options::skip_permission_denied))
+        if (!isSafeRelativeEntry(entry.relativePath))
         {
-            if (entry.is_symlink() || !entry.is_regular_file())
-            {
-                continue;
-            }
-
-            const std::string ext = entry.path().extension().string();
-            const bool isSeal = seal::utils::endsWithCi(ext, ".seal");
-            if (encrypt)
-            {
-                // Skip already-encrypted files and non-payload binaries.
-                if (isSeal || seal::utils::endsWithCi(ext, ".exe") ||
-                    seal::utils::endsWithCi(ext, ".dll") || seal::utils::endsWithCi(ext, ".pdb"))
-                {
-                    continue;
-                }
-            }
-            else if (!isSeal)
-            {
-                continue;
-            }
-
-            filePaths.push_back(entry.path().string());
+            continue;
         }
-
-        for (const auto& filePath : filePaths)
-        {
-            const std::string newPath =
-                encrypt ? filePath + ".seal" : seal::utils::strip_ext_ci(filePath, ".seal");
-            const bool ok = encrypt ? FileOperations::encryptFileTo(filePath, newPath, password)
-                                    : FileOperations::decryptFileTo(filePath, newPath, password);
-            if (ok)
-            {
-                DeleteFileA(filePath.c_str());
-                count++;
-            }
-        }
+        fs::path temporary = transformDestination(entry.relativePath, encrypt);
+        temporary += L".tmp";
+        reservedTemporaryPaths.insert(temporary.lexically_normal().generic_wstring());
     }
-    catch (const std::exception& e)
+
+    for (const auto& [entry, reason] : plan.skipped)
     {
-        logVaultWarn({std::string("event=") + eventBase + ".finish",
-                      "result=partial",
+        logVaultInfo({"event=directory.plan.skip",
+                      "result=skip",
                       seal::diag::kv("op", opId),
-                      seal::diag::kv("count", count),
-                      seal::diag::errorFields(e.what()),
-                      seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
-                      pathMeta});
-        return count;
+                      seal::diag::kv("reason", protected_folder::skipReasonToken(reason)),
+                      pathMetaString(entry.relativePath)});
     }
 
-    logVaultInfo({std::string("event=") + eventBase + ".finish",
-                  "result=ok",
-                  seal::diag::kv("op", opId),
-                  seal::diag::kv("count", count),
-                  seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
-                  pathMeta});
-    return count;
+    for (const protected_folder::Entry& entry : plan.act)
+    {
+        try
+        {
+            if (!isSafeRelativeEntry(entry.relativePath))
+            {
+                ++result.failed;
+                continue;
+            }
+
+            if (reservedTemporaryPaths.contains(
+                    entry.relativePath.lexically_normal().generic_wstring()))
+            {
+                ++result.failed;
+                logVaultWarn({"event=directory.transform.blocked",
+                              "result=fail",
+                              seal::diag::kv("op", opId),
+                              "reason=reserved_temporary",
+                              pathMetaString(entry.relativePath)});
+                continue;
+            }
+
+            const fs::path source = root / entry.relativePath;
+            const DWORD sourceAttributes = GetFileAttributesW(source.c_str());
+            std::error_code statusError;
+            const fs::file_status status = fs::symlink_status(source, statusError);
+            if (sourceAttributes == INVALID_FILE_ATTRIBUTES ||
+                (sourceAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 || statusError ||
+                fs::is_symlink(status) || !fs::is_regular_file(status))
+            {
+                ++result.failed;
+                continue;
+            }
+
+            // Close the scan/execute TOCTOU window for the most important
+            // protected identity. A file swapped to an SVH2 vault after the
+            // plan was made is still never transformed.
+            if (looksLikeVault(source))
+            {
+                logVaultInfo({"event=directory.plan.skip",
+                              "result=skip",
+                              seal::diag::kv("op", opId),
+                              "reason=credential_vault",
+                              pathMetaString(entry.relativePath)});
+                continue;
+            }
+
+            const fs::path destination = transformDestination(source, encrypt);
+
+            // FileOperations commits with MOVEFILE_REPLACE_EXISTING and uses a
+            // deterministic "<destination>.tmp" staging path. Neither is safe
+            // for an automatic whole-folder operation: a plaintext sibling
+            // named "vault" must never replace the protected "vault.seal",
+            // and an unrelated user-owned .tmp file must not be truncated.
+            // Probe with symlink_status so even dangling links fail closed.
+            fs::path temporary = destination;
+            temporary += L".tmp";
+            const PathProbe destinationProbe = probePathWithoutFollowing(destination);
+            const PathProbe temporaryProbe = probePathWithoutFollowing(temporary);
+            if (destinationProbe != PathProbe::Missing || temporaryProbe != PathProbe::Missing)
+            {
+                ++result.failed;
+                logVaultWarn({"event=directory.transform.blocked",
+                              "result=fail",
+                              seal::diag::kv("op", opId),
+                              destinationProbe == PathProbe::Present ? "reason=destination_exists"
+                              : temporaryProbe == PathProbe::Present
+                                  ? "reason=temporary_exists"
+                                  : "reason=destination_probe_failed",
+                              pathMetaString(entry.relativePath)});
+                continue;
+            }
+
+            const bool transformed = encrypt ? FileOperations::encryptFileTo(
+                                                   source.string(), destination.string(), password)
+                                             : FileOperations::decryptFileTo(
+                                                   source.string(), destination.string(), password);
+            if (!transformed)
+            {
+                ++result.failed;
+                continue;
+            }
+
+            std::error_code removeError;
+            const bool removed = fs::remove(source, removeError);
+            if (!removed || removeError)
+            {
+                ++result.failed;
+                continue;
+            }
+            ++result.succeeded;
+        }
+        catch (const std::exception&)
+        {
+            ++result.failed;
+        }
+    }
+
+    const auto fields = {
+        std::string("event=") + eventBase + ".finish",
+        result.failed == 0 ? std::string("result=ok") : std::string("result=partial"),
+        seal::diag::kv("op", opId),
+        seal::diag::kv("count", result.succeeded),
+        seal::diag::kv("failed", result.failed),
+        seal::diag::kv("duration_ms", seal::diag::elapsedMs(started)),
+        pathMeta};
+    if (result.failed == 0)
+    {
+        logVaultInfo(fields);
+    }
+    else
+    {
+        logVaultWarn(fields);
+    }
+    return result;
+}
+
+// Shared body for the manual GUI directory operations. Folder protection calls
+// the plan and the executor directly so it can keep the failure counts. Here
+// the summed failure count is discarded: encryptDirectory and decryptDirectory
+// report only the success count, and a scan failure reaches no log line.
+static int processDirectoryFiles(
+    const std::filesystem::path& dirPath,
+    const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password,
+    bool encrypt)
+{
+    ProtectedFolderScan scan = scanProtectedFolder(dirPath);
+    const protected_folder::PolicyContext context;
+    const protected_folder::FolderPlan plan =
+        encrypt ? protected_folder::planEncrypt(scan.entries, context)
+                : protected_folder::planDecrypt(scan.entries, context);
+    DirectoryProcessResult result = processFolderPlan(dirPath, plan, password, encrypt);
+    result.failed += scan.failures;
+    return static_cast<int>(result.succeeded);
 }
 
 int encryptDirectory(
