@@ -192,6 +192,54 @@ TEST_F(VaultRoundtripTest, EmptyVaultFileYieldsNoRecords)
     fs::remove(tmp);
 }
 
+TEST_F(VaultRoundtripTest, LooksLikeVaultChecksOnlyValidFramedMagic)
+{
+    EXPECT_TRUE(seal::looksLikeVault(s_goldenVault));
+
+    const fs::path base = fs::temp_directory_path() / ("seal_sniff_" + std::to_string(::_getpid()));
+    const fs::path notes = base.string() + "_notes.txt.seal";
+    const fs::path empty = base.string() + "_empty.seal";
+    const fs::path truncated = base.string() + "_truncated.seal";
+    const fs::path nonHex = base.string() + "_nonhex.seal";
+
+    {
+        std::ofstream(notes, std::ios::binary) << "ordinary encrypted document";
+        std::ofstream(empty, std::ios::binary);
+        std::ofstream(truncated, std::ios::binary) << "53564832";
+        std::ofstream(nonHex, std::ios::binary) << "5356483Z0000000000";
+    }
+
+    EXPECT_FALSE(seal::looksLikeVault(notes));
+    EXPECT_FALSE(seal::looksLikeVault(empty));
+    EXPECT_FALSE(seal::looksLikeVault(truncated));
+    EXPECT_FALSE(seal::looksLikeVault(nonHex));
+
+    std::error_code ec;
+    fs::remove(notes, ec);
+    fs::remove(empty, ec);
+    fs::remove(truncated, ec);
+    fs::remove(nonHex, ec);
+}
+
+TEST(VaultLookupTest, CandidateSelectionIgnoresAlphabeticallyFirstDocument)
+{
+    const std::vector<seal::VaultCandidate> candidates{
+        {fs::path("archive.seal"), false},
+        {fs::path("vault.seal"), true},
+    };
+
+    EXPECT_EQ(seal::selectVaultCandidate(candidates), fs::path("vault.seal"));
+}
+
+TEST(VaultLookupTest, CandidateNamesIncludeHiddenDotfile)
+{
+    EXPECT_TRUE(seal::isVaultCandidateName(".seal"));
+    EXPECT_TRUE(seal::isVaultCandidateName("vault.seal"));
+    EXPECT_TRUE(seal::isVaultCandidateName("VAULT.SEAL"));
+    EXPECT_FALSE(seal::isVaultCandidateName("vault.dat"));
+    EXPECT_FALSE(seal::isVaultCandidateName("seal"));
+}
+
 TEST_F(VaultRoundtripTest, RekeySwapsPasswordAtomicallyAndUpgradesPackets)
 {
     const auto oldPw = goldenPassword();
