@@ -68,7 +68,7 @@ std::string hostLogFingerprint(std::string_view host)
 constexpr int kAutoBridgeWaitMs = 400;
 
 // Convert a wide (UTF-16) secret span to a UTF-8 std::string for the wire.
-// The result is a TRANSIENT plaintext copy the caller wipes after sending.
+// The result is a transient plaintext copy that the caller wipes after sending.
 std::string wideToUtf8(const wchar_t* data, std::size_t len)
 {
     if (data == nullptr || len == 0)
@@ -88,9 +88,11 @@ std::string wideToUtf8(const wchar_t* data, std::size_t len)
 
 }  // namespace
 
-// Only one controller can own the global hooks. WH_*_LL hooks are per-thread
-// and cannot be multiplexed; a second install would silently replace the
-// first chain, breaking cancel/timeout for the original session.
+// Only one controller can own the global hooks. The WH_*_LL callbacks are
+// static and dispatch through this single pointer, so a second controller would
+// overwrite it and take over the first one's clicks and Esc handling.
+// removeHooks() stores nullptr so an in-flight callback cannot use a dead
+// object.
 std::atomic<FillController*> FillController::s_instance{nullptr};
 
 FillController::FillController(QObject* parent)
@@ -141,14 +143,19 @@ bool FillController::isBridgePeerConnected() const
     return m_BrowserBridge.isPeerConnected();
 }
 
+bool FillController::isBridgeBrowserConnected(seal::signer::BrowserKind kind) const
+{
+    return m_BrowserBridge.isPeerConnected(kind);
+}
+
 bool FillController::isBridgeChromeConnected() const
 {
-    return m_BrowserBridge.isPeerConnected(seal::signer::BrowserKind::Chrome);
+    return isBridgeBrowserConnected(seal::signer::BrowserKind::Chrome);
 }
 
 bool FillController::isBridgeBraveConnected() const
 {
-    return m_BrowserBridge.isPeerConnected(seal::signer::BrowserKind::Brave);
+    return isBridgeBrowserConnected(seal::signer::BrowserKind::Brave);
 }
 
 bool FillController::isArmed() const
@@ -201,10 +208,9 @@ void FillController::transitionTo(State newState)
 
     updateStatusText();
 
-    // Only emit armedChanged when the armed/disarmed boundary is crossed,
-    // not on every internal state change (e.g. Armed -> Typing -> Armed).
-    // Firing on every transition would spam QML property bindings and cause
-    // unnecessary UI redraws for states that look identical to the front-end.
+    // Emit armedChanged only when the armed/disarmed boundary is crossed, not on
+    // every internal move (Armed -> Typing -> Armed). Firing on every transition
+    // would wake QML bindings for states that look identical to the front end.
     if (wasArmed != nowArmed)
         emit armedChanged();
 }
@@ -264,18 +270,23 @@ bool FillController::armInternal(int recordIndex,
                                  const uint64_t& ownerGeneration,
                                  State targetState)
 {
-    // If already armed (user clicked a different record, or a nav re-staged),
-    // tear down first. This also enforces manual/auto mutual exclusion: the
-    // two never share a live armed window.
+    // Already armed (a different record was picked, or a nav re-staged): tear
+    // down first. This also enforces manual/auto mutual exclusion, because the
+    // two lanes never share a live armed window.
     if (m_State.load() != State::Idle)
         cancel();
 
     m_AutoMode.store(targetState == State::AutoArmed);
 
-    // Borrow (no copy): records can be huge - a copy doubles the SeLockMemoryPrivilege
-    // quota + double-cleanse on cancel. Session stays DPAPI-protected while armed
-    // (performType() unlocks only around the decrypt); caller keeps records+session alive
-    // until fill completes. Snapshot ownerGeneration; performType() bails if it moved (race).
+    // Borrow, never copy: the vector carries every record's encrypted packets, so
+    // a copy is bulky and instantly stale. VaultRecord holds no locked memory
+    // (plain std::string + std::vector), so the cost would be size, not quota.
+    //
+    // The caller keeps records and session alive until the fill completes. The
+    // session stays DPAPI-protected while armed: decryptAndTypeField unlocks only
+    // around the decrypt. recordIndex is validated against the borrowed vector at
+    // fill time, not here. The generation snapshot lets the fill paths bail when
+    // the owner mutated the records meanwhile.
     m_RecordIndex = recordIndex;
     m_Records = &records;
     m_Session = &session;
@@ -520,13 +531,13 @@ LRESULT CALLBACK FillController::mouseHookProc(int nCode, WPARAM wParam, LPARAM 
 
         if (ctrlDown && curState == State::Armed)
         {
-            // Capture click coords for performType()'s UIA probe.
+            // Capture click coords for performType()'s probe pipeline.
             auto* mhs = reinterpret_cast<MSLLHOOKSTRUCT*>(lParam);
             self->m_ClickX.store(mhs->pt.x);
             self->m_ClickY.store(mhs->pt.y);
 
             // Modifier overrides: Shift=password, Alt=username.
-            // Neither -> UIA auto-detect in performType().
+            // Neither -> probe auto-detect in performType().
             bool shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
             bool altDown = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
 
@@ -544,9 +555,12 @@ LRESULT CALLBACK FillController::mouseHookProc(int nCode, WPARAM wParam, LPARAM 
                                 : target == TypeTarget::Password ? "password"
                                                                  : "auto");
 
-            // Queue performType on the Qt event loop. We're inside the OS
-            // hook dispatcher; calling Qt directly here would deadlock or
-            // corrupt state. QueuedConnection defers to a normal call frame.
+            // Queue performType on the Qt event loop. This runs inside the OS
+            // hook dispatcher on the installing thread: doing the fill here would
+            // stall every desktop input event for its whole duration and re-enter
+            // the controller from inside that dispatcher. The hook already runs on
+            // the GUI thread, so the queued connection is about deferral to a
+            // normal call frame, not about thread affinity.
             QMetaObject::invokeMethod(self, "performType", Qt::QueuedConnection);
 
             // Return 1 swallows the click so the target app never sees the
@@ -567,7 +581,7 @@ LRESULT CALLBACK FillController::mouseHookProc(int nCode, WPARAM wParam, LPARAM 
             return 1;
         }
 
-        // Staged auto-fill: a PLAIN left click (no Ctrl) while AutoArmed. A
+        // Staged auto-fill: a plain left click (no Ctrl) while AutoArmed. A
         // Ctrl-held click in this state falls through to CallNextHookEx, so a
         // user mid-manual-flow is never double-triggered.
         if (!ctrlDown && curState == State::AutoArmed)
@@ -584,9 +598,9 @@ LRESULT CALLBACK FillController::mouseHookProc(int nCode, WPARAM wParam, LPARAM 
             self->m_ClickY.store(mhs->pt.y);
             self->m_PendingTarget.store(TypeTarget::Auto);
             QMetaObject::invokeMethod(self, "performTypeAuto", Qt::QueuedConnection);
-            // Do NOT swallow (unlike Ctrl+Click, which returns 1): the plain
+            // Do not swallow (unlike Ctrl+Click, which returns 1): the plain
             // click must focus the field normally. performTypeAuto validates
-            // the fail-closed gates and is a silent no-op if this click did
+            // the fail-closed gates and is a silent no-op when this click did
             // not land on a bridge-classified login field.
             return CallNextHookEx(nullptr, nCode, wParam, lParam);
         }
@@ -603,7 +617,8 @@ LRESULT CALLBACK FillController::keyboardHookProc(int nCode, WPARAM wParam, LPAR
         auto* khs = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
 
         // Esc while waiting -> queued cancel (same hook-dispatcher reason
-        // as mouseHookProc). Armed and Diagnose share this UX.
+        // as mouseHookProc). Armed, AutoArmed and Diagnose share this UX;
+        // Typing does not, so Esc cannot interrupt an in-flight keystroke run.
         const State curState = self->m_State.load();
         if (khs->vkCode == VK_ESCAPE && (curState == State::Armed || curState == State::Diagnose ||
                                          curState == State::AutoArmed))
@@ -624,9 +639,9 @@ void FillController::performType()
     transitionTo(State::Typing);
     m_TimeoutTimer.stop();
 
-    // Wait for Ctrl release before typing - otherwise keystrokes register
-    // as Ctrl-shortcuts (Ctrl+A = select-all). 2 s cap for a stuck key
-    // (jammed physical key, RDP weirdness); we proceed anyway after that.
+    // Wait for Ctrl release before typing, otherwise keystrokes register as
+    // Ctrl-shortcuts (Ctrl+A = select-all). 2 s cap for a stuck key (a jammed
+    // physical key, an RDP quirk); typing proceeds anyway after that.
     auto* poll = new QTimer(this);
     poll->setInterval(20);
     connect(
@@ -741,9 +756,11 @@ void FillController::performType()
                 return;
             }
 
-            // URL/platform binding (phishing resistance): browser fills require a fresh
-            // bridge URL and the shared tiered matcher. Domain records stay TLD-sensitive;
-            // non-browser targets still fill without URL context.
+            // URL/platform binding (phishing resistance): a browser fill needs a fresh
+            // bridge entry and the strict secret-release matcher - the same one the auto
+            // path and the selector use, not the tiered platformMatchesHost. A record whose
+            // platform is a bare label ("PayPal") therefore never releases into a browser.
+            // Non-browser targets have no bridge entry and still fill without URL context.
             if (manualClickPid != 0)
             {
                 const auto bridgeEntry = m_BrowserBridge.lookup(manualClickPid, manualClickPoint);
@@ -767,12 +784,12 @@ void FillController::performType()
                         cancel();
                         return;
                     }
-                    // Cross-document replay veto: the cached entry (from the
-                    // earlier focus-click - the Ctrl+Click is swallowed by the
-                    // hook, so no fresh report exists for it) must belong to the
-                    // document now loaded in this browser. Blocks only on a
-                    // positive mismatch; an older extension that omits the click
-                    // token falls back to the host check above.
+                    // Cross-document replay veto: the cached entry must belong to
+                    // the document now loaded in this browser. The entry comes
+                    // from the earlier focus-click, because the hook swallows the
+                    // Ctrl+Click and no fresh report exists for it. This blocks
+                    // only on a positive mismatch; an older extension build that omits
+                    // the click token falls back to the host check above.
                     const std::optional<std::string> curVisit =
                         m_BrowserBridge.currentVisit(manualClickPid);
                     if (curVisit.has_value() &&
@@ -787,12 +804,12 @@ void FillController::performType()
                         cancel();
                         return;
                     }
-                    // M5 corroboration for the PASSWORD release: a browser
+                    // M5 corroboration for the password release: a browser
                     // password fill must be backed by an on-disk Tier-1 probe,
-                    // not the bridge (extension) alone - parity with the staged
-                    // auto path (see performTypeAuto's G-corroborate gate). The
-                    // username half (less sensitive, weaker on-disk signal)
-                    // keeps the host+visit binding only.
+                    // not by the bridge (extension) alone - parity with the
+                    // staged auto path (see performTypeAuto's G-corroborate
+                    // gate). The username half is less sensitive and has a
+                    // weaker on-disk signal, so it keeps the host+visit binding.
                     if (target == TypeTarget::Password &&
                         !(fusion.m_Tier1ShortCircuit && fusion.m_BridgeCorroborated))
                     {
@@ -836,7 +853,7 @@ void FillController::decryptAndTypeField(const seal::VaultRecord& record, TypeTa
     seal::DecryptedCredential cred;
     try
     {
-        // Master key is plaintext ONLY for this decrypt; the Access window
+        // The master key is plaintext for this decrypt alone; the Access window
         // re-protects on scope exit, before cred is typed and cleansed below.
         auto access = m_Session->unlock();
         if (!access.ok())
@@ -864,12 +881,12 @@ void FillController::decryptAndTypeField(const seal::VaultRecord& record, TypeTa
         return;
     }
 
-    // Warn: SendInput keystrokes pass through every global hook in the chain,
-    // so a third-party keylogger could intercept the credential. The master-
-    // password dialog uses the secure desktop, but the fill path is exposed.
+    // Exposure warning: SendInput keystrokes pass through every global hook in
+    // the chain, so a third-party keylogger could intercept the credential. The
+    // master-password prompt can be routed to the secure desktop on request; the
+    // fill path has no such option and is always exposed.
     qCDebug(logFill) << "decryptAndTypeField: note - keystrokes pass through global hook chain";
 
-    // Send the selected field via SendInput.
     bool success = false;
     if (target == TypeTarget::Username)
         success = seal::typeSecret(cred.username.data(), (int)cred.username.size(), 0);
@@ -877,8 +894,10 @@ void FillController::decryptAndTypeField(const seal::VaultRecord& record, TypeTa
         success = seal::typeSecret(cred.password.data(), (int)cred.password.size(), 0);
 
     // Wipe immediately: cleanse() zeros the decrypted buffers and
-    // trimWorkingSet() (SetProcessWorkingSetSize(-1,-1)) flushes the dirty
-    // pages so a dump or swap file can't recover plaintext.
+    // trimWorkingSet() (EmptyWorkingSet) pushes the process pages out of the
+    // working set so a dump is less likely to recover plaintext. The locked
+    // pages themselves stay resident - VirtualLock keeps them out of the page
+    // file - so the zeroing, not the trim, is what removes the secret.
     cred.cleanse();
     seal::Cryptography::trimWorkingSet();
 
@@ -892,7 +911,6 @@ void FillController::decryptAndTypeField(const seal::VaultRecord& record, TypeTa
 
     QString service = QString::fromUtf8(record.platform.c_str());
 
-    // Track which field was typed.
     if (target == TypeTarget::Username)
         m_TypedFields |= TypedUsername;
     else
@@ -901,14 +919,16 @@ void FillController::decryptAndTypeField(const seal::VaultRecord& record, TypeTa
     qCInfo(logFill) << "fill: " << (target == TypeTarget::Username ? "username" : "password")
                     << "typed for" << service << "(typedFields=" << m_TypedFields << ")";
 
-    // Staged (auto) mode is one-click-one-fill: after the clicked field is
-    // filled it DISARMS - a later click never re-arms or re-types. Manual
-    // Ctrl+Click mode keeps its two-field flow (stay armed for the other field
-    // until both are typed).
+    // Staged (auto) mode is one click, one fill: after the clicked field is
+    // filled it disarms, and a later click never re-arms or re-types. Manual
+    // Ctrl+Click mode keeps its two-field flow and stays armed for the other
+    // field until both are typed.
     const bool complete = (m_TypedFields == TypedBoth) || m_AutoMode.load();
     if (complete)
     {
-        // Done: tear down hooks; backend restores window.
+        // Done: tear down hooks. seal stays minimized on purpose - TypeController
+        // restores the window only on fillError, so a success never steals focus
+        // back from the app that was just filled.
         m_TimeoutTimer.stop();
         removeHooks();
         transitionTo(State::Idle);
@@ -942,10 +962,10 @@ void FillController::performTypeAuto()
     if (m_AutoFillInFlight.exchange(true))
         return;
 
-    // The content.js report for THIS click travels async (browser -> SW ->
+    // The content.js report for this click travels async (browser -> SW ->
     // host -> pipe), so the bridge entry is usually not in the map at
     // physical-click time. Poll briefly for it, then validate. Never Sleep the
-    // GUI thread (matches performType's Ctrl-release poll pattern).
+    // GUI thread; this matches performType's Ctrl-release poll pattern.
     auto* poll = new QTimer(this);
     poll->setInterval(20);
     connect(
@@ -992,10 +1012,10 @@ void FillController::performTypeAuto()
             poll->stop();
             poll->deleteLater();
 
-            // G-foreground (dual-PID): the click window AND the foreground
-            // window must both belong to the same, bridge-validated browser
-            // PID. SendInput targets the focused window, so a focus-steal
-            // between click and type is refused here.
+            // G-foreground (dual-PID): the click window and the foreground
+            // window must both belong to the same bridge-validated browser PID.
+            // SendInput targets the focused window, so a focus steal between
+            // click and type is refused here.
             DWORD fgPid = 0;
             HWND fg = GetForegroundWindow();
             if (fg != nullptr)
@@ -1029,8 +1049,10 @@ void FillController::performTypeAuto()
             }
 
             // G-URL (fail-closed): the fresh entry's host must bind to the staged record
-            // under the SAME strict secret-release matcher the selector uses. Unlike the
-            // manual fail-open veto, no match => abort before decrypt (no plaintext).
+            // under the same strict secret-release matcher the selector uses. The manual
+            // path only vetoes when a bridge entry happens to exist; auto has already
+            // required one, so an absent or empty host aborts here - before any decrypt,
+            // which is why a refusal never produces plaintext.
             const std::string pageHost =
                 entry->m_UrlHost.isEmpty() ? std::string() : entry->m_UrlHost.toStdString();
             if (pageHost.empty() ||
@@ -1078,17 +1100,17 @@ void FillController::performTypeAuto()
                 return;
             }
 
-            // G-corroborate (M5): the fused verdict must be decisive AND on-disk
-            // corroborated. This refuses a bridge-alone hit (e.g. a lying/compromised
-            // extension planting a Password entry that aliases a metadata-stripped
-            // text field): the password releases only when an on-disk Tier-1 probe
-            // also reads Password. NOTE: in a browser the sole on-disk corroborator
-            // is UiaIsPasswordProbe, whose IsPassword/Protected verdict is itself
-            // derived from the page DOM (<input type=password>) - the same fact the
-            // bridge classified. So this is NOT an independent check against a
-            // *hostile page* (a page showing a real password input satisfies it); it
-            // hardens against a lying *extension*. What actually prevents wrong-site
-            // release is the strict host binding above (G-URL). No fallback here.
+            // G-corroborate (M5): the fused verdict must be decisive and on-disk
+            // corroborated, so a bridge-alone hit is refused - a compromised
+            // extension could plant a Password entry over a metadata-stripped text
+            // field. The password releases only when an on-disk Tier-1 probe agrees.
+            //
+            // In a browser that corroborator is UiaIsPasswordProbe alone, and its
+            // IsPassword/Protected verdict comes from the same page DOM
+            // (<input type=password>) the bridge classified. So this hardens against
+            // a lying extension, not against a hostile page, which can just show a
+            // real password input. Wrong-site release is stopped by the strict host
+            // binding above (G-URL). There is no fallback here.
             transitionTo(State::Typing);
             const seal::FusionOutcome outcome =
                 runProbeRegistryDetailed(clickPoint.x, clickPoint.y);
@@ -1106,10 +1128,10 @@ void FillController::performTypeAuto()
                 return;
             }
 
-            // Staged mode releases the PASSWORD only; the username half is the DOM
+            // Staged mode releases the password only; the username half is the DOM
             // injection (once per visit, via StagingController). Typing it here would
             // double-fill and burn the one staged click on the wrong credential, so a
-            // Username fuse is a silent no-op (stay AutoArmed). Manual still types either.
+            // Username fuse is a silent no-op and stays AutoArmed. Manual types either.
             if (outcome.m_Verdict != seal::Verdict::Password)
             {
                 qCInfo(logFill).noquote() << QString::fromStdString(
@@ -1226,10 +1248,10 @@ void FillController::performDiagnose()
 
     auto [ctx, results] = runOnce();
 
-    // Race-mitigation: only the browser_extension probe (index 0) rides the async
-    // content.js -> SW -> host -> bridge path, which a busy/just-woken SW can land
-    // AFTER the Ctrl+Click. On a live peer but Unknown, wait ~75 ms and re-probe.
-    // The fill path's Ctrl-release poll already absorbs this; diagnose probes now.
+    // Race mitigation: only the browser_extension probe (index 0) rides the async
+    // content.js -> SW -> host -> bridge path, and a busy or just-woken SW can land
+    // its report after the Ctrl+Click. On a live peer but Unknown, wait ~75 ms and
+    // re-probe. The fill path's Ctrl-release poll absorbs this; diagnose does not.
     if (results[0].m_Verdict == Verdict::Unknown && m_BrowserBridge.isPeerConnected())
     {
         Sleep(75);  // synchronous on the Qt thread; trivially short.
