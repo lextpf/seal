@@ -9,6 +9,7 @@
 #include "FileOperations.hpp"
 #include "PasswordGen.hpp"
 #include "ScopedDpapiUnprotect.hpp"
+#include "SignerUtils.hpp"
 #include "Utils.hpp"
 #include "Vault.hpp"
 
@@ -434,37 +435,17 @@ int HandleStringMode(bool encryptMode, const std::string& inlineData)
     }
 }
 
-// ---------------------------------------------------------------------------
-// Browser extension install / uninstall helpers
-// ---------------------------------------------------------------------------
-
 namespace
 {
 
-constexpr std::wstring_view kHostName = L"com.seal.fill";
 constexpr std::string_view kHostNameAscii = "com.seal.fill";
 
 // Deterministic Chrome extension ID from the RSA "key" in
 // extensions/browser/manifest.json: first 16 bytes of SHA-256(SPKI DER),
-// each nibble 0..15 -> a..p. Hardcoded to pre-fill allowed_origins without
-// manual JSON edits. MUST be updated if the manifest "key" is regenerated.
+// each nibble 0..15 -> a..p. Hardcoded so allowed_origins needs no manual JSON
+// edit. Regenerating the manifest "key" invalidates this constant: update it
+// here and in the host's argv[1] origin gate together.
 constexpr std::string_view kSealExtensionIdAscii = "dfjclelhkideboildnjihgildihjjmdo";
-
-// Browser registry roots under HKCU.
-struct BrowserTarget
-{
-    std::wstring_view m_DisplayName;
-    std::wstring_view m_SubKey;
-};
-
-// Chrome + Brave: both Chromium, so they share one extension (same RSA "key"
-// -> same ID -> same chrome-extension:// origin) and manifest
-// (com.seal.fill.json); only the registry root differs. Edge/Opera/Vivaldi fit
-// the same way; Firefox (different engine, own manifest + registry) is excluded.
-constexpr std::array<BrowserTarget, 2> kBrowserTargets{{
-    {L"Chrome", L"Software\\Google\\Chrome\\NativeMessagingHosts\\com.seal.fill"},
-    {L"Brave", L"Software\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts\\com.seal.fill"},
-}};
 
 // Best-effort UTF-16 -> clipboard. Silent failure when locked elsewhere.
 bool copyTextToClipboard(const std::wstring& text)
@@ -525,6 +506,123 @@ std::filesystem::path executableDirectory()
     }
     std::filesystem::path exePath(buffer);
     return exePath.parent_path();
+}
+
+std::filesystem::path environmentDirectory(const wchar_t* variable)
+{
+    const DWORD needed = GetEnvironmentVariableW(variable, nullptr, 0);
+    if (needed == 0)
+    {
+        return {};
+    }
+    std::wstring value(needed, L'\0');
+    const DWORD written = GetEnvironmentVariableW(variable, value.data(), needed);
+    if (written == 0 || written >= needed)
+    {
+        return {};
+    }
+    value.resize(written);
+    return std::filesystem::path(value);
+}
+
+bool registryKeyExists(HKEY root, const std::wstring& subKey)
+{
+    for (const REGSAM view : {KEY_WOW64_64KEY, KEY_WOW64_32KEY})
+    {
+        HKEY key = nullptr;
+        const LSTATUS status = RegOpenKeyExW(root, subKey.c_str(), 0, KEY_READ | view, &key);
+        if (status == ERROR_SUCCESS)
+        {
+            RegCloseKey(key);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool appPathExists(std::wstring_view imageName)
+{
+    const std::wstring subKey =
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\" + std::wstring(imageName);
+    return registryKeyExists(HKEY_CURRENT_USER, subKey) ||
+           registryKeyExists(HKEY_LOCAL_MACHINE, subKey);
+}
+
+bool pathExists(const std::filesystem::path& path)
+{
+    std::error_code error;
+    return !path.empty() && std::filesystem::exists(path, error) && !error;
+}
+
+std::vector<std::filesystem::path> standardBrowserPaths(seal::signer::BrowserKind kind)
+{
+    const std::filesystem::path local = environmentDirectory(L"LOCALAPPDATA");
+    const std::filesystem::path programFiles = environmentDirectory(L"ProgramFiles");
+    const std::filesystem::path programFilesX86 = environmentDirectory(L"ProgramFiles(x86)");
+    std::vector<std::filesystem::path> paths;
+
+    const auto add =
+        [&paths](const std::filesystem::path& base, const std::filesystem::path& relative)
+    {
+        if (!base.empty())
+        {
+            paths.push_back(base / relative);
+        }
+    };
+
+    using seal::signer::BrowserKind;
+    switch (kind)
+    {
+        case BrowserKind::Chrome:
+            add(local, L"Google\\Chrome\\Application\\chrome.exe");
+            add(programFiles, L"Google\\Chrome\\Application\\chrome.exe");
+            add(programFilesX86, L"Google\\Chrome\\Application\\chrome.exe");
+            break;
+        case BrowserKind::Edge:
+            add(local, L"Microsoft\\Edge\\Application\\msedge.exe");
+            add(programFiles, L"Microsoft\\Edge\\Application\\msedge.exe");
+            add(programFilesX86, L"Microsoft\\Edge\\Application\\msedge.exe");
+            break;
+        case BrowserKind::Brave:
+            add(local, L"BraveSoftware\\Brave-Browser\\Application\\brave.exe");
+            add(programFiles, L"BraveSoftware\\Brave-Browser\\Application\\brave.exe");
+            add(programFilesX86, L"BraveSoftware\\Brave-Browser\\Application\\brave.exe");
+            break;
+        case BrowserKind::Opera:
+            add(local, L"Programs\\Opera\\opera.exe");
+            add(local, L"Programs\\Opera GX\\opera.exe");
+            add(programFiles, L"Opera\\opera.exe");
+            add(programFilesX86, L"Opera\\opera.exe");
+            break;
+        case BrowserKind::Vivaldi:
+            add(local, L"Vivaldi\\Application\\vivaldi.exe");
+            add(programFiles, L"Vivaldi\\Application\\vivaldi.exe");
+            add(programFilesX86, L"Vivaldi\\Application\\vivaldi.exe");
+            break;
+        case BrowserKind::Thorium:
+            add(local, L"Thorium\\Application\\thorium.exe");
+            add(programFiles, L"Thorium\\Application\\thorium.exe");
+            add(programFilesX86, L"Thorium\\Application\\thorium.exe");
+            break;
+        case BrowserKind::Chromium:
+            add(local, L"Chromium\\Application\\chromium.exe");
+            add(local, L"Chromium\\Application\\chrome.exe");
+            add(programFiles, L"Chromium\\Application\\chromium.exe");
+            add(programFiles, L"Chromium\\Application\\chrome.exe");
+            add(programFilesX86, L"Chromium\\Application\\chromium.exe");
+            add(programFilesX86, L"Chromium\\Application\\chrome.exe");
+            break;
+        case BrowserKind::Unknown:
+        case BrowserKind::Firefox:
+        case BrowserKind::LibreWolf:
+        case BrowserKind::Waterfox:
+        case BrowserKind::Floorp:
+        case BrowserKind::Zen:
+        case BrowserKind::Count:
+        default:
+            break;
+    }
+    return paths;
 }
 
 // JSON escape: backslash, double-quote, common controls. Manifest paths
@@ -618,8 +716,8 @@ bool writeChromeManifest(const std::filesystem::path& manifestPath,
     return static_cast<bool>(out);
 }
 
-// Firefox manifest writer removed with scope reduction; restore from git
-// history when multi-browser support returns.
+// No Gecko manifest is written: Gecko needs a different `allowed_extensions`
+// shape, and seal ships no Firefox extension.
 
 // Write the (default) value of HKCU\<subKey> to point at the manifest file.
 bool writeRegistryString(std::wstring_view subKey, const std::wstring& valueData)
@@ -635,25 +733,222 @@ bool writeRegistryString(std::wstring_view subKey, const std::wstring& valueData
     return status == ERROR_SUCCESS;
 }
 
-// Delete HKCU\<subKey>'s default value. true if removed or absent.
-bool deleteRegistryValue(std::wstring_view subKey)
+enum class RegistryDeleteOutcome
+{
+    Removed,
+    Absent,
+    Failed,
+};
+
+// Delete HKCU\<subKey>'s default value while preserving absent vs failure.
+RegistryDeleteOutcome deleteRegistryValue(std::wstring_view subKey)
 {
     const std::wstring subKeyOwned(subKey);
     const LSTATUS status = RegDeleteKeyValueW(HKEY_CURRENT_USER,
                                               subKeyOwned.c_str(),
                                               nullptr  // default value
     );
-    if (status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND)
+    if (status == ERROR_SUCCESS)
     {
-        return true;
+        return RegistryDeleteOutcome::Removed;
     }
-    return false;
+    if (status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND)
+    {
+        return RegistryDeleteOutcome::Absent;
+    }
+    return RegistryDeleteOutcome::Failed;
 }
 
 }  // namespace
 
-int installBrowserExtensionInternal(std::string* outMessage)
+std::filesystem::path findBrowserExtensionDirectory(const std::filesystem::path& executableDir)
 {
+    const std::filesystem::path installed = executableDir / "extensions" / "browser";
+    if (pathExists(installed))
+    {
+        return installed;
+    }
+
+    std::filesystem::path probe = executableDir;
+    for (int depth = 0; depth < 6 && probe.has_parent_path(); ++depth)
+    {
+        const std::filesystem::path candidate = probe / "extensions" / "browser";
+        if (pathExists(candidate))
+        {
+            return candidate;
+        }
+        probe = probe.parent_path();
+    }
+    return installed;
+}
+
+bool isBrowserInstalled(seal::signer::BrowserKind kind)
+{
+    const auto* browser = seal::signer::browserMetadata(kind);
+    if (browser == nullptr ||
+        browser->m_EngineFamily != seal::signer::BrowserEngineFamily::Chromium)
+    {
+        return false;
+    }
+
+    if (appPathExists(browser->m_ImageName))
+    {
+        return true;
+    }
+    if (kind == seal::signer::BrowserKind::Opera && appPathExists(L"launcher.exe"))
+    {
+        return true;
+    }
+    for (const auto& path : standardBrowserPaths(kind))
+    {
+        if (pathExists(path))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string formatBrowserExtensionInstallReport(const BrowserExtensionInstallReport& report)
+{
+    if (!report.m_Success)
+    {
+        return report.m_ErrorMessage.empty() ? "Browser companion setup failed."
+                                             : report.m_ErrorMessage;
+    }
+
+    std::size_t registered = 0;
+    for (const auto& result : report.m_Browsers)
+    {
+        if (result.m_Outcome == BrowserRegistrationOutcome::Registered)
+        {
+            ++registered;
+        }
+    }
+
+    std::ostringstream message;
+    message << "Native-messaging setup completed for " << registered << " browser(s).\n";
+    message << "Manifest: " << report.m_ManifestPath.string() << "\n\n";
+    message << "Browser registration:\n";
+    for (const auto& result : report.m_Browsers)
+    {
+        const auto* browser = seal::signer::browserMetadata(result.m_Kind);
+        const std::string_view name =
+            browser == nullptr ? std::string_view("Unknown") : browser->m_DisplayName;
+        message << "  - " << name << ": ";
+        switch (result.m_Outcome)
+        {
+            case BrowserRegistrationOutcome::Registered:
+                message << "registered";
+                break;
+            case BrowserRegistrationOutcome::SkippedNotInstalled:
+                message << "not installed (skipped)";
+                break;
+            case BrowserRegistrationOutcome::RegistrationFailed:
+                message << "registry write failed";
+                break;
+            default:
+                message << "not processed";
+                break;
+        }
+        message << "\n";
+    }
+
+    message << "\nExtension folder:\n  " << report.m_ExtensionDirectory.string() << "\n";
+    if (!report.m_ExtensionDirectoryFound)
+    {
+        message << "\nExtension folder not found. Reinstall seal so extensions/browser is "
+                   "present beside the application, then run Setup again.";
+        return message.str();
+    }
+
+    if (report.m_ExtensionDirectoryCopied)
+    {
+        message << "  (copied to the clipboard)\n";
+    }
+
+    message << "\nOne manual step remains for each browser:\n";
+    message << "  1) Open its extensions page";
+    bool firstPage = true;
+    for (const auto& result : report.m_Browsers)
+    {
+        if (result.m_Outcome != BrowserRegistrationOutcome::Registered)
+        {
+            continue;
+        }
+        const auto* browser = seal::signer::browserMetadata(result.m_Kind);
+        if (browser == nullptr)
+        {
+            continue;
+        }
+        message << (firstPage ? " (" : ", ") << browser->m_ExtensionsPage;
+        firstPage = false;
+    }
+    if (!firstPage)
+    {
+        message << ")";
+    }
+    message << ".\n";
+    message << "  2) Turn on Developer mode.\n";
+    message << "  3) Click Load unpacked and paste/select the extension folder above.\n";
+    message << "seal does not launch a browser or install an unpacked extension "
+               "programmatically.";
+    return message.str();
+}
+
+std::string formatBrowserExtensionUninstallReport(const BrowserExtensionUninstallReport& report)
+{
+    std::ostringstream message;
+    message << (report.m_Success ? "Native-messaging host unregistered."
+                                 : "Native-messaging host removal was incomplete.");
+    message << "\n\nBrowser registration:\n";
+    for (const auto& result : report.m_Browsers)
+    {
+        const auto* browser = seal::signer::browserMetadata(result.m_Kind);
+        const std::string_view name =
+            browser == nullptr ? std::string_view("Unknown") : browser->m_DisplayName;
+        message << "  - " << name << ": ";
+        switch (result.m_Outcome)
+        {
+            case BrowserRegistrationOutcome::Removed:
+                message << "removed";
+                break;
+            case BrowserRegistrationOutcome::AlreadyAbsent:
+                message << "already absent";
+                break;
+            case BrowserRegistrationOutcome::RemovalFailed:
+                message << "registry removal failed";
+                break;
+            default:
+                message << "not processed";
+                break;
+        }
+        message << "\n";
+    }
+    message << "\nThis unregisters only the native-messaging host. seal cannot remove an "
+               "unpacked extension for you. Open each browser's extensions page, find "
+               "'seal companion', and click Remove.";
+    return message.str();
+}
+
+int installBrowserExtensionInternal(std::string* outMessage,
+                                    BrowserExtensionInstallReport* outReport)
+{
+    BrowserExtensionInstallReport report;
+    const auto finishFailure = [&report, outMessage, outReport](std::string message)
+    {
+        report.m_ErrorMessage = std::move(message);
+        if (outMessage != nullptr)
+        {
+            *outMessage = formatBrowserExtensionInstallReport(report);
+        }
+        if (outReport != nullptr)
+        {
+            *outReport = report;
+        }
+        return 1;
+    };
+
     const std::filesystem::path exeDir = executableDirectory();
     if (exeDir.empty())
     {
@@ -661,103 +956,92 @@ int installBrowserExtensionInternal(std::string* outMessage)
                      {"event=cli.install-extension.finish",
                       "result=fail",
                       "reason=module_path_unavailable"});
-        if (outMessage != nullptr)
-        {
-            *outMessage = "Failed to determine seal.exe location.";
-        }
-        return 1;
+        return finishFailure("Failed to determine seal.exe location.");
     }
 
     const std::filesystem::path hostExe = exeDir / "seal-browser.exe";
-    if (!std::filesystem::exists(hostExe))
+    if (!pathExists(hostExe))
     {
         writeCliDiag(seal::console::Tone::Error,
                      {"event=cli.install-extension.finish",
                       "result=fail",
                       "reason=host_exe_missing",
                       seal::diag::pathSummary(hostExe.string(), "host")});
-        if (outMessage != nullptr)
-        {
-            *outMessage = "seal-browser.exe not found beside seal.exe.";
-        }
-        return 1;
+        return finishFailure("seal-browser.exe not found beside seal.exe.");
     }
 
-    // Manifest next to seal.exe - install layout is self-contained;
-    // registry entries use absolute paths.
-    const std::filesystem::path chromeManifest = exeDir / "com.seal.fill.json";
-
-    if (!writeChromeManifest(chromeManifest, hostExe))
+    report.m_ManifestPath = exeDir / "com.seal.fill.json";
+    if (!writeChromeManifest(report.m_ManifestPath, hostExe))
     {
         writeCliDiag(seal::console::Tone::Error,
                      {"event=cli.install-extension.finish",
                       "result=fail",
                       "reason=manifest_write_failed",
-                      seal::diag::pathSummary(chromeManifest.string(), "manifest")});
-        if (outMessage != nullptr)
-        {
-            *outMessage = "Failed to write Chromium manifest file.";
-        }
-        return 1;
+                      seal::diag::pathSummary(report.m_ManifestPath.string(), "manifest")});
+        return finishFailure("Failed to write Chromium manifest file.");
     }
 
     int installedCount = 0;
-    std::vector<std::wstring> skipped;
-    for (const auto& target : kBrowserTargets)
+    for (const auto& browser : seal::signer::kBrowserMetadata)
     {
-        const std::wstring manifestPath = chromeManifest.wstring();
+        if (browser.m_EngineFamily != seal::signer::BrowserEngineFamily::Chromium)
+        {
+            continue;
+        }
 
-        if (writeRegistryString(target.m_SubKey, manifestPath))
+        BrowserRegistrationResult result;
+        result.m_Kind = browser.m_Kind;
+        if (!isBrowserInstalled(browser.m_Kind))
+        {
+            result.m_Outcome = BrowserRegistrationOutcome::SkippedNotInstalled;
+            report.m_Browsers.push_back(result);
+            continue;
+        }
+
+        bool succeeded = true;
+        for (const std::wstring_view subKey : browser.m_NativeMessagingSubKeys)
+        {
+            if (subKey.empty())
+            {
+                continue;
+            }
+            if (writeRegistryString(subKey, report.m_ManifestPath.wstring()))
+            {
+                ++result.m_RegistryValueCount;
+            }
+            else
+            {
+                succeeded = false;
+            }
+        }
+        result.m_Outcome = succeeded && result.m_RegistryValueCount > 0
+                               ? BrowserRegistrationOutcome::Registered
+                               : BrowserRegistrationOutcome::RegistrationFailed;
+        if (result.m_Outcome == BrowserRegistrationOutcome::Registered)
         {
             ++installedCount;
         }
-        else
-        {
-            skipped.emplace_back(target.m_DisplayName);
-        }
+        report.m_Browsers.push_back(result);
     }
 
-    // Extension folder for sideloading. Prefer sibling extensions/ (CMake
-    // install layout); fall back to the repo layout (two levels up from
-    // build/bin/Release) when running from a dev tree.
-    std::filesystem::path extensionsDir = exeDir / "extensions" / "browser";
-    if (!std::filesystem::exists(extensionsDir))
-    {
-        // Walk up from exeDir to find extensions/ at the repo root (dev
-        // tree puts seal.exe under build/bin/Release/).
-        std::filesystem::path probe = exeDir;
-        for (int depth = 0; depth < 6 && probe.has_parent_path(); ++depth)
-        {
-            const std::filesystem::path candidate = probe / "extensions" / "browser";
-            if (std::filesystem::exists(candidate))
-            {
-                extensionsDir = candidate;
-                break;
-            }
-            probe = probe.parent_path();
-        }
-    }
+    report.m_ExtensionDirectory = findBrowserExtensionDirectory(exeDir);
+    report.m_ExtensionDirectoryFound = pathExists(report.m_ExtensionDirectory);
+    report.m_ExtensionDirectoryCopied = report.m_ExtensionDirectoryFound &&
+                                        copyTextToClipboard(report.m_ExtensionDirectory.wstring());
+    report.m_Success = true;
 
+    // Progress goes to stdout even for the GUI caller: these lines are the
+    // CLI's stdout contract. The GUI reads the structured report and the
+    // detailed formatter instead.
     std::cout << "Native-messaging host registered for " << installedCount << " browser(s).\n";
-    std::cout << "Manifest: " << chromeManifest.string() << "\n";
-
-    // Copy the extension folder path to the clipboard so the one remaining
-    // manual step - loading the unpacked extension - is a single paste. We
-    // deliberately do NOT launch any browser.
-    const bool clipboardOk =
-        std::filesystem::exists(extensionsDir) && copyTextToClipboard(extensionsDir.wstring());
-
-    if (std::filesystem::exists(extensionsDir))
+    std::cout << "Manifest: " << report.m_ManifestPath.string() << "\n";
+    if (report.m_ExtensionDirectoryFound)
     {
-        std::cout << "\nExtension folder:\n  " << extensionsDir.string() << "\n";
-        if (clipboardOk)
+        std::cout << "\nExtension folder:\n  " << report.m_ExtensionDirectory.string() << "\n";
+        if (report.m_ExtensionDirectoryCopied)
         {
             std::cout << "  (copied to clipboard - paste with Ctrl+V in the file picker)\n";
         }
-        // Loading an UNPACKED extension is the one step no program can do for
-        // you: Chrome does not let an external process install one (only the
-        // Web Store or an enterprise force-install policy can). Everything else
-        // - the native-messaging host + manifest - is already done above.
         std::cout << "\nOne manual step remains (Chrome/Brave restriction on unpacked "
                      "extensions):\n"
                      "  1) Open chrome://extensions/ (or brave://extensions/).\n"
@@ -778,43 +1062,96 @@ int installBrowserExtensionInternal(std::string* outMessage)
 
     if (outMessage != nullptr)
     {
-        std::ostringstream msg;
-        msg << "Registered native-messaging host for " << installedCount << " browser(s).";
-        *outMessage = msg.str();
+        *outMessage = formatBrowserExtensionInstallReport(report);
+    }
+    if (outReport != nullptr)
+    {
+        *outReport = report;
     }
     return 0;
 }
 
-int uninstallBrowserExtensionInternal(std::string* outMessage)
+int uninstallBrowserExtensionInternal(std::string* outMessage,
+                                      BrowserExtensionUninstallReport* outReport)
 {
+    struct CachedDelete
+    {
+        std::wstring m_SubKey;
+        RegistryDeleteOutcome m_Outcome;
+    };
+    std::vector<CachedDelete> cache;
+    const auto deleteOnce = [&cache](std::wstring_view subKey)
+    {
+        for (const auto& cached : cache)
+        {
+            if (cached.m_SubKey == subKey)
+            {
+                return cached.m_Outcome;
+            }
+        }
+        const RegistryDeleteOutcome outcome = deleteRegistryValue(subKey);
+        cache.push_back({std::wstring(subKey), outcome});
+        return outcome;
+    };
+
+    BrowserExtensionUninstallReport report;
     int removed = 0;
     int missed = 0;
-    for (const auto& target : kBrowserTargets)
+    for (const auto& browser : seal::signer::kBrowserMetadata)
     {
-        if (deleteRegistryValue(target.m_SubKey))
+        if (browser.m_EngineFamily != seal::signer::BrowserEngineFamily::Chromium)
         {
-            ++removed;
+            continue;
+        }
+
+        BrowserRegistrationResult result;
+        result.m_Kind = browser.m_Kind;
+        bool anyRemoved = false;
+        bool anyFailed = false;
+        for (const std::wstring_view subKey : browser.m_NativeMessagingSubKeys)
+        {
+            if (subKey.empty())
+            {
+                continue;
+            }
+            switch (deleteOnce(subKey))
+            {
+                case RegistryDeleteOutcome::Removed:
+                    anyRemoved = true;
+                    ++result.m_RegistryValueCount;
+                    break;
+                case RegistryDeleteOutcome::Failed:
+                    anyFailed = true;
+                    break;
+                case RegistryDeleteOutcome::Absent:
+                    break;
+            }
+        }
+
+        if (anyFailed)
+        {
+            result.m_Outcome = BrowserRegistrationOutcome::RemovalFailed;
+            ++missed;
         }
         else
         {
-            ++missed;
+            result.m_Outcome = anyRemoved ? BrowserRegistrationOutcome::Removed
+                                          : BrowserRegistrationOutcome::AlreadyAbsent;
+            ++removed;
         }
+        report.m_Browsers.push_back(result);
     }
+    report.m_Success = missed == 0;
 
-    // Leave manifest JSONs in place so a follow-up --install only needs
-    // to re-write the registry entries.
-    writeCliDiag(seal::console::Tone::Success,
+    // Leave the generated manifest in place so a follow-up install only needs
+    // to restore registry entries.
+    writeCliDiag(report.m_Success ? seal::console::Tone::Success : seal::console::Tone::Error,
                  {"event=cli.uninstall-extension.finish",
-                  "result=ok",
+                  report.m_Success ? "result=ok" : "result=fail",
                   seal::diag::kv("removed", removed),
                   seal::diag::kv("missed", missed)});
 
     std::cout << "Native-messaging host registry entries cleared (" << removed << " removed).\n";
-
-    // The registry entries are all this command can remove. The WebExtension is
-    // loaded unpacked (developer mode), and Chrome lets only the user remove it,
-    // from the browser's extensions page. Say so plainly so "it's still there"
-    // is no surprise (mirrors the install command, which guides the load).
     std::cout << "\nThis unregisters the native-messaging host only. The 'seal companion'\n"
                  "extension is still loaded in your browser - seal cannot remove an\n"
                  "unpacked extension for you (only the browser can). To finish removing it:\n"
@@ -823,14 +1160,13 @@ int uninstallBrowserExtensionInternal(std::string* outMessage)
 
     if (outMessage != nullptr)
     {
-        std::ostringstream msg;
-        msg << "Cleared " << removed
-            << " native-messaging host entries. Remove the 'seal companion' extension "
-               "yourself in chrome://extensions/ (Chrome cannot remove an unpacked "
-               "extension programmatically).";
-        *outMessage = msg.str();
+        *outMessage = formatBrowserExtensionUninstallReport(report);
     }
-    return 0;
+    if (outReport != nullptr)
+    {
+        *outReport = report;
+    }
+    return report.m_Success ? 0 : 1;
 }
 
 int HandleInstallBrowserExtensionMode()
