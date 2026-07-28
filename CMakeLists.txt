@@ -169,6 +169,7 @@ set(SEAL_SOURCES
     src/Vault.cpp
     src/Logging.cpp
     src/PasswordGen.cpp
+    src/ProtectedFolderProfile.cpp
     src/WindowChrome.cpp
     src/NativeDialogs.cpp
     src/CameraSelector.cpp
@@ -287,6 +288,7 @@ qt_add_qml_module(seal
         qml/DialogBlobs.qml
         qml/PasswordDialog.qml
         qml/RekeyDialog.qml
+        qml/ProtectFolderDialog.qml
         qml/RippleEffect.qml
         qml/SvgIcon.qml
         qml/TintedButton.qml
@@ -389,15 +391,18 @@ if(ENABLE_BROWSER_HOST)
     install(TARGETS seal_browser RUNTIME DESTINATION bin)
 endif()
 
-# Bundle the WebExtension folder into the install layout so the user can
-# point chrome://extensions / about:debugging at it after running
-# `seal --install-browser-extension`.
+# Bundle the Chromium WebExtension folder into the install layout so the user
+# can load it unpacked after running `seal --install-browser-extension`.
+# The legacy Firefox manifest is intentionally excluded: seal does not yet
+# generate Gecko's `allowed_extensions` native-host manifest, so packaging it
+# would advertise a setup path that cannot connect.
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/extensions/browser"
     DESTINATION extensions
     FILES_MATCHING
         PATTERN "*.json"
         PATTERN "*.js"
         PATTERN "*.png"
+        PATTERN "firefox" EXCLUDE
 )
 
 include(GNUInstallDirs)
@@ -421,6 +426,7 @@ if(ENABLE_TESTS)
         tests/test_win32_style_probe.cpp
         tests/test_bridge_fuzz.cpp
         tests/test_bridge_security.cpp
+        tests/test_browser_extension_setup.cpp
         tests/test_signer_family.cpp
         tests/test_brand_icon_resolver.cpp
         tests/test_url_binding.cpp
@@ -437,6 +443,8 @@ if(ENABLE_TESTS)
         tests/test_process_pin.cpp
         tests/test_vault_rekey.cpp
         tests/test_directory_crypto.cpp
+        tests/test_protected_folder_profile.cpp
+        tests/test_protected_folder_policy.cpp
         tests/test_diagnostics.cpp
         src/Cryptography.cpp
         src/Utils.cpp
@@ -448,6 +456,7 @@ if(ENABLE_TESTS)
         src/CliModes.cpp
         src/ConsoleStyle.cpp
         src/PasswordGen.cpp
+        src/ProtectedFolderProfile.cpp
         src/FusionDecider.cpp
         src/Win32StyleProbe.cpp
         src/ImeStateProbe.cpp
