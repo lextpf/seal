@@ -287,7 +287,7 @@ void MaskedCredentialView::handleClick(SHORT x, SHORT y)
         }
         else
         {
-            // Legacy path: credentials are already in memory.
+            // Pre-decrypted path: the credential is already in memory.
             const auto& entry = (*m_pEntries)[i];
             if (isUsername)
             {
@@ -309,7 +309,10 @@ void MaskedCredentialView::handleClick(SHORT x, SHORT y)
 
 void MaskedCredentialView::run()
 {
-    // Enable mouse input for click detection on masked fields
+    // Enable mouse input for click detection on masked fields. Quick-edit mode
+    // is cleared as well: it consumes left-button presses for text selection,
+    // so the hit regions would never see a click. The clear needs
+    // ENABLE_EXTENDED_FLAGS in the same call, otherwise the console ignores it.
     DWORD oldMode = 0;
     GetConsoleMode(m_Input, &oldMode);
     DWORD newMode =
@@ -487,7 +490,8 @@ bool readBulkLinesDualOrEsc(std::pair<std::vector<std::string>, bool>& out)
 }
 
 seal::basic_secure_string<wchar_t> readPasswordSecureDesktop(const wchar_t* caption,
-                                                             const wchar_t* message)
+                                                             const wchar_t* message,
+                                                             bool secureDesktop)
 {
     CREDUI_INFOW ui{};
     ui.cbSize = sizeof(ui);
@@ -513,18 +517,19 @@ seal::basic_secure_string<wchar_t> readPasswordSecureDesktop(const wchar_t* capt
     DWORD authPkg = 0;
     CoTaskMemGuard cred;
 
-    // CREDUIWIN_ENUMERATE_CURRENT_USER pre-selects the logged-in account
-    // so the user only types the password. CREDUIWIN_SECURE_PROMPT is not
-    // set, so this runs on the normal desktop (no secure-desktop guard).
-    HRESULT hr = CredUIPromptForWindowsCredentialsW(&ui,
-                                                    0,
-                                                    &authPkg,
-                                                    inBuf.data(),
-                                                    inLen,
-                                                    &cred.ptr,
-                                                    &cred.size,
-                                                    nullptr,
-                                                    CREDUIWIN_ENUMERATE_CURRENT_USER);
+    // CREDUIWIN_ENUMERATE_CURRENT_USER pre-selects the logged-in account so the
+    // user types only the password; seal ignores the username field.
+    // secureDesktop adds CREDUIWIN_SECURE_PROMPT, which moves the dialog onto
+    // Windows' dimmed secure desktop, out of reach of user-session software
+    // keyloggers and hooks. OS policy can refuse it, so it is best-effort.
+    DWORD flags = CREDUIWIN_ENUMERATE_CURRENT_USER;
+    if (secureDesktop)
+    {
+        flags |= CREDUIWIN_SECURE_PROMPT;
+    }
+
+    HRESULT hr = CredUIPromptForWindowsCredentialsW(
+        &ui, 0, &authPkg, inBuf.data(), inLen, &cred.ptr, &cred.size, nullptr, flags);
 
     if (hr != ERROR_SUCCESS)
     {
@@ -537,7 +542,7 @@ seal::basic_secure_string<wchar_t> readPasswordSecureDesktop(const wchar_t* capt
     SecureWCharBuffer<512> pass;
 
     // CRED_PACK_PROTECTED_CREDENTIALS keeps the password encrypted in the
-    // buffer until we explicitly read it.
+    // buffer until this call reads it out.
     BOOL ok = CredUnPackAuthenticationBufferW(CRED_PACK_PROTECTED_CREDENTIALS,
                                               cred.ptr,
                                               cred.size,
@@ -637,9 +642,9 @@ seal::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt)
         std::cerr << '*' << std::flush;
     }
 
-    // Widen with the active console codepage (often Windows-1252), NOT
-    // CP_UTF8 - using UTF-8 would garble non-ASCII passwords and break
-    // key derivation.
+    // Widen with the active console codepage (often Windows-1252), never
+    // CP_UTF8: UTF-8 would garble non-ASCII passwords and break key
+    // derivation.
     seal::basic_secure_string<wchar_t> result;
     if (!narrow.empty())
     {
