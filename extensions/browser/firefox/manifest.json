@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "seal companion",
   "version": "0.1.0",
-  "description": "Reports the type of input field under Ctrl+Click to the seal credential manager.",
+  "description": "Reports clicked input-field types and matching-site navigations to the seal credential manager.",
   "browser_specific_settings": {
     "gecko": {
       "id": "seal-companion@seal.local",
