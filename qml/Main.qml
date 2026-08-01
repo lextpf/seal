@@ -1,15 +1,46 @@
+/*  ============================================================================================  *
+ *                                                            ⠀⣠⡤⠀⢀⣀⣀⡀⠀⠀⠀⠀⣦⡀⠀⠀⠀⠀⠀⠀
+ *                                                            ⠀⠘⠃⠈⢿⡏⠉⠉⠀⢀⣀⣰⣿⣿⡄⠀⠀⠀⠀⢀
+ *           ::::::::  ::::::::::     :::     :::             ⠀⠀⠀⠀⠀⢹⠀⠀⠀⣸⣿⡿⠉⠿⣿⡆⠀⠰⠿⣿
+ *          :+:    :+: :+:          :+: :+:   :+:             ⠀⠀⠀⠀⠀⢀⣠⠾⠿⠿⠿⠀⢰⣄⠘⢿⠀⠀⠀⠞
+ *          +:+        +:+         +:+   +:+  +:+             ⢲⣶⣶⡂⠐⢉⣀⣤⣶⣶⡦⠀⠈⣿⣦⠈⠀⣾⡆⠀
+ *          +#++:++#++ +#++:++#   +#++:++#++: +#+             ⠀⠀⠿⣿⡇⠀⠀⠀⠙⢿⣧⠀⠳⣿⣿⡀⠸⣿⣿⠀
+ *                 +#+ +#+        +#+     +#+ +#+             ⠀⠀⠐⡟⠁⠀⠀⢀⣴⣿⠛⠓⠀⣉⣿⣿⢠⡈⢻⡇
+ *          #+#    #+# #+#        #+#     #+# #+#             ⠀⠀⠀⠀⠀⠀⠀⣾⣿⣿⣆⠀⢹⣿⣿⣷⡀⠁⢸⡇
+ *           ########  ########## ###     ### ##########      ⠀⠀⠀⠀⠀⠀⠘⠛⠛⠉⠀⠀⠈⠙⠛⠿⢿⣶⣼⠃
+ *                                                            ⠀⠀⠀⢰⣧⣤⠤⠖⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+ *
+ *                                  << P A S S   M A N A G E R >>
+ *
+ *  ============================================================================================  *
+ *
+ *      A Windows AES-256-GCM encryption utility with Qt6/QML GUI and CLI
+ *      providing on-demand credential management, directory encryption,
+ *      webcam QR authentication, and global auto-fill.
+ *
+ *    ----------------------------------------------------------------------
+ *
+ *      Repository:   https://github.com/lextpf/seal
+ *      License:      MIT
+ */
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
 
+// The application shell: one frameless window that owns the drag strip and window
+// buttons, the ambient backdrop, the content column and every top-level dialog.
+// Four of the five C++ context properties are driven from here: AppViewModel (vault
+// state and commands), Fill (TypeController, auto-fill arming), Cli (embedded
+// terminal) and WindowVM (Win32 window chrome). Bridge is only listened to here, for
+// its info and error dialogs; its commands live in HeaderBar and BridgeSettings.
 ApplicationWindow {
     id: window
     visible: false
-    width: 1420
+    width: 1600
     height: 568
-    minimumWidth: 1100
-    minimumHeight: 570
+    minimumWidth: 800
+    minimumHeight: WindowVM.isCompact ? 272 : 480
     title: "seal"
     flags: Qt.Window | Qt.FramelessWindowHint
     topPadding: 0
@@ -19,11 +50,45 @@ ApplicationWindow {
     color: Theme.bgDeep
     Behavior on color { ColorAnimation { duration: 350; easing.type: Easing.InOutQuad } }
 
+    // Desktop-only breakpoints. Qt reports these dimensions in logical pixels,
+    // so they remain stable across Windows DPI settings and mixed-DPI monitors.
+    readonly property bool narrowDesktop: width < 1200
+    readonly property bool compactDesktop: width < 960
+    readonly property bool shortDesktop: !WindowVM.isCompact && height < 540
+    readonly property int contentSideMargin: WindowVM.isCompact ? 16
+                                                   : compactDesktop ? 20
+                                                   : narrowDesktop ? 28
+                                                   : Theme.spacingXL
+    // The window-control row owns the first 36 logical pixels in every mode, so
+    // content starts below it. Anything opaque drawn over that strip also removes
+    // window dragging there - see the drag MouseArea below.
+    readonly property int contentTopMargin: 36
+    readonly property int contentBottomMargin: WindowVM.isCompact ? 14
+                                                     : shortDesktop ? 16
+                                                     : 24
+    readonly property int contentSpacing: WindowVM.isCompact ? 10
+                                                : shortDesktop ? 12
+                                                : narrowDesktop ? 16
+                                                : Theme.spacingLarge
+
+    function fitInitialWindowToScreen() {
+        var availableWidth = Screen.desktopAvailableWidth;
+        var availableHeight = Screen.desktopAvailableHeight;
+        if (availableWidth <= 0 || availableHeight <= 0)
+            return;
+
+        var screenInset = 64;
+        width = Math.max(minimumWidth, Math.min(width, availableWidth - screenInset));
+        height = Math.max(minimumHeight, Math.min(height, availableHeight - screenInset));
+    }
+
     Connections {
         target: Theme
         function onDarkChanged() { WindowVM.updateWindowTheme(Theme.dark) }
     }
 
+    // Theme.sortMode is the persisted user choice. Pushing it into the view model
+    // here keeps the ordering decision out of the views that display it.
     Binding {
         target: AppViewModel
         property: "sortMode"
@@ -39,7 +104,8 @@ ApplicationWindow {
             errorDialog.open();
         }
 
-        // Resolves record index to platform name for the confirmation message.
+        // AppViewModel resolves the row and passes the platform name, so the view
+        // never reads the model to build the question.
         function onConfirmDeleteRequested(index, platform) {
             confirmDlg.deleteIndex = index;
             confirmDlg.message = "Are you sure you want to delete the account for '" + platform + "'?";
@@ -59,7 +125,7 @@ ApplicationWindow {
             infoDialog.open();
         }
 
-        // Rekey result - surface via the info/error dialogs.
+        // Rekey runs off-thread; this signal is its only completion report.
         function onRekeyFinished(success, message) {
             if (success) {
                 infoDialog.title = "Master password changed";
@@ -72,8 +138,10 @@ ApplicationWindow {
             }
         }
 
-        // First password prompt, no error message.
+        // First unlock prompt. Marks the boot cover as owned by the prompt so
+        // Component.onCompleted holds the cover instead of dropping it.
         function onPasswordRequired() {
+            window.bootPasswordPending = true;
             passwordDlg.errorMessage = "";
             passwordDlg.open();
         }
@@ -85,8 +153,10 @@ ApplicationWindow {
         }
 
         function onVaultLoadedChanged() {
-            if (AppViewModel.vaultLoaded)
+            if (AppViewModel.vaultLoaded) {
+                passwordDlg.close();
                 loadingOverlay.sealSuccess();
+            }
         }
 
         function onQrCaptureFinished(success) {
@@ -94,10 +164,31 @@ ApplicationWindow {
                 passwordDlg.errorMessage = "QR capture failed or cancelled.";
         }
 
-        // QR captured text - pre-fill the password dialog.
+        function onSecureCaptureFinished(ok) {
+            if (!ok)
+                passwordDlg.errorMessage = "Secure screen unavailable.";
+        }
+
+        // The QR path is the only one that pre-fills the field. The secure-desktop
+        // path hands its result straight to the view model instead.
         function onQrTextReady(text) {
             passwordDlg.errorMessage = "";
             passwordDlg.fillPassword(text);
+        }
+
+        function onProtectFolderPreflightReady() {
+            protectFolderDialog.open();
+        }
+
+        function onProtectedFolderBootFinished() {
+            window.bootPasswordPending = false;
+            passwordDlg.close();
+            loadingOverlay.sealSuccess();
+        }
+
+        function onCleanupFinished() {
+            window.closeReady = true;
+            Qt.callLater(function() { window.close(); });
         }
     }
 
@@ -132,26 +223,51 @@ ApplicationWindow {
         accountDlg.open();
     }
 
+    // Set true whenever an unlock prompt is raised. Read once at startup, during the
+    // synchronous autoLoadVault call, to tell "vault present, awaiting unlock" from
+    // "no vault" so the boot cover is held or dropped correctly.
+    property bool bootPasswordPending: false
+    // The first close is always intercepted. AppViewModel emits cleanupFinished
+    // only after asynchronous folder re-protection (when armed) has completed.
+    property bool closeReady: false
+
     Component.onCompleted: {
+        fitInitialWindowToScreen();
         WindowVM.updateWindowTheme(Theme.dark);
         visible = true;
-        // Try loading the last-used vault automatically on startup.
+        // The cover starts opaque (LoadingOverlay.booting) so the app is never seen
+        // before it. autoLoadVault raises the unlock prompt synchronously when a vault
+        // exists; the cover then stays up until the prompt takes over. With no vault,
+        // drop the cover at once (snap still true) so the empty app appears with no
+        // reverse-flash.
         AppViewModel.autoLoadVault();
+        if (!window.bootPasswordPending)
+            loadingOverlay.booting = false;
+        loadingOverlay.snap = false;
     }
 
     onClosing: function(close) {
+        if (window.closeReady) {
+            close.accepted = true;
+            return;
+        }
+        close.accepted = false;
         AppViewModel.cleanup();
-        close.accepted = true;
     }
 
+    // Flat window-chrome button, fixed at 46x36 to match the drag strip height. The
+    // bleed properties extend the hover fill past one edge, for a button that has to
+    // reach into a window corner; every instance below leaves them at zero.
     component ChromeButton: Item {
         id: chromeButton
         property alias iconSource: _icon.source
-        property color iconColor: _area.containsMouse ? Theme.textPrimary : Theme.textMuted
+        property color iconColor: _area.containsMouse
+                                  ? Theme.chromeIconHover
+                                  : Theme.chromeIcon
         property alias iconRotation: _icon.rotation
         readonly property bool hovered: _area.containsMouse
         readonly property bool pressed: _area.pressed
-        property color hoverColor: _area.pressed ? Theme.bgInputFocus : Theme.bgHover
+        property color hoverColor: _area.pressed ? Theme.chromePressed : Theme.chromeHover
         property color idleColor: "transparent"
         property int backgroundLeftBleed: 0
         property int backgroundTopBleed: 0
@@ -165,6 +281,8 @@ ApplicationWindow {
             id: _background
             anchors.fill: parent
             color: _area.containsMouse ? chromeButton.hoverColor : chromeButton.idleColor
+            radius: 0
+            border.width: 0
             Behavior on color { ColorAnimation { duration: 100 } }
         }
 
@@ -206,7 +324,7 @@ ApplicationWindow {
 
         SvgIcon {
             id: _icon
-            width: Theme.px(12); height: Theme.px(12)
+            width: Theme.px(14); height: Theme.px(14)
             anchors.centerIn: parent
             color: parent.iconColor
             Behavior on color { ColorAnimation { duration: 100 } }
@@ -221,6 +339,10 @@ ApplicationWindow {
         }
     }
 
+    // Window drag strip. A frameless window has no system title bar, so dragging
+    // exists only because this MouseArea calls WindowVM.startWindowDrag(). It spans
+    // the top 36 px up to the window buttons; a new opaque item over that strip takes
+    // the press and dragging stops working there.
     MouseArea {
         anchors.top: parent.top
         anchors.left: parent.left
@@ -237,6 +359,23 @@ ApplicationWindow {
         }
     }
 
+    // Author mark inside the drag strip. It stacks above the drag handler but has no
+    // input handler of its own, so presses still reach the drag MouseArea.
+    Text {
+        anchors.left: parent.left
+        anchors.leftMargin: 10
+        anchors.top: parent.top
+        height: 36
+        z: 10
+        text: "@lextpf"
+        color: "#000000"
+        opacity: 0.58
+        font.family: Theme.fontFamily
+        font.pixelSize: Theme.fontSizeSmall
+        font.weight: Font.Medium
+        verticalAlignment: Text.AlignVCenter
+    }
+
     // Custom window control buttons pinned to the top-right corner.
     Row {
         id: windowButtons
@@ -249,21 +388,22 @@ ApplicationWindow {
             iconSource: Theme.iconThumbtack
             idleColor: WindowVM.isAlwaysOnTop ? Theme.accentSoft : "transparent"
             iconColor: WindowVM.isAlwaysOnTop ? Theme.accent
-                     : hovered ? Theme.textPrimary : Theme.textMuted
+                     : hovered ? Theme.chromeIconHover : Theme.chromeIcon
             iconRotation: WindowVM.isAlwaysOnTop ? 0 : 30
             onClicked: WindowVM.toggleAlwaysOnTop()
         }
         ChromeButton {
             iconSource: AppViewModel.passwordSet ? Theme.iconLockOpen : Theme.iconLock
-            iconColor: hovered && AppViewModel.passwordSet ? Theme.textWarning : Theme.textMuted
-            opacity: AppViewModel.passwordSet ? 1.0 : 0.4
+            iconColor: AppViewModel.passwordSet
+                       ? (hovered ? Theme.textWarning : Theme.chromeIcon)
+                       : Theme.chromeIconDisabled
             onClicked: if (AppViewModel.passwordSet) AppViewModel.lockVault()
         }
         ChromeButton {
             iconSource: Theme.iconTerminal
             idleColor: Cli.isCliMode ? Theme.accentSoft : "transparent"
             iconColor: Cli.isCliMode ? Theme.accent
-                     : hovered ? Theme.textPrimary : Theme.textMuted
+                     : hovered ? Theme.chromeIconHover : Theme.chromeIcon
             onClicked: Cli.toggleCliMode()
         }
         ChromeButton {
@@ -278,7 +418,7 @@ ApplicationWindow {
             id: closeButton
             iconSource: Theme.iconPowerOff
             hoverColor: pressed ? Theme.windowClosePressed : Theme.windowCloseHover
-            iconColor: hovered ? Theme.textOnAccent : Theme.textMuted
+            iconColor: hovered ? Theme.textOnAccent : Theme.chromeIcon
             onClicked: window.close()
         }
     }
@@ -287,7 +427,7 @@ ApplicationWindow {
         anchors.top: parent.top
         anchors.right: parent.right
         width: closeButton.width
-        height: 1
+        height: Theme.strokeRegular
         z: 11
         visible: closeButton.hovered
         color: closeButton.pressed ? Theme.windowClosePressed : Theme.windowCloseHover
@@ -296,13 +436,29 @@ ApplicationWindow {
     Rectangle {
         anchors.top: parent.top
         anchors.right: parent.right
-        width: 1
+        width: Theme.strokeRegular
         height: closeButton.height
         z: 11
         visible: closeButton.hovered
         color: closeButton.pressed ? Theme.windowClosePressed : Theme.windowCloseHover
     }
 
+    // Escape hatch during the master-password prompt: the window-control row (z:10)
+    // is buried under the loading cover (z:100), so surface a close button above it
+    // (z:101). The prompt otherwise offers no way to quit the app.
+    ChromeButton {
+        anchors.top: parent.top
+        anchors.right: parent.right
+        z: 101
+        visible: passwordDlg.visible
+        iconSource: Theme.iconPowerOff
+        hoverColor: pressed ? Theme.windowClosePressed : Theme.windowCloseHover
+        iconColor: hovered ? Theme.textOnAccent : Theme.chromeIcon
+        onClicked: window.close()
+    }
+
+    // Stop the shared animation clock whenever nothing of the ambient field is
+    // visible, so a hidden, minimised or fully covered window costs nothing per frame.
     Binding {
         target: Ambient
         property: "awake"
@@ -310,14 +466,19 @@ ApplicationWindow {
                && loadingOverlay.opacity < 0.999
     }
 
+    // Keep the ambient field proportionate without allowing decorative blobs
+    // to dominate a small desktop window or disappear on a large one.
+    readonly property real ambientSizeScale:
+        Math.max(0.82, Math.min(1.30, Math.min(width / 1600, height / 568)))
+
     component Blob: Rectangle {
         id: blob
         property real phase: 0                 // shared clock, injected per instance
         property real baseX: 0                 // responsive anchor (percentage of window)
         property real baseY: 0
-        property real swayAmp: Theme.px(12)    // horizontal drift (the smaller axis)
-        property real bobAmp: Theme.px(18)     // vertical bob (the dominant swell)
-        property real breatheAmp: 0.05         // scale swell, +/-5%
+        property real swayAmp: Theme.px(12)    // horizontal drift base (the smaller axis)
+        property real bobAmp: Theme.px(18)     // vertical bob base (the dominant swell)
+        property real breatheAmp: 0.05         // scale swell base; x4 in the binding is +/-20%
         property int freqX: 1                  // integer multipliers keep the loop seamless
         property int freqY: 1
         property int freqS: 1
@@ -329,6 +490,8 @@ ApplicationWindow {
         z: -1
         antialiasing: true
         transformOrigin: Item.Center
+        // The amplitude properties above are bases; these bindings scale them:
+        // x5 for sway and bob, x4 for the scale swell.
         x: baseX + swayAmp * 5.0 * Math.sin(phase * freqX + phaseX)
         y: baseY + bobAmp * 5.0 * Math.sin(phase * freqY + phaseY)
         scale: 1.0 + breatheAmp * 4.0 * Math.sin(phase * freqS + phaseS)
@@ -352,7 +515,7 @@ ApplicationWindow {
     }
 
     Blob {
-        width: 260; height: 260
+        width: 260 * window.ambientSizeScale; height: width
         color: Theme.blobColor1
         baseX: window.width * 0.04; baseY: window.height * -0.05
         phase: Ambient.tidePhase
@@ -361,7 +524,7 @@ ApplicationWindow {
         bobAmp: Theme.px(18); swayAmp: Theme.px(12); breatheAmp: 0.05
     }
     Blob {
-        width: 200; height: 200
+        width: 200 * window.ambientSizeScale; height: width
         color: Theme.blobColor2
         baseX: window.width * 0.82; baseY: window.height * 0.06
         phase: Ambient.tidePhase
@@ -370,7 +533,7 @@ ApplicationWindow {
         bobAmp: Theme.px(16); swayAmp: Theme.px(11); breatheAmp: 0.06
     }
     Blob {
-        width: 320; height: 320
+        width: 320 * window.ambientSizeScale; height: width
         color: Theme.blobColor3
         baseX: window.width * 0.42; baseY: window.height * 0.12
         phase: Ambient.tidePhase
@@ -379,7 +542,7 @@ ApplicationWindow {
         bobAmp: Theme.px(20); swayAmp: Theme.px(14); breatheAmp: 0.045
     }
     Blob {
-        width: 240; height: 240
+        width: 240 * window.ambientSizeScale; height: width
         color: Theme.blobColor1
         baseX: window.width * 0.72; baseY: window.height * 0.38
         phase: Ambient.tidePhase
@@ -388,7 +551,7 @@ ApplicationWindow {
         bobAmp: Theme.px(17); swayAmp: Theme.px(12); breatheAmp: 0.055
     }
     Blob {
-        width: 280; height: 280
+        width: 280 * window.ambientSizeScale; height: width
         color: Theme.blobColor2
         baseX: window.width * 0.08; baseY: window.height * 0.45
         phase: Ambient.tidePhase
@@ -397,7 +560,7 @@ ApplicationWindow {
         bobAmp: Theme.px(15); swayAmp: Theme.px(13); breatheAmp: 0.05
     }
     Blob {
-        width: 180; height: 180
+        width: 180 * window.ambientSizeScale; height: width
         color: Theme.blobColor3
         baseX: window.width * 0.52; baseY: window.height * 0.55
         phase: Ambient.tidePhase
@@ -406,7 +569,7 @@ ApplicationWindow {
         bobAmp: Theme.px(16); swayAmp: Theme.px(11); breatheAmp: 0.06
     }
     Blob {
-        width: 220; height: 220
+        width: 220 * window.ambientSizeScale; height: width
         color: Theme.blobColor1
         baseX: window.width * 0.30; baseY: window.height * 0.72
         phase: Ambient.tidePhase
@@ -415,7 +578,7 @@ ApplicationWindow {
         bobAmp: Theme.px(18); swayAmp: Theme.px(12); breatheAmp: 0.05
     }
     Blob {
-        width: 160; height: 160
+        width: 160 * window.ambientSizeScale; height: width
         color: Theme.blobColor2
         baseX: window.width * 0.88; baseY: window.height * 0.68
         phase: Ambient.tidePhase
@@ -482,31 +645,31 @@ ApplicationWindow {
         ColumnLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.margins: Theme.spacingXL
-            Layout.topMargin: 36
-            Layout.bottomMargin: 24
-            spacing: Theme.spacingLarge
+            Layout.leftMargin: window.contentSideMargin
+            Layout.rightMargin: window.contentSideMargin
+            Layout.topMargin: window.contentTopMargin
+            Layout.bottomMargin: window.contentBottomMargin
+            spacing: window.contentSpacing
 
-            // Header (hidden in compact mode)
+            // Vault commands leave the header as signals and are routed into
+            // AppViewModel here, so the header holds no vault state.
             HeaderBar {
                 Layout.fillWidth: true
                 visible: !WindowVM.isCompact
                 vaultLoaded: AppViewModel.vaultLoaded
+                protectFolderEnabled: AppViewModel.protectFolderEnabled
 
                 onLoadClicked: AppViewModel.loadVault()
                 onSaveClicked: AppViewModel.saveVault()
                 onUnloadClicked: AppViewModel.unloadVault()
                 onRekeyClicked: rekeyDlg.open()
+                onProtectFolderToggled: function(enabled) {
+                    AppViewModel.requestProtectFolderEnabled(enabled);
+                }
             }
 
-            // Header separator (hidden in compact/CLI mode)
-            Rectangle {
-                Layout.fillWidth: true
-                visible: !WindowVM.isCompact && !Cli.isCliMode
-                implicitHeight: 1
-                color: Theme.divider
-            }
-
+            // Cli.isCliMode swaps the vault views for the terminal panel. Both stay
+            // instantiated; only visibility changes.
             SearchBar {
                 id: searchBar
                 Layout.fillWidth: true
@@ -520,9 +683,14 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 visible: !Cli.isCliMode
+                // Compact strip height, summed from metrics owned by three other files:
+                // 1 (AccountsGrid top margin) + 32 (AccountsToolbar.implicitHeight)
+                // + 14 (ScrollView topPadding 10 + Flow y 4) + 38 (AccountChip.implicitHeight,
+                // 36 + 2 hover headroom) + 14 (Flow bottom 4 + ScrollView bottomPadding 10)
+                // + 1 (AccountsGrid bottom margin). Update the sum if any of those change.
                 Layout.maximumHeight: WindowVM.isCompact
                                       ? (1 + 32 + 14 + 38 + 14 + 1)
-                                      : (1 + 32 + 4 * 44 + 14 + 14 + 1)
+                                      : window.height
                 model: AppViewModel.vaultModel
                 selectedRow: AppViewModel.selectedIndex
                 searchActive: AppViewModel.searchFilter.length > 0
@@ -568,7 +736,6 @@ ApplicationWindow {
                 }
             }
 
-            // CLI panel (shown only in CLI mode)
             CliPanel {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -576,7 +743,6 @@ ApplicationWindow {
             }
         }
 
-        // Status footer (hidden in compact mode)
         StatusFooter {
             Layout.fillWidth: true
             visible: !WindowVM.isCompact
@@ -584,9 +750,12 @@ ApplicationWindow {
             fillArmed: Fill.isFillArmed
             vaultFileName: AppViewModel.vaultFileName
             accountCount: AppViewModel.vaultModel.count
+            protectFolderEnabled: AppViewModel.protectFolderEnabled
         }
     }
 
+    // Boot cover and scrypt-grind indicator. At z:100 it covers the whole window,
+    // including the window-control row.
     LoadingOverlay {
         id: loadingOverlay
         anchors.fill: parent
@@ -601,6 +770,19 @@ ApplicationWindow {
         parent: Overlay.overlay
     }
 
+    ProtectFolderDialog {
+        id: protectFolderDialog
+        parent: Overlay.overlay
+        folderPath: AppViewModel.protectFolderPath
+        encryptFiles: AppViewModel.protectFolderEncryptFiles
+        skippedFiles: AppViewModel.protectFolderSkippedFiles
+        totalBytes: AppViewModel.protectFolderTotalBytes
+        passwordMode: AppViewModel.protectFolderPasswordMode
+        onConfirmed: function(password, confirmation) {
+            AppViewModel.confirmProtectFolderEnabled(password, confirmation);
+        }
+    }
+
     PasswordDialog {
         id: passwordDlg
         onAccepted: function(password) {
@@ -609,8 +791,13 @@ ApplicationWindow {
         onQrRequested: {
             AppViewModel.requestQrCapture();
         }
+        onSecureScreenRequested: {
+            AppViewModel.requestSecureDesktopUnlock();
+        }
     }
 
+    // A wrong password fractures the cover; reopen the prompt after that animation
+    // rather than on top of it.
     Timer {
         id: retryReopen
         interval: 340
@@ -727,7 +914,7 @@ ApplicationWindow {
                             GradientStop { position: 0; color: errorOkButton.pressed ? Theme.btnPressTop : errorOkButton.hovered ? Theme.btnHoverTop : Theme.btnGradTop; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
                             GradientStop { position: 1; color: errorOkButton.pressed ? Theme.btnPressBot : errorOkButton.hovered ? Theme.btnHoverBot : Theme.btnGradBot; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
                         }
-                        border.width: 1
+                        border.width: Theme.strokeRegular
                         border.color: errorOkButton.hovered ? Theme.borderBright : Theme.borderBtn
                         Behavior on border.color { ColorAnimation { duration: Theme.hoverDuration } }
 
@@ -831,7 +1018,7 @@ ApplicationWindow {
                             GradientStop { position: 0; color: infoOkButton.pressed ? Theme.btnPressTop : infoOkButton.hovered ? Theme.btnHoverTop : Theme.btnGradTop; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
                             GradientStop { position: 1; color: infoOkButton.pressed ? Theme.btnPressBot : infoOkButton.hovered ? Theme.btnHoverBot : Theme.btnGradBot; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
                         }
-                        border.width: 1
+                        border.width: Theme.strokeRegular
                         border.color: infoOkButton.hovered ? Theme.borderBright : Theme.borderBtn
                         Behavior on border.color { ColorAnimation { duration: Theme.hoverDuration } }
 
