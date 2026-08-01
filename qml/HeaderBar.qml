@@ -1,9 +1,14 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
 import QtQuick.Shapes
 import QtQuick.Effects
 
+// Identity and vault-command row, hidden in compact mode. The whole row is a second
+// window drag surface; child MouseAreas stacked on top keep their own clicks. Vault
+// actions leave as signals for Main to route into AppViewModel, while the browser
+// toggles and the Setup menu call the Bridge context property directly.
 Item {
     id: root
     implicitHeight: headerRow.implicitHeight
@@ -13,9 +18,35 @@ Item {
     signal saveClicked()
     signal unloadClicked()
     signal rekeyClicked()
+    signal protectFolderToggled(bool enabled)
 
     property bool vaultLoaded: false
+    property bool protectFolderEnabled: false
+    readonly property bool narrowLayout: width > 0 && width < 1120
+    readonly property bool condensedLayout: width > 0 && width < 880
+    readonly property int actionButtonWidth: condensedLayout ? 94
+                                              : narrowLayout ? 100
+                                              : 100
 
+    // One shared blue-glass tint for every vault action, so the group reads as a
+    // single row rather than five differently coloured buttons.
+    component VaultActionButton: TintedButton {
+        translucentSurface: true
+        tintTop: Theme.iconBtnTop
+        tintEnd: Theme.iconBtnEnd
+        tintHoverTop: Theme.iconBtnHoverTop
+        tintHoverEnd: Theme.iconBtnHoverEnd
+        tintPressed: Theme.iconBtnPressed
+        tintText: Theme.iconBtnText
+        tintTextHover: Theme.iconBtnTextHover
+        tintTextDisabled: Theme.iconBtnTextDisabled
+        tintBorder: Theme.iconBtnBorder
+        tintBorderHover: Theme.iconBtnBorderHover
+        tintBorderDisabled: Theme.iconBtnBorderDisabled
+    }
+
+    // The header doubles as a drag surface. The frameless window has no title bar, so
+    // dragging only works where a MouseArea calls WindowVM.startWindowDrag().
     MouseArea {
         id: dragArea
         anchors.fill: parent
@@ -34,7 +65,9 @@ Item {
     RowLayout {
         id: headerRow
         anchors.fill: parent
-        spacing: Theme.spacingMedium
+        spacing: root.condensedLayout ? 8
+                                     : root.narrowLayout ? Theme.spacingSmall
+                                     : Theme.spacingMedium
 
     Item {
         Layout.preferredWidth: narwhalIcon.width
@@ -269,6 +302,8 @@ Item {
             }
         } // SvgIcon
 
+        // Click the narwhal: three staggered rings plus an aurora sweep across the
+        // icon. Decorative only; narwhalIcon.active blocks re-entry until it finishes.
         SequentialAnimation {
             id: easterEgg
 
@@ -364,6 +399,8 @@ Item {
     // Title block
     ColumnLayout {
         spacing: 2
+        Layout.fillWidth: false
+        Layout.maximumWidth: root.narrowLayout ? 80 : 320
 
         Text {
             text: "seal"
@@ -373,99 +410,195 @@ Item {
             color: Theme.accent
         }
         Text {
+            Layout.maximumWidth: 320
+            visible: !root.narrowLayout
             text: root.vaultLoaded ? "Password Manager" : "Open a vault or create your first account"
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeSubtitle
             font.weight: root.vaultLoaded ? Font.Normal : Font.Medium
             color: root.vaultLoaded ? Theme.accent2Dim : Theme.textSubtle
+            elide: Text.ElideRight
             Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
         }
     }
 
-    // Theme toggle: sun in dark mode, moon in light mode.
-    Item {
-        implicitWidth: 30
-        implicitHeight: 30
+    // Keep utility toggles as one compact, non-expanding group beside the
+    // identity block. The flexible spacer after this group owns all spare width.
+    RowLayout {
+        id: utilityToggles
+        Layout.fillWidth: false
+        Layout.alignment: Qt.AlignLeft | Qt.AlignVCenter
+        spacing: 0
 
-        SvgIcon {
-            anchors.centerIn: parent
-            source: Theme.dark ? Theme.iconSun : Theme.iconMoon
-            width: Theme.iconSizeMedium
-            height: Theme.iconSizeMedium
-            color: themeArea.containsMouse ? Theme.accent : Theme.accentDim
-            Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
+        // Staged auto-fill switch. It writes Bridge.autoStageEnabled, the opt-in
+        // setting that lets a browser navigation pre-arm a matching record.
+        Item {
+            implicitWidth: root.narrowLayout ? 28 : 30
+            implicitHeight: 30
+
+            SvgIcon {
+                anchors.centerIn: parent
+                source: Bridge.autoStageEnabled ? Theme.iconBolt : Theme.iconBoltSlash
+                width: Theme.iconSizeMedium
+                height: Theme.iconSizeMedium
+                color: Bridge.autoStageEnabled
+                       ? (autoFillArea.containsMouse ? Theme.accentBright : Theme.accent)
+                       : (autoFillArea.containsMouse ? Theme.accent : Theme.textMuted)
+                Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
+            }
+
+            MouseArea {
+                id: autoFillArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: Bridge.setAutoStageEnabled(!Bridge.autoStageEnabled)
+            }
+
+            ToolTip.visible: autoFillArea.containsMouse
+            ToolTip.delay: 600
+            ToolTip.text: (Bridge.autoStageEnabled ? "Staged auto-fill ON." : "Staged auto-fill OFF.") +
+                          "\nWhen on, seal pre-arms a matching record on navigation;" +
+                          "\na plain click into the login field completes the fill." +
+                          "\nThe password is never sent to the browser."
         }
 
-        MouseArea {
-            id: themeArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: Theme.toggle()
+        // Protection of the executable's folder is opt-in. Enabling only emits
+        // protectFolderToggled, so Main can run the AppViewModel preflight and show the
+        // exact file plan first. Disabling applies at once and encrypts nothing.
+        Item {
+            implicitWidth: root.narrowLayout ? 28 : 30
+            implicitHeight: 30
+
+            SvgIcon {
+                anchors.centerIn: parent
+                source: Theme.iconShieldHalved
+                width: Theme.iconSizeMedium
+                height: Theme.iconSizeMedium
+                color: root.protectFolderEnabled
+                       ? (protectFolderArea.containsMouse ? Theme.accentBright : Theme.accent)
+                       : (protectFolderArea.containsMouse ? Theme.accent : Theme.textMuted)
+                opacity: root.protectFolderEnabled ? 1.0 : 0.72
+                Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
+                Behavior on opacity { NumberAnimation { duration: Theme.hoverDuration } }
+            }
+
+            MouseArea {
+                id: protectFolderArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.protectFolderToggled(!root.protectFolderEnabled)
+            }
+
+            ToolTip.visible: protectFolderArea.containsMouse
+            ToolTip.delay: 600
+            ToolTip.text: root.protectFolderEnabled
+                          ? "Folder protection ARMED.\nClick to leave files decrypted and stop future exit protection."
+                          : "Protect this portable seal folder on exit.\nA static-build preflight and exact file preview run before arming."
+        }
+
+        // Light and dark toggle. Theme is a singleton and persists the choice, so this
+        // click also changes the next launch.
+        Item {
+            implicitWidth: root.narrowLayout ? 28 : 30
+            implicitHeight: 30
+
+            SvgIcon {
+                anchors.centerIn: parent
+                source: Theme.dark ? Theme.iconSun : Theme.iconMoon
+                width: Theme.iconSizeMedium
+                height: Theme.iconSizeMedium
+                color: themeArea.containsMouse ? Theme.accent : Theme.accentDim
+                Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
+            }
+
+            MouseArea {
+                id: themeArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: Theme.toggle()
+            }
         }
     }
 
     // Spacer pushes vault control buttons to the right edge.
     Item { Layout.fillWidth: true }
 
-    // Vault control buttons use the shared TintedButton with the iconBtn palette.
-    TintedButton {
+    VaultActionButton {
         text: "Load"
         faIcon: Theme.iconFolderOpen
-        tintTop:       Theme.iconBtnTop
-        tintEnd:       Theme.iconBtnEnd
-        tintHoverTop:  Theme.iconBtnHoverTop
-        tintHoverEnd:  Theme.iconBtnHoverEnd
-        tintPressed:   Theme.iconBtnPressed
-        tintText:      root.vaultLoaded ? Theme.textIcon : Theme.accent
-        tintTextHover: root.vaultLoaded ? Theme.textSecondary : Theme.accentBright
-        background.implicitWidth: root.vaultLoaded ? 100 : 108
+        leftPadding: root.narrowLayout ? 10 : 14
+        rightPadding: root.narrowLayout ? 10 : 14
+        background.implicitWidth: root.narrowLayout
+                                  ? root.actionButtonWidth
+                                  : (root.vaultLoaded ? 100 : 108)
         onClicked: root.loadClicked()
     }
 
-    TintedButton {
+    VaultActionButton {
         text: "Save"
         faIcon: Theme.iconFloppyDisk
         enabled: root.vaultLoaded
-        tintTop:       Theme.iconBtnTop
-        tintEnd:       Theme.iconBtnEnd
-        tintHoverTop:  Theme.iconBtnHoverTop
-        tintHoverEnd:  Theme.iconBtnHoverEnd
-        tintPressed:   Theme.iconBtnPressed
-        tintText:      Theme.textIcon
-        tintTextHover: Theme.textSecondary
-        background.implicitWidth: 100
+        leftPadding: root.narrowLayout ? 10 : 14
+        rightPadding: root.narrowLayout ? 10 : 14
+        background.implicitWidth: root.actionButtonWidth
         onClicked: root.saveClicked()
     }
 
-    TintedButton {
+    VaultActionButton {
         text: "Unload"
         faIcon: Theme.iconEject
         enabled: root.vaultLoaded
-        tintTop:       Theme.iconBtnTop
-        tintEnd:       Theme.iconBtnEnd
-        tintHoverTop:  Theme.iconBtnHoverTop
-        tintHoverEnd:  Theme.iconBtnHoverEnd
-        tintPressed:   Theme.iconBtnPressed
-        tintText:      Theme.textIcon
-        tintTextHover: Theme.textSecondary
-        background.implicitWidth: 100
+        leftPadding: root.narrowLayout ? 8 : 14
+        rightPadding: root.narrowLayout ? 8 : 14
+        background.implicitWidth: root.actionButtonWidth
         onClicked: root.unloadClicked()
     }
 
-    TintedButton {
+    VaultActionButton {
         text: "Rekey"
         faIcon: Theme.iconKey
-        enabled: root.vaultLoaded
-        tintTop:       Theme.iconBtnTop
-        tintEnd:       Theme.iconBtnEnd
-        tintHoverTop:  Theme.iconBtnHoverTop
-        tintHoverEnd:  Theme.iconBtnHoverEnd
-        tintPressed:   Theme.iconBtnPressed
-        tintText:      Theme.textIcon
-        tintTextHover: Theme.textSecondary
-        background.implicitWidth: 100
+        enabled: root.vaultLoaded || root.protectFolderEnabled
+        leftPadding: root.narrowLayout ? 10 : 14
+        rightPadding: root.narrowLayout ? 10 : 14
+        background.implicitWidth: root.actionButtonWidth
         onClicked: root.rekeyClicked()
+    }
+
+    // Browser companion setup. Both menu items are long-running Bridge commands and
+    // report their result through Main's info and error dialogs.
+    VaultActionButton {
+        id: setupButton
+        text: "Setup"
+        faIcon: Theme.iconBrowsers
+        leftPadding: root.narrowLayout ? 10 : 14
+        rightPadding: root.narrowLayout ? 10 : 14
+        background.implicitWidth: root.actionButtonWidth
+        onClicked: setupMenu.open()
+
+        ToolTip.visible: hovered
+        ToolTip.delay: 600
+        ToolTip.text: Bridge.bridgeStatusText !== ""
+                          ? Bridge.bridgeStatusText
+                          : "Install, repair, or remove the browser companion setup."
+
+        Menu {
+            id: setupMenu
+            x: setupButton.width - width
+            y: setupButton.height + 4
+
+            MenuItem {
+                text: "Install or repair companion"
+                onTriggered: Bridge.runInstallBrowserExtension()
+            }
+
+            MenuItem {
+                text: "Unregister companion"
+                onTriggered: Bridge.runUninstallBrowserExtension()
+            }
+        }
     }
     }  // RowLayout
     }  // MouseArea
