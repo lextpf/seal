@@ -3,19 +3,31 @@ import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
 
+// Add and edit dialog for one credential. Edit mode never receives the stored
+// username or password: the secret fields start blank and blank means "keep the
+// stored value", so no secret can reach this view. The dialog only emits
+// accepted(); Main.qml calls AppViewModel to add or edit the record.
 Popup {
     id: root
 
     property string dialogTitle: "Add Account"
-    property string initialService: ""
+    property string initialService: ""  // Prefilled service, set by the edit path
     property int editIndex: -1  // -1 = add mode, >= 0 = record index to edit
-    property bool _showValidation: false
+    property bool _showValidation: false  // Set by a rejected submit; reddens fields and hint
     readonly property bool _requiresSecretFields: root.editIndex < 0
     readonly property color shellTone: root.editIndex >= 0 ? Theme.accent3 : Theme.accent2
     readonly property string shellIcon: root.editIndex >= 0 ? Theme.iconPen : Theme.iconPlus
     readonly property string shellSubtitle: root.editIndex >= 0
                                          ? "Change service or enter replacement login details."
                                          : "Add a credential to your vault."
+    // Live browser-binding preview for the typed service, re-queried per keystroke.
+    // The literal is the nothing-typed-yet value and must keep the same keys as
+    // the map AppViewModel returns.
+    readonly property var _siteBindingPreview:
+        serviceField.text.trim().length > 0
+        ? AppViewModel.previewSiteBinding(serviceField.text, root.editIndex)
+        : ({"bindable": false, "host": "", "duplicateCount": 0,
+            "publicSuffix": false, "suggestion": ""})
 
     signal accepted(string service, string username, string password, int editIdx)
 
@@ -23,10 +35,10 @@ Popup {
     anchors.centerIn: parent
     width: 440
     padding: 0
-    // Click-outside to dismiss; no data lost until OK is clicked.
+    // Esc and click-outside dismiss. Nothing reaches the vault until OK.
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
-    // Slightly weightier scale+fade entrance to match the richer dialog shell.
+    // Scale+fade entrance shared with ConfirmDialog and RekeyDialog.
     enter: Transition {
         ParallelAnimation {
             NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 175; easing.type: Easing.OutCubic }
@@ -44,7 +56,7 @@ Popup {
         id: dialogBg
         color: Theme.bgDialog
         radius: Theme.radiusLarge
-        border.width: 1
+        border.width: Theme.strokeRegular
         border.color: Theme.borderMedium
 
         Item {
@@ -74,7 +86,7 @@ Popup {
                 anchors.top: parent.top
                 anchors.left: parent.left
                 anchors.right: parent.right
-                height: 1
+                height: Theme.strokeDivider
                 color: Theme.dialogEdgeLight
                 opacity: 0.20
             }
@@ -100,7 +112,7 @@ Popup {
         }
     }
 
-    // Overlay dimming
+    // Overlay dimming behind the modal.
     Overlay.modal: Rectangle {
         color: Theme.bgOverlay
     }
@@ -184,7 +196,7 @@ Popup {
                 font.family: Theme.fontFamily
                 font.pixelSize: Theme.fontSizeMedium
                 color: Theme.textPrimary
-                placeholderText: "e.g. GitHub"
+                placeholderText: "e.g. github.com"
                 placeholderTextColor: Theme.textPlaceholder
                 selectByMouse: true
 
@@ -192,13 +204,53 @@ Popup {
                     implicitHeight: 38
                     radius: Theme.radiusSmall
                     color: serviceField.activeFocus ? Theme.bgInputFocus : Theme.bgInput
-                    border.width: 1
+                    border.width: Theme.strokeRegular
                     border.color: root._showValidation && serviceField.text.trim() === "" ? Theme.textError
                                  : serviceField.activeFocus ? Theme.borderFocus : Theme.borderInput
                 }
 
                 Keys.onReturnPressed: root.submitForm()
                 Keys.onEnterPressed: root.submitForm()
+            }
+
+            Item {
+                visible: bindingHint.visible
+                Layout.preferredWidth: 1
+                Layout.preferredHeight: visible ? bindingHint.implicitHeight : 0
+            }
+            Text {
+                id: bindingHint
+                Layout.fillWidth: true
+                visible: serviceField.text.trim().length > 0
+                text: {
+                    var preview = root._siteBindingPreview;
+                    if (preview.bindable) {
+                        if (preview.duplicateCount > 0) {
+                            return "Binds to " + preview.host + " - " +
+                                   preview.duplicateCount + " other " +
+                                   (preview.duplicateCount === 1 ? "record already binds"
+                                                                 : "records already bind") +
+                                   " this site.";
+                        }
+                        return "Binds to " + preview.host + " for browser auto-fill.";
+                    }
+                    if (preview.publicSuffix) {
+                        return "No site binding - this is a shared public suffix and cannot " +
+                               "authorize every tenant. Ctrl+Click auto-type still works.";
+                    }
+                    var suggestion = preview.suggestion !== ""
+                                   ? " Try " + preview.suggestion + " if that is the site."
+                                   : " Enter the site's domain.";
+                    return "No site binding - browser auto-fill will not trigger." +
+                           suggestion + " Ctrl+Click auto-type still works.";
+                }
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.fontSizeSmall
+                color: root._siteBindingPreview.bindable
+                       ? (root._siteBindingPreview.duplicateCount > 0
+                          ? Theme.textWarning : Theme.textSuccess)
+                       : Theme.textMuted
+                wrapMode: Text.WordWrap
             }
 
             Row {
@@ -232,7 +284,7 @@ Popup {
                     implicitHeight: 38
                     radius: Theme.radiusSmall
                     color: usernameField.activeFocus ? Theme.bgInputFocus : Theme.bgInput
-                    border.width: 1
+                    border.width: Theme.strokeRegular
                     border.color: root._showValidation && root._requiresSecretFields
                                                    && usernameField.text.trim() === "" ? Theme.textError
                                  : usernameField.activeFocus ? Theme.borderFocus : Theme.borderInput
@@ -281,7 +333,7 @@ Popup {
                     implicitHeight: 38
                     radius: Theme.radiusSmall
                     color: passwordField.activeFocus ? Theme.bgInputFocus : Theme.bgInput
-                    border.width: 1
+                    border.width: Theme.strokeRegular
                     border.color: root._showValidation && root._requiresSecretFields
                                                    && passwordField.text === "" ? Theme.textError
                                  : passwordField.activeFocus ? Theme.borderFocus : Theme.borderInput
@@ -308,7 +360,7 @@ Popup {
             }
         }
 
-        // Client-side validation hint shown after a failed submit attempt.
+        // Validation hint, shown only after a rejected submit.
         Text {
             Layout.fillWidth: true
             Layout.leftMargin: 24
@@ -360,7 +412,7 @@ Popup {
                         GradientStop { position: 0; color: cancelButton.pressed ? Theme.ghostBtnPressed : cancelButton.hovered ? Theme.ghostBtnHoverTop : Theme.ghostBtnTop; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
                         GradientStop { position: 1; color: cancelButton.pressed ? Theme.ghostBtnPressed : cancelButton.hovered ? Theme.ghostBtnHoverEnd : Theme.ghostBtnEnd; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
                     }
-                    border.width: 1
+                    border.width: Theme.strokeRegular
                     border.color: cancelButton.pressed ? Theme.borderPressed
                                 : cancelButton.hovered ? Theme.borderFocusHover
                                 : Theme.borderSubtle
@@ -407,7 +459,7 @@ Popup {
                         GradientStop { position: 0; color: okButton.enabled ? (okButton.pressed ? Theme.btnPressTop : okButton.hovered ? Theme.btnHoverTop : Theme.btnGradTop) : Theme.btnDisabledTop; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
                         GradientStop { position: 1; color: okButton.enabled ? (okButton.pressed ? Theme.btnPressBot : okButton.hovered ? Theme.btnHoverBot : Theme.btnGradBot) : Theme.btnDisabledBot; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
                     }
-                    border.width: 1
+                    border.width: Theme.strokeRegular
                     border.color: !okButton.enabled ? Theme.borderSubtle : okButton.hovered ? Theme.borderBright : Theme.borderBtn
                     Behavior on border.color { ColorAnimation { duration: Theme.hoverDuration } }
 
@@ -422,9 +474,10 @@ Popup {
         }
     }
 
-    // Focus the first field on open so the user can start typing immediately.
     onOpened: serviceField.forceActiveFocus()
 
+    // Service and username are trimmed; the password is not, because leading and
+    // trailing spaces are part of the secret.
     function submitForm() {
         var svc = serviceField.text.trim()
         var usr = usernameField.text.trim()
@@ -437,7 +490,8 @@ Popup {
         root.close()
     }
 
-    // Reset fields on open. Edit mode intentionally leaves secrets blank.
+    // Both secret fields start blank in edit mode as well: blank tells
+    // AppViewModel to keep the stored username or password.
     function resetFields() {
         serviceField.text = initialService;
         usernameField.text = "";
@@ -446,6 +500,7 @@ Popup {
 
     onAboutToShow: { _showValidation = false; resetFields() }
 
+    // Drop the typed secrets on close so they do not linger in the QML heap.
     onClosed: {
         initialService = ""
         serviceField.text = ""
