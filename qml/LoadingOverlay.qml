@@ -1,23 +1,53 @@
 import QtQuick
 import QtQuick.Shapes
 
+// The cover over the whole window while the vault is locked or loading. It is
+// the startup screen and the unlock animation at once: a sonar field during the
+// scrypt grind, a seal that swings shut on success, a fracture on a wrong
+// password. It renders state only and never touches a secret.
+//
+//   phase        meaning                                       set by
+//   ----------   -------------------------------------------   ----------------
+//   hidden       cover down, nothing rendered                   _sync, timers
+//   listening    password entry; aurora only while fracturing   _sync, breakSeal
+//   sounding     scrypt running; full sonar                     _sync
+//   exiting      grind ended with no verdict yet; fades out     _sync
+//   sealing      unlock succeeded; seal outro plays             sealSuccess
+//   dismissing   outro done; fades out, then returns to hidden  sealAnim
+//
+// Main drives it through `listening`, `sounding`, `caption` and the two calls
+// sealSuccess() and breakSeal(). The outro phases settle themselves, and `sealing`
+// and `dismissing` additionally carry a timer as a backstop, so nothing has to
+// clear the cover from outside.
 Item {
     id: root
 
     // --- Inputs (set by Main) -----------------------------------------------
-    property bool listening: false   // Password entry active (dim aurora, bare field owns centre).
+    property bool listening: false   // Password entry; field centred, aurora only while fracturing.
     property bool sounding: false    // scrypt grind running (full sonar).
     property string caption: ""      // Text beneath the sonar during the grind.
 
-    property string phase: "hidden"
+    property string phase: "hidden"  // See the phase table above.
 
-    property bool fracturing: false
+    property bool fracturing: false  // Wrong-password outro is playing; holds the cover up.
+
+    // Startup cover. `booting` forces the overlay fully opaque from the first
+    // frame, so the app is never visible before the cover, bridging the tick
+    // before the password dialog appears. _sync() releases it as soon as a real
+    // cover state exists; Main releases it when there is no vault to unlock.
+    // `snap` makes that first release instant, with no fade.
+    property bool booting: true
+    property bool snap: true
 
     onListeningChanged: root._sync()
     onSoundingChanged: root._sync()
     Component.onCompleted: root._sync()
 
     function _sync() {
+        // Hand opacity to the phase machine once a real cover state exists,
+        // otherwise the boot hold would keep the cover up forever.
+        if (booting && (sounding || listening))
+            booting = false;
         if (sounding) {
             phase = "sounding";
         } else if (listening) {
@@ -55,12 +85,15 @@ Item {
         }
     }
 
+    // Backstop: if sealAnim never reaches its end, drop the cover anyway. A
+    // stuck outro would otherwise lock the user out of an unlocked vault.
     Timer {
         id: sealWatchdog
         interval: 3800
         onTriggered: if (root.phase === "sealing") root.phase = "hidden"
     }
 
+    // Outlasts the 440 ms dismiss fade, then parks the cover at hidden.
     Timer {
         id: dismissTimer
         interval: 540
@@ -68,12 +101,15 @@ Item {
     }
 
     // --- Tuning -------------------------------------------------------------
-    readonly property real maxRadius: Theme.px(58)
+    // The seal is the focal point of the unlock transition, not an inline icon.
+    readonly property real maxRadius: Theme.px(68)
     readonly property real sealSeatFactor: 0.95
-    readonly property real seatRad: maxRadius * sealSeatFactor
+    readonly property real seatRad: maxRadius * sealSeatFactor  // Radius the seated band rests at.
 
+    // Reduce-motion: outros collapse to plain fades, with no spin or debris.
     readonly property bool calm: WindowVM.reduceMotion
 
+    // Duration multipliers for the two outros. Raise to slow an outro down.
     readonly property real fracturePace: 2.4
     readonly property real successPace: 1.4
 
@@ -88,17 +124,22 @@ Item {
     readonly property real glowMul: isDark ? 0.55 : 1.6
     readonly property real payoffMul: isDark ? 1.0 : 1.3
 
+    // Outcome tint driver: -1 wrong password, 0 neutral, +1 unlocked. Every hue
+    // below is mixed toward the matching verdict color by vGreen or vRed.
     property real verdict: 0.0
     readonly property real vGreen: Math.max(0.0, verdict)
     readonly property real vRed: Math.max(0.0, -verdict)
+    // Linear color mix, forced opaque.
     function vmix(a, b, k) {
         return Qt.rgba(a.r + (b.r - a.r) * k, a.g + (b.g - a.g) * k, a.b + (b.b - a.b) * k, 1.0);
     }
 
+    // Layer levels. Each one gates a group of items and animates between phases,
+    // so a phase change cross-fades the field instead of popping it.
     property real auroraLevel: (phase === "sounding" || phase === "exiting"
                                || phase === "sealing" || phase === "dismissing") ? 1.0
                                : (root.fracturing ? 0.5 : 0.0)
-    // Blooming sonar rings: ONLY during the grind. Dissolve as the seal forms.
+    // Blooming sonar rings: only during the grind. They dissolve as the seal forms.
     property real ringsLevel: (phase === "sounding" || phase === "exiting") ? 1.0 : 0.0
     // Bright core / focal: with the rings, plus through the seal outro.
     property real coreLevel: (phase === "sounding" || phase === "exiting" || phase === "sealing") ? 1.0 : 0.0
@@ -109,7 +150,6 @@ Item {
     // --- Seal outro state (driven by sealAnim) ------------------------------
     property real sealProgress: 0.0   // The press: 0 formed wide -> 1 seated.
     property real sealAngle: 0.0      // conic sweep angle, decelerates to a locked rest.
-    property real sealSpec: -0.2      // specular streak position around the rim.
     property real bandOpacity: 0.0    // band's own genesis fade (decoupled from the press).
     readonly property bool sealActive: phase === "sealing" || phase === "dismissing"
     readonly property real sealRad: maxRadius * (1.12 + (sealSeatFactor - 1.12) * sealProgress)
@@ -125,7 +165,6 @@ Item {
     SequentialAnimation {
         id: sealAnim
         PropertyAction { target: root; property: "sealProgress"; value: 0.0 }
-        PropertyAction { target: root; property: "sealSpec"; value: -0.2 }
         PropertyAction { target: root; property: "sealAngle"; value: 188.0 }
         PropertyAction { target: root; property: "dialAngle"; value: -435.0 }
         PropertyAction { target: root; property: "kick"; value: 0.0 }
@@ -137,14 +176,14 @@ Item {
         ParallelAnimation {
             // Genesis: the band fades in fast at its forming radius...
             NumberAnimation { target: root; property: "bandOpacity"; to: 1.0; duration: root.calm ? 220 : Math.round(150 * root.successPace); easing.type: Easing.OutSine }
-            // ...then presses inward, accelerating INTO the seat.
+            // ...then presses inward, accelerating into the seat.
             NumberAnimation { target: root; property: "sealProgress"; to: 1.0; duration: root.calm ? 0 : Math.round(490 * root.successPace); easing.type: Easing.InCubic }
             // 360 + 14: settle just past a full turn to a fixed resting angle.
             NumberAnimation { target: root; property: "sealAngle"; to: 374.0; duration: root.calm ? 0 : Math.round(490 * root.successPace); easing.type: Easing.OutExpo }
             SequentialAnimation {
                 // Spin down to just short of rest...
                 NumberAnimation { target: root; property: "dialAngle"; to: -30.0; duration: root.calm ? 0 : Math.round(430 * root.successPace); easing.type: Easing.OutQuart }
-                // ...the STRIKE: visible velocity through zero...
+                // ...the strike: visible velocity through zero...
                 NumberAnimation { target: root; property: "dialAngle"; to: 8.0; duration: root.calm ? 0 : Math.round(60 * root.successPace); easing.type: Easing.Linear }
                 // ...and the catch, with the clunk cluster fired on this frame.
                 ParallelAnimation {
@@ -161,18 +200,17 @@ Item {
                         NumberAnimation { target: root; property: "kick"; to: 0.0; duration: root.calm ? 0 : Math.round(320 * root.successPace); easing.type: Easing.OutCubic }
                     }
                     NumberAnimation { target: root; property: "boltDrive"; to: 1.0; duration: root.calm ? 0 : Math.round(480 * root.successPace) }
-                    // The verdict lands WITH the clunk, not before it.
+                    // The verdict lands with the clunk, not before it.
                     NumberAnimation { target: root; property: "verdict"; to: 1.0; duration: root.calm ? 240 : Math.round(200 * root.successPace); easing.type: Easing.OutCubic }
                 }
             }
             SequentialAnimation {
-                PauseAnimation { duration: root.calm ? 250 : Math.round(720 * root.successPace) }
-                NumberAnimation { target: root; property: "sealSpec"; to: 1.2; duration: root.calm ? 0 : Math.round(560 * root.successPace); easing.type: Easing.InOutSine }
-                PauseAnimation { duration: root.calm ? 0 : Math.round(180 * root.successPace) }
+                // Preserve the outro timing, but hold the seated seal still.
+                PauseAnimation { duration: root.calm ? 250 : Math.round(1460 * root.successPace) }
                 ScriptAction { script: { if (root.phase === "sealing") root.phase = "dismissing" } }
             }
         }
-        // Guard: if the glint branch ever mistimes, the cover still dismisses.
+        // Guard: if the hold branch ever mistimes, the cover still dismisses.
         ScriptAction { script: { if (root.phase === "sealing") root.phase = "dismissing" } }
     }
 
@@ -194,16 +232,21 @@ Item {
         }
     }
 
-    opacity: root.fracturing ? 1.0
+    opacity: (root.booting || root.fracturing) ? 1.0
            : (phase === "hidden" || phase === "exiting" || phase === "dismissing") ? 0.0 : 1.0
     visible: opacity > 0.001
     Behavior on opacity {
+        enabled: !root.snap
         NumberAnimation {
             duration: root.phase === "dismissing" ? 440 : 320
             easing.type: Easing.OutCubic
         }
     }
 
+    // The cover owns input while it is up: it swallows clicks and the wheel so
+    // nothing behind it reacts, and it stands in for the title bar, because the
+    // frameless window can only be dragged from a MouseArea that calls
+    // WindowVM.startWindowDrag(). Dragging stops once the cover is dismissing.
     MouseArea {
         anchors.fill: parent
         enabled: root.visible && root.phase !== "dismissing"
@@ -270,14 +313,16 @@ Item {
 
         readonly property real tau: 2.0 * Math.PI
 
-        property real t: 0.0
+        // Four free-running clocks. All stop under reduce-motion or a hidden
+        // cover, so an idle overlay repaints nothing.
+        property real t: 0.0          // Ring cadence.
         NumberAnimation on t {
             running: root.visible && !root.calm
             from: 0.0; to: 1.0
             duration: 2600
             loops: Animation.Infinite
         }
-        property real breath: 0.0
+        property real breath: 0.0     // Core and halo swell.
         NumberAnimation on breath {
             running: root.visible && !root.calm
             from: 0.0; to: 1.0
@@ -286,7 +331,7 @@ Item {
         }
         readonly property real swell: 0.5 - 0.5 * Math.cos(breath * tau)
         readonly property real swellB: 0.5 - 0.5 * Math.cos((breath + 0.15) * tau)
-        property real drift: 0.0
+        property real drift: 0.0      // Aurora wander.
         NumberAnimation on drift {
             running: root.visible && !root.calm
             from: 0.0; to: 1.0
@@ -294,7 +339,7 @@ Item {
             loops: Animation.Infinite
         }
 
-        property real sweep: 0.0
+        property real sweep: 0.0      // Conic hue rotation; runs only while rings are up.
         NumberAnimation on sweep {
             running: root.visible && !root.calm && root.ringsLevel > 0.001
             from: 0.0; to: 360.0
@@ -574,44 +619,6 @@ Item {
             }
         }
 
-        Item {
-            anchors.centerIn: parent
-            width: spinner.width; height: width
-            visible: root.sealActive
-            rotation: -90 + root.sealSpec * 360
-            Item {
-                readonly property real env: (root.sealSpec >= 0.0 && root.sealSpec <= 1.0)
-                                            ? Math.sin(root.sealSpec * Math.PI) : 0.0
-                anchors.horizontalCenter: parent.horizontalCenter
-                y: parent.height / 2 - root.sealRad - height / 2
-                width: Theme.px(30); height: Theme.px(6)
-                // Soft halo under the streak.
-                Rectangle {
-                    anchors.centerIn: parent
-                    width: parent.width; height: parent.height; radius: height / 2
-                    opacity: parent.env * 0.35
-                    gradient: Gradient {
-                        orientation: Gradient.Horizontal
-                        GradientStop { position: 0.0; color: Qt.rgba(Theme.accentBright.r, Theme.accentBright.g, Theme.accentBright.b, 0.0) }
-                        GradientStop { position: 0.5; color: Qt.rgba(Theme.accentBright.r, Theme.accentBright.g, Theme.accentBright.b, 0.9) }
-                        GradientStop { position: 1.0; color: Qt.rgba(Theme.accentBright.r, Theme.accentBright.g, Theme.accentBright.b, 0.0) }
-                    }
-                }
-                // Crisp core of the streak.
-                Rectangle {
-                    anchors.centerIn: parent
-                    width: Theme.px(16); height: Theme.px(2.5); radius: height / 2
-                    opacity: parent.env * 0.95
-                    gradient: Gradient {
-                        orientation: Gradient.Horizontal
-                        GradientStop { position: 0.0; color: Qt.rgba(Theme.accentBright.r, Theme.accentBright.g, Theme.accentBright.b, 0.0) }
-                        GradientStop { position: 0.5; color: Theme.accentBright }
-                        GradientStop { position: 1.0; color: Qt.rgba(Theme.accentBright.r, Theme.accentBright.g, Theme.accentBright.b, 0.0) }
-                    }
-                }
-            }
-        }
-
         Shape {
             id: shockwave
             visible: root.waveActive
@@ -731,6 +738,8 @@ Item {
         }
     }
 
+    // Hold the last non-empty caption so the text stays readable while the block
+    // fades out, instead of blanking on the frame the caption is cleared.
     property string lastCaption: ""
     onCaptionChanged: if (caption.length > 0) lastCaption = caption
 
@@ -745,6 +754,7 @@ Item {
         visible: opacity > 0.001
         Behavior on opacity { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
 
+        // Trailing dots are stripped: the animated ellipsis below supplies them.
         readonly property string baseText: root.lastCaption.replace(/[.\s]+$/, "")
         property int dots: 0
         Timer {
