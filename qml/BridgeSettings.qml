@@ -1,27 +1,27 @@
 import QtQuick
 import QtQuick.Controls
 
+// Browser connection chips for the status footer (instantiated by
+// StatusFooter.qml): one pulsing chip per entry in Bridge.browsers, plus a
+// warning sign on unsigned builds. Left-click runs a dry-run probe,
+// right-click toggles the bridge. The chips report link state only; the
+// install and uninstall actions live in HeaderBar.
 Row {
     id: root
-    spacing: 8
-
-    readonly property var _browsers: [
-        {"label": "Chrome", "icon": "chrome.svg", "key": "chrome"},
-        {"label": "Brave", "icon": "brave.svg", "key": "brave"}
-    ]
+    property bool compact: false   // Narrow window: drop the labels, keep the dots.
+    spacing: compact ? 6 : 8
 
     Repeater {
-        model: root._browsers
+        model: Bridge.browsers
 
         delegate: Item {
             id: chip
 
             required property var modelData
 
-            readonly property bool _on: Bridge.bridgeEnabled
-                                        && (modelData.key === "chrome"
-                                                ? Bridge.bridgeChromeConnected
-                                                : Bridge.bridgeBraveConnected)
+            // Green only when the extension is connected and the bridge is
+            // enabled: a disabled bridge reads as down even with a live port.
+            readonly property bool _on: Bridge.bridgeEnabled && modelData.connected
 
             implicitWidth: chipBg.implicitWidth
             implicitHeight: 22
@@ -30,7 +30,9 @@ Row {
                 id: chipBg
                 anchors.fill: parent
                 radius: height / 2
-                implicitWidth: chipRow.implicitWidth + 18
+                readonly property int leftInset: root.compact ? 7 : 8
+                readonly property int rightInset: root.compact ? 10 : 13
+                implicitWidth: chipRow.implicitWidth + leftInset + rightInset
 
                 gradient: Gradient {
                     GradientStop {
@@ -44,7 +46,7 @@ Row {
                         Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
                     }
                 }
-                border.width: 1
+                border.width: Theme.strokeRegular
                 border.color: chipMouse.containsMouse
                               ? Theme.borderHighlight
                               : (chip._on ? Theme.statusChipStrongBorder : Theme.statusChipBorder)
@@ -57,8 +59,10 @@ Row {
 
                 Row {
                     id: chipRow
-                    anchors.centerIn: parent
-                    spacing: 6
+                    anchors.left: parent.left
+                    anchors.leftMargin: chipBg.leftInset
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 4
 
                     Item {
                         id: dotContainer
@@ -83,6 +87,8 @@ Row {
                             }
                         }
 
+                        // Concentric fading rings make the halo around the dot;
+                        // they breathe outward with `pulse`.
                         Repeater {
                             model: 7
                             Rectangle {
@@ -110,15 +116,37 @@ Row {
                     }
 
                     SvgIcon {
-                        source: "qrc:/qt/qml/seal/assets/brands/" + chip.modelData.icon
+                        source: chip.modelData.iconPath
                         width: Theme.px(11)
                         height: Theme.px(11)
                         anchors.verticalCenter: parent.verticalCenter
+                        visible: chip.modelData.iconAvailable
                         color: chip._on ? Theme.statusChipStrongText : Theme.statusChipText
                         Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
                     }
 
+                    // Fallback for a browser with no bundled icon: a lettered
+                    // disc, so an untracked assets/ still gives every chip a mark.
+                    Rectangle {
+                        width: Theme.px(11)
+                        height: Theme.px(11)
+                        radius: width / 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: !chip.modelData.iconAvailable
+                        color: chip._on ? Theme.statusChipStrongText : Theme.statusChipText
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: chip.modelData.label.charAt(0)
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.px(7)
+                            font.bold: true
+                            color: chip._on ? Theme.statusChipStrongEnd : Theme.statusChipEnd
+                        }
+                    }
+
                     Text {
+                        visible: !root.compact
                         text: chip.modelData.label
                         font.family: Theme.fontFamily
                         font.pixelSize: Theme.fontSizeSmall
@@ -157,88 +185,11 @@ Row {
         }
     }
 
-    Item {
-        id: autoChip
-        implicitWidth: autoBg.implicitWidth
-        implicitHeight: 22
-        anchors.verticalCenter: parent.verticalCenter
-
-        readonly property bool _on: Bridge.autoStageEnabled
-
-        Rectangle {
-            id: autoBg
-            anchors.fill: parent
-            radius: height / 2
-            implicitWidth: autoRow.implicitWidth + 18
-            gradient: Gradient {
-                GradientStop {
-                    position: 0
-                    color: autoChip._on ? Theme.statusChipStrongTop : Theme.statusChipTop
-                    Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
-                }
-                GradientStop {
-                    position: 1
-                    color: autoChip._on ? Theme.statusChipStrongEnd : Theme.statusChipEnd
-                    Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
-                }
-            }
-            border.width: 1
-            border.color: autoMouse.containsMouse
-                          ? Theme.borderHighlight
-                          : (autoChip._on ? Theme.statusChipStrongBorder : Theme.statusChipBorder)
-            Behavior on border.color { ColorAnimation { duration: Theme.hoverDuration } }
-            scale: autoMouse.pressed ? 0.97 : 1.0
-            Behavior on scale {
-                NumberAnimation { duration: 160; easing.type: Easing.OutBack; easing.overshoot: 1.5 }
-            }
-
-            Row {
-                id: autoRow
-                anchors.centerIn: parent
-                spacing: 6
-
-                Rectangle {
-                    width: 7
-                    height: 7
-                    radius: width / 2
-                    anchors.verticalCenter: parent.verticalCenter
-                    color: autoChip._on ? Theme.textSuccess : Theme.textError
-                    Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
-                }
-
-                Text {
-                    text: "Auto-fill"
-                    font.family: Theme.fontFamily
-                    font.pixelSize: Theme.fontSizeSmall
-                    font.weight: Font.Medium
-                    color: autoChip._on ? Theme.statusChipStrongText : Theme.statusChipText
-                    anchors.verticalCenter: parent.verticalCenter
-                    Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
-                }
-            }
-
-            MouseArea {
-                id: autoMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: Bridge.setAutoStageEnabled(!Bridge.autoStageEnabled)
-            }
-
-            ToolTip.visible: autoMouse.containsMouse
-            ToolTip.delay: 600
-            ToolTip.text: (autoChip._on ? "Staged auto-fill ON." : "Staged auto-fill OFF.") +
-                          "\nWhen on, seal pre-arms a matching record on navigation;" +
-                          "\na plain click into the login field completes the fill." +
-                          "\nThe password is never sent to the browser."
-        }
-    }
-
-    // Visible only in an unsigned build: peer signer authentication (M6) is
-    // degraded to accept-all-peers, so any local process can talk to the
-    // bridge. Shown as a bare amber warning sign (not a status chip) so it
-    // reads as a caution rather than another pill. A signed release hides it
-    // entirely (Row skips invisible items) and shows no "signed" indicator.
+    // An unsigned build has an empty signer identity, so peer authentication
+    // (M6) degrades to accept-all and any local process can talk to the bridge.
+    // A bare amber sign rather than a chip, so it reads as a caution instead of
+    // another pill. A signed release hides it (Row skips invisible items) and
+    // shows no "signed" counterpart.
     Item {
         id: authWarn
         visible: !Bridge.bridgePeerAuthEnforced
@@ -260,6 +211,7 @@ Row {
             }
 
             Text {
+                visible: !root.compact
                 text: "Unsigned build"
                 font.family: Theme.fontFamily
                 font.pixelSize: Theme.fontSizeSmall
