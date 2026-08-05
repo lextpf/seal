@@ -1,21 +1,32 @@
 import QtQuick
 import QtQuick.Controls
 
+// Service-name search field. It emits searchRequested, which Main assigns to
+// AppViewModel.searchFilter; the field itself never filters anything.
 TextField {
     id: root
     property int resultCount: 0
     property bool vaultLoaded: true
     readonly property bool filtering: text.trim().length > 0
+    readonly property bool showResultLabel: width >= 520
     readonly property string resultLabel: resultCount === 1 ? "1 match" : resultCount + " matches"
+    readonly property real surfaceOpacity: !enabled ? (Theme.dark ? 0.32 : 0.16)
+                                                : activeFocus ? (Theme.dark ? 0.46 : 0.30)
+                                                : searchHover.hovered ? (Theme.dark ? 0.38 : 0.24)
+                                                : (Theme.dark ? 0.30 : 0.18)
 
     signal searchRequested(string text)
 
+    // Each keystroke restarts the timer, so a filter change reaches the view model
+    // 200 ms after typing stops rather than on every character.
     Timer {
         id: _debounce
         interval: 200
         onTriggered: root.searchRequested(root.text)
     }
     onTextChanged: _debounce.restart()
+    // Unloading the vault clears the text, which fires the debounce and drops the
+    // filter; a stale filter would otherwise hide records after the next load.
     onVaultLoadedChanged: if (!vaultLoaded && text.length > 0) text = ""
 
     enabled: vaultLoaded
@@ -29,7 +40,8 @@ TextField {
     selectionColor: Theme.btnGradBot
     selectedTextColor: Theme.textOnAccent
 
-    // Padding reserves space for search icon (left) plus count label and clear button (right).
+    // Padding reserves room for the search icon on the left and the match count plus
+    // clear button on the right, so typed text never runs under them.
     leftPadding: searchIcon.width + 24
     rightPadding: 16
                 + (clearBtn.visible ? clearBtn.width + 16 : 0)
@@ -56,7 +68,7 @@ TextField {
 
     Text {
         id: resultText
-        visible: root.filtering
+        visible: root.filtering && root.showResultLabel
         opacity: visible ? 1 : 0
         text: root.resultLabel
         font.family: Theme.fontFamily
@@ -93,23 +105,27 @@ TextField {
             anchors.margins: -6
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            // Clear text and re-focus so the user can immediately start a new search.
+            // Clear and re-focus, so a new search can start without a second click.
             onClicked: { root.text = ""; root.forceActiveFocus(); }
         }
     }
 
-    // IBeamCursor on hover signals editable text.
+    // Hover cursor also carries the enabled state: I-beam when the vault is loaded,
+    // plain arrow when the field is disabled.
     HoverHandler {
         id: searchHover
         cursorShape: root.enabled ? Qt.IBeamCursor : Qt.ArrowCursor
     }
 
-    // Three-state border: focused > hovered > idle.
+    // Border and glow follow one precedence: disabled, then focused, then hovered,
+    // then idle. Keep every branch in that order or states start fighting.
     background: Rectangle {
+        readonly property color fillBase: root.activeFocus ? Theme.bgGridEnd : Theme.bgGrid
+
         implicitHeight: 44
         radius: Theme.radiusLarge
-        color: !root.enabled ? Theme.bgGrid : root.activeFocus ? Theme.bgGridEnd : Theme.bgGrid
-        border.width: 1
+        color: Qt.rgba(fillBase.r, fillBase.g, fillBase.b, root.surfaceOpacity)
+        border.width: Theme.strokeRegular
         border.color: !root.enabled ? (Theme.dark ? Theme.borderMedium : Theme.borderSubtle)
                     : root.activeFocus ? Theme.borderFocus
                     : searchHover.hovered ? (Theme.dark ? Theme.borderHighlight : Theme.borderMedium)
@@ -133,7 +149,7 @@ TextField {
             anchors.right: parent.right
             anchors.leftMargin: Theme.radiusMedium
             anchors.rightMargin: Theme.radiusMedium
-            height: 1
+            height: Theme.strokeDivider
             color: Theme.surfaceHighlight
             opacity: !root.enabled ? 0.22 : root.activeFocus ? 0.48 : searchHover.hovered ? 0.26 : Theme.dark ? 0.14 : 0.12
             Behavior on opacity { NumberAnimation { duration: Theme.hoverDuration } }
