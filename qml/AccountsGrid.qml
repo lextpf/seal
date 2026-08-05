@@ -2,14 +2,19 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+// Chip grid over VaultListModel: a Flow of AccountChip delegates plus the three
+// empty states. The row numbers this grid emits are visual positions in the
+// filtered, sorted model, never record indices. The grid reports gestures only;
+// Main.qml forwards them to AppViewModel, which resolves the row and owns every
+// mutation.
 Rectangle {
     id: root
 
-    property var model              // VaultListModel instance from AppViewModel
-    property int selectedRow: -1    // Visual index of the selected chip (-1 = none)
-    property bool searchActive: false
-    property bool vaultLoaded: false
-    property bool isCompact: false
+    property var model              // VaultListModel from AppViewModel, already filtered
+    property int selectedRow: -1    // Visual row of the selected chip (-1 = none)
+    property bool searchActive: false  // Search filter is non-empty
+    property bool vaultLoaded: false   // A vault is open
+    property bool isCompact: false     // Collapsed window: one chip strip, no scrollbar
 
     readonly property bool showNoResultsState: chipRepeater.count === 0 && root.searchActive && root.vaultLoaded
     readonly property bool showNoVaultState: chipRepeater.count === 0 && !root.vaultLoaded
@@ -17,9 +22,13 @@ Rectangle {
 
     signal rowClicked(int row)
     signal rowDoubleClicked(int row)
+    // Reserved hooks for the empty-state action row (EmptyStatePanel.actions).
+    // No delegate emits them today; Main.qml already handles both.
     signal addAccountRequested()
     signal clearSearchRequested()
 
+    // Card for the empty-vault state. Default children are appended to the
+    // action row under the message text.
     component EmptyStatePanel: Rectangle {
         id: panel
         property string titleText: ""
@@ -36,7 +45,7 @@ Rectangle {
             GradientStop { position: 0; color: Theme.bgInput }
             GradientStop { position: 1; color: Theme.bgCardEnd }
         }
-        border.width: 1
+        border.width: Theme.strokeRegular
         border.color: Theme.borderMedium
         clip: true
 
@@ -44,7 +53,7 @@ Rectangle {
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
-            height: 1
+            height: Theme.strokeDivider
             color: Theme.surfaceHighlight
             opacity: 0.75
         }
@@ -114,10 +123,11 @@ Rectangle {
         GradientStop { position: 0; color: Theme.bgGrid }
         GradientStop { position: 1; color: Theme.bgGridEnd }
     }
-    border.width: 1
+    border.width: Theme.strokeRegular
     border.color: Theme.dark ? Theme.borderMedium : Theme.borderSubtle
     clip: true
 
+    // Decorative corner glows behind the chips.
     Rectangle {
         width: parent.width * 0.40
         height: parent.height * 0.30
@@ -200,7 +210,8 @@ Rectangle {
                 }
             }
 
-            // Snap-to-top when entering compact mode.
+            // Compact mode shows a single chip strip and hides the scrollbar, so
+            // reset the offset or the strip stays parked mid-list.
             Connections {
                 target: root
                 function onIsCompactChanged() {
@@ -210,14 +221,15 @@ Rectangle {
                 }
             }
 
-            // ------- Empty states -------
+            // ------- Empty states: search miss, no vault, empty vault -------
 
             Column {
                 anchors.centerIn: parent
                 visible: root.showNoResultsState
-                spacing: 10
+                spacing: root.isCompact ? 0 : 10
 
                 SvgIcon {
+                    visible: !root.isCompact
                     source: Theme.iconFilterSlash
                     width: Theme.px(32)
                     height: Theme.px(32)
@@ -235,6 +247,7 @@ Rectangle {
                 }
 
                 Text {
+                    visible: !root.isCompact
                     text: "Try a broader term or clear the filter to see every credential again."
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeSmall
@@ -246,9 +259,10 @@ Rectangle {
             Column {
                 anchors.centerIn: parent
                 visible: root.showNoVaultState
-                spacing: 10
+                spacing: root.isCompact ? 0 : 10
 
                 SvgIcon {
+                    visible: !root.isCompact
                     source: Theme.iconShieldHalved
                     width: Theme.px(32)
                     height: Theme.px(32)
@@ -266,6 +280,7 @@ Rectangle {
                 }
 
                 Text {
+                    visible: !root.isCompact
                     text: "Open an existing .seal vault or create your first credential locally."
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeSmall
@@ -276,11 +291,21 @@ Rectangle {
 
             EmptyStatePanel {
                 anchors.centerIn: parent
-                visible: root.showEmptyVaultState
+                visible: root.showEmptyVaultState && !root.isCompact
                 iconSource: Theme.iconPlus
                 tone: Theme.accent2
                 titleText: "This vault is ready for its first account"
                 messageText: "Add a credential and the grid, search, and autofill tools will activate."
+            }
+
+            Text {
+                anchors.centerIn: parent
+                visible: root.showEmptyVaultState && root.isCompact
+                text: "No accounts yet"
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.fontSizeLarge
+                font.weight: Font.Medium
+                color: Theme.textMuted
             }
         }
     }
