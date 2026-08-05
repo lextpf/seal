@@ -1,9 +1,17 @@
 import QtQuick
 import QtQuick.Controls
 
+// The shared button for the ActionBar actions and the HeaderBar vault actions:
+// gradient fill, optional leading icon, press ripple.
+// A caller picks a role by assigning a Theme color family to the tint*
+// properties (Theme.btnAdd*, Theme.btnDelete*, ...); the defaults are the
+// ghost palette, so an unstyled TintedButton reads as a secondary action.
+// Dialog buttons and the ActionBar Fill button hand-roll their own Button,
+// because they carry states or sizes this component does not model (the armed
+// countdown, the smaller dialog footprint).
 Button {
     id: root
-    property string faIcon: ""
+    property string faIcon: ""      // Icon qrc path; "" hides the icon and its spacing.
     property color tintTop:         Theme.ghostBtnTop
     property color tintEnd:         Theme.ghostBtnEnd
     property color tintHoverTop:    Theme.ghostBtnHoverTop
@@ -11,16 +19,40 @@ Button {
     property color tintPressed:     Theme.ghostBtnPressed
     property color tintText:        Theme.textGhost
     property color tintTextHover:   Theme.textPrimary
-    // Border derived from tint color with alpha boost to echo the button fill.
-    readonly property color _tintBorder: Qt.rgba(tintEnd.r, tintEnd.g, tintEnd.b, Math.min(tintEnd.a + 0.18, 1.0))
+    property bool translucentSurface: false  // Set on glass buttons; see the disabled fills below.
+
+    // Derived states. Dark mode drops alpha, light mode blends toward an opaque
+    // color, because a light surface needs real contrast rather than more glass.
+    property color tintTextDisabled: Theme.dark
+        ? Qt.rgba(tintText.r, tintText.g, tintText.b, 0.32)
+        : Theme.opaqueBlend(tintText, Theme.textDisabled, 0.30)
+    property color tintBorder: Theme.dark
+        ? Qt.rgba(tintEnd.r, tintEnd.g, tintEnd.b, Math.min(tintEnd.a + 0.18, 1.0))
+        : Theme.opaqueBlend(tintText, tintEnd, 0.32)
+    property color tintBorderHover: Theme.borderHover
+    property color tintBorderDisabled: Theme.dark
+        ? Theme.borderDim
+        : Theme.opaqueBlend(tintBorder, Theme.borderDim, 0.36)
     leftPadding: 14
     rightPadding: 14
 
-    // Disabled: same hue at reduced opacity.
-    readonly property color _disText:   Qt.rgba(tintText.r, tintText.g, tintText.b, 0.32)
-    readonly property color _disTop:    Qt.rgba(tintTop.r, tintTop.g, tintTop.b, tintTop.a * 0.35)
-    readonly property color _disEnd:    Qt.rgba(tintEnd.r, tintEnd.g, tintEnd.b, tintEnd.a * 0.35)
+    // Disabled fills. A glass button keeps its source alpha so it stays
+    // transparent; a semantic action button keeps its alpha in dark mode and fades
+    // toward the opaque disabled color in light mode, instead of turning back into
+    // a solid pill.
+    readonly property color _disText: tintTextDisabled
+    readonly property color _disTop: translucentSurface
+        ? Qt.rgba(tintTop.r, tintTop.g, tintTop.b, tintTop.a * 0.45)
+        : Theme.dark
+          ? Qt.rgba(tintTop.r, tintTop.g, tintTop.b, tintTop.a * 0.35)
+          : Theme.opaqueBlend(tintTop, Theme.btnDisabledTop, 0.50)
+    readonly property color _disEnd: translucentSurface
+        ? Qt.rgba(tintEnd.r, tintEnd.g, tintEnd.b, tintEnd.a * 0.45)
+        : Theme.dark
+          ? Qt.rgba(tintEnd.r, tintEnd.g, tintEnd.b, tintEnd.a * 0.35)
+          : Theme.opaqueBlend(tintEnd, Theme.btnDisabledBot, 0.50)
 
+    // Sets the cursor, and supplies the press point the ripple starts from.
     HoverHandler { id: btnHover; cursorShape: Qt.PointingHandCursor }
 
     contentItem: Row {
@@ -61,10 +93,10 @@ Button {
             GradientStop { position: 1; color: !root.enabled ? root._disEnd : root.pressed ? root.tintPressed : root.hovered ? root.tintHoverEnd : root.tintEnd; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
         }
 
-        border.width: 1
-        border.color: !root.enabled ? Theme.borderDim
-                    : root.hovered ? Theme.borderHover
-                    : root._tintBorder
+        border.width: Theme.strokeRegular
+        border.color: !root.enabled ? root.tintBorderDisabled
+                    : root.hovered ? root.tintBorderHover
+                    : root.tintBorder
 
         Behavior on border.color { ColorAnimation { duration: Theme.hoverDuration } }
 
