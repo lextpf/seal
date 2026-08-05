@@ -3,12 +3,18 @@ import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
 
+// Change-master-password dialog. Rekey re-encrypts every record and replaces the
+// vault file, so it is the only path that changes the master password. Unlike the
+// other dialogs this one calls the view model itself; Main.qml only reports the
+// outcome through onRekeyFinished.
 Popup {
     id: root
 
-    property string errorMessage: ""
+    property string errorMessage: ""  // Local field validation only; rekey failures go to Main.qml
     readonly property color shellTone: Theme.accent
 
+    // Runs on open, on close and after submit, so no typed password stays in the
+    // QML heap after the dialog is done with it.
     function clearFields() {
         currentField.text = "";
         newField.text = "";
@@ -16,6 +22,8 @@ Popup {
         errorMessage = "";
     }
 
+    // Checks presence and the confirmation match only. The current password is
+    // verified against the vault inside rekeyVault, not here.
     function submit() {
         if (currentField.text.length === 0) {
             errorMessage = "Current password must not be empty.";
@@ -46,6 +54,7 @@ Popup {
     }
     onClosed: clearFields()
 
+    // Scale+fade entrance shared with AccountDialog and ConfirmDialog.
     enter: Transition {
         ParallelAnimation {
             NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 175; easing.type: Easing.OutCubic }
@@ -63,7 +72,7 @@ Popup {
         id: dialogBg
         color: Theme.bgDialog
         radius: Theme.radiusLarge
-        border.width: 1
+        border.width: Theme.strokeRegular
         border.color: Theme.borderMedium
 
         Item {
@@ -93,7 +102,7 @@ Popup {
                 anchors.top: parent.top
                 anchors.left: parent.left
                 anchors.right: parent.right
-                height: 1
+                height: Theme.strokeDivider
                 color: Theme.dialogEdgeLight
                 opacity: 0.20
             }
@@ -123,6 +132,7 @@ Popup {
         color: Theme.bgOverlay
     }
 
+    // Shared password field for the three inputs: same metrics, hover-to-reveal eye.
     component RekeyField: TextField {
         id: field
         Layout.fillWidth: true
@@ -143,7 +153,7 @@ Popup {
             implicitHeight: 38
             radius: Theme.radiusSmall
             color: field.activeFocus ? Theme.bgInputFocus : Theme.bgInput
-            border.width: 1
+            border.width: Theme.strokeRegular
             border.color: field.activeFocus ? Theme.borderFocus : Theme.borderSubtle
         }
 
@@ -199,12 +209,18 @@ Popup {
             }
         }
 
+        // The rekey covers the vault, the folder profile, or both, so the copy
+        // depends on folder protection and on whether a vault is open.
         Text {
             Layout.fillWidth: true
             Layout.topMargin: 8
             Layout.leftMargin: 24
             Layout.rightMargin: 24
-            text: "Every record is re-encrypted and the vault file is replaced atomically."
+            text: AppViewModel.protectFolderEnabled && !AppViewModel.vaultLoaded
+                  ? "The folder profile changes now. Plaintext files use the new password when seal re-protects them on exit."
+                  : AppViewModel.protectFolderEnabled
+                    ? "Every vault record and the folder profile move to the new password together."
+                    : "Every record is re-encrypted and the vault file is replaced atomically."
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeMedium
             color: Theme.textSecondary
@@ -286,7 +302,7 @@ Popup {
                         GradientStop { position: 0; color: rekeyCancelButton.pressed ? Theme.ghostBtnPressed : rekeyCancelButton.hovered ? Theme.ghostBtnHoverTop : Theme.ghostBtnTop; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
                         GradientStop { position: 1; color: rekeyCancelButton.pressed ? Theme.ghostBtnPressed : rekeyCancelButton.hovered ? Theme.ghostBtnHoverEnd : Theme.ghostBtnEnd; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
                     }
-                    border.width: 1
+                    border.width: Theme.strokeRegular
                     border.color: rekeyCancelButton.pressed ? Theme.borderPressed
                                 : rekeyCancelButton.hovered ? Theme.borderFocusHover
                                 : Theme.borderSubtle
@@ -332,7 +348,7 @@ Popup {
                         GradientStop { position: 0; color: rekeyOkButton.enabled ? (rekeyOkButton.pressed ? Theme.btnPressTop : rekeyOkButton.hovered ? Theme.btnHoverTop : Theme.btnGradTop) : Theme.btnDisabledTop; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
                         GradientStop { position: 1; color: rekeyOkButton.enabled ? (rekeyOkButton.pressed ? Theme.btnPressBot : rekeyOkButton.hovered ? Theme.btnHoverBot : Theme.btnGradBot) : Theme.btnDisabledBot; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
                     }
-                    border.width: 1
+                    border.width: Theme.strokeRegular
                     border.color: !rekeyOkButton.enabled ? Theme.borderSubtle : rekeyOkButton.hovered ? Theme.borderBright : Theme.borderBtn
                     Behavior on border.color { ColorAnimation { duration: Theme.hoverDuration } }
 
