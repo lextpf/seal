@@ -26,9 +26,12 @@ bool TitleBarFilter::nativeEventFilter(const QByteArray& eventType, void* messag
     {
         case WM_NCCALCSIZE:
         {
-            // Claim the entire window as client area on both NCCALCSIZE
-            // paths. The wParam==FALSE branch matters: letting DefWindowProc
-            // handle it leaves a 1px visible frame around the chrome.
+            // Claim the whole window as client area on both paths. The
+            // wParam==FALSE branch matters: DefWindowProc leaves a 1px visible
+            // frame there. While maximized the proposed rect is replaced by the
+            // monitor work area; without that, the invisible resize border
+            // pushes the frame under the taskbar. A GetMonitorInfoW failure
+            // leaves the rect alone rather than guessing.
             if (IsZoomed(msg->hwnd))
             {
                 HMONITOR mon = MonitorFromWindow(msg->hwnd, MONITOR_DEFAULTTONEAREST);
@@ -59,13 +62,13 @@ bool TitleBarFilter::nativeEventFilter(const QByteArray& eventType, void* messag
         }
         case WM_NCPAINT:
         {
-            // Suppress NC painting - our client covers the whole window.
+            // Suppress NC painting; the client covers the whole window.
             *result = 0;
             return true;
         }
         case WM_NCHITTEST:
         {
-            // QML draws caption buttons; we only handle resize borders.
+            // QML draws the caption buttons; only resize borders are handled.
             POINT pt;
             pt.x = GET_X_LPARAM(msg->lParam);
             pt.y = GET_Y_LPARAM(msg->lParam);
@@ -75,18 +78,25 @@ bool TitleBarFilter::nativeEventFilter(const QByteArray& eventType, void* messag
             // Resize borders (only when not maximized).
             if (!IsZoomed(msg->hwnd))
             {
-                // Raw 92 == SM_CXPADDEDBORDERWIDTH (some old SDKs miss it).
-                int frame = GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(92);
+                // Measure at the window's own DPI so the resize target follows
+                // the monitor that owns the window. GetSystemMetrics reports
+                // only the system DPI and is too small or too large after
+                // crossing between mixed-DPI monitors.
+                const UINT windowDpi = GetDpiForWindow(msg->hwnd);
+                const UINT dpi = windowDpi > 0 ? windowDpi : USER_DEFAULT_SCREEN_DPI;
+                const int paddedBorder = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+                const int frameX = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) + paddedBorder;
+                const int frameY = GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) + paddedBorder;
                 // Top strip first (corners win), then bottom, then sides.
                 // The returned HT* code drives the resize cursor + edge.
-                if (pt.y < rc.top + frame)
+                if (pt.y < rc.top + frameY)
                 {
-                    if (pt.x < rc.left + frame)
+                    if (pt.x < rc.left + frameX)
                     {
                         *result = HTTOPLEFT;
                         return true;
                     }
-                    if (pt.x >= rc.right - frame)
+                    if (pt.x >= rc.right - frameX)
                     {
                         *result = HTTOPRIGHT;
                         return true;
@@ -94,14 +104,14 @@ bool TitleBarFilter::nativeEventFilter(const QByteArray& eventType, void* messag
                     *result = HTTOP;
                     return true;
                 }
-                if (pt.y >= rc.bottom - frame)
+                if (pt.y >= rc.bottom - frameY)
                 {
-                    if (pt.x < rc.left + frame)
+                    if (pt.x < rc.left + frameX)
                     {
                         *result = HTBOTTOMLEFT;
                         return true;
                     }
-                    if (pt.x >= rc.right - frame)
+                    if (pt.x >= rc.right - frameX)
                     {
                         *result = HTBOTTOMRIGHT;
                         return true;
@@ -109,12 +119,12 @@ bool TitleBarFilter::nativeEventFilter(const QByteArray& eventType, void* messag
                     *result = HTBOTTOM;
                     return true;
                 }
-                if (pt.x < rc.left + frame)
+                if (pt.x < rc.left + frameX)
                 {
                     *result = HTLEFT;
                     return true;
                 }
-                if (pt.x >= rc.right - frame)
+                if (pt.x >= rc.right - frameX)
                 {
                     *result = HTRIGHT;
                     return true;
@@ -122,6 +132,8 @@ bool TitleBarFilter::nativeEventFilter(const QByteArray& eventType, void* messag
             }
 
             // Everything else is client; QML drags via startSystemMove().
+            // Never HTCAPTION or HTMAXBUTTON, so the shell contributes no
+            // caption double-click, system menu or Snap Layouts flyout.
             *result = HTCLIENT;
             return true;
         }
@@ -131,14 +143,16 @@ bool TitleBarFilter::nativeEventFilter(const QByteArray& eventType, void* messag
 
 void InstallWindowChrome(HWND hwnd)
 {
-    // Idempotent: once per process lifetime.
+    // Idempotent: once per process lifetime. The guard does not key on hwnd,
+    // so only the first window passed here is ever given the custom chrome.
     static bool installed = false;
     if (installed)
     {
         return;
     }
 
-    // Remove window icon from the title bar.
+    // Remove window icon from the title bar. SetClassLongPtr edits the window
+    // class, so this clears the icon for every window Qt creates from it.
     SetClassLongPtr(hwnd, GCLP_HICON, 0);
     SetClassLongPtr(hwnd, GCLP_HICONSM, 0);
     SendMessage(hwnd, WM_SETICON, ICON_SMALL, 0);
@@ -156,6 +170,9 @@ void InstallWindowChrome(HWND hwnd)
                                       WS_EX_WINDOWEDGE);
     SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle);
 
+    // Qt takes no ownership of a native event filter and nothing removes this
+    // one. Keeping the single instance for the process lifetime means it can
+    // never outlive its own registration.
     auto* filter = new TitleBarFilter();
     filter->m_Hwnd = hwnd;
     QCoreApplication::instance()->installNativeEventFilter(filter);
@@ -185,21 +202,16 @@ void InstallWindowChrome(HWND hwnd)
 
 void ApplyWindowTheme(HWND hwnd, bool dark)
 {
-    // Win10/11 DWM attribute IDs not always present in older SDK headers;
-    // declared here so we can build against older SDKs.
-    static constexpr DWORD DWMWA_USE_IMMERSIVE_DARK_MODE = 20;  // Win10 1903+
-    static constexpr DWORD DWMWA_CAPTION_COLOR = 34;            // Win11 22000+
-    static constexpr DWORD DWMWA_BORDER_COLOR = 35;             // Win11 22000+
+    // Declared here because older SDK headers lack these DWM attribute ids.
+    // Id 20 is honoured from Win10 build 18985 on; builds 17763-18362 used id
+    // 19, so dark mode is ignored there instead of applied.
+    static constexpr DWORD DWMWA_USE_IMMERSIVE_DARK_MODE = 20;  // Win10 18985+
+    static constexpr DWORD DWMWA_BORDER_COLOR = 34;             // Win11 22000+
+    static constexpr DWORD DWMWA_CAPTION_COLOR = 35;            // Win11 22000+
     static constexpr DWORD DWMWA_TEXT_COLOR = 36;               // Win11 22000+
 
     BOOL darkMode = dark ? TRUE : FALSE;
     DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &darkMode, sizeof(darkMode));
-
-    // Suppress the 1px DWM accent stroke so client content paints flush to
-    // the edge; shadow + rounded corners are separate attributes.
-    // 0xFFFFFFFE = DWMWA_COLOR_NONE.
-    COLORREF borderNone = 0xFFFFFFFE;
-    DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &borderNone, sizeof(borderNone));
 
     // Caption color still feeds taskbar thumbnails and alt-tab previews.
     COLORREF captionColor = dark ? RGB(7, 8, 16) : RGB(248, 246, 242);
@@ -207,6 +219,13 @@ void ApplyWindowTheme(HWND hwnd, bool dark)
 
     COLORREF textColor = dark ? RGB(224, 230, 244) : RGB(30, 26, 18);
     DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, &textColor, sizeof(textColor));
+
+    // 0xFFFFFFFE = DWMWA_COLOR_NONE: drops the 1px accent stroke so client
+    // content paints flush to the edge. Shadow and rounded corners are separate
+    // attributes. Apply last, because another caption attribute write makes
+    // Windows recompute the frame color.
+    COLORREF borderNone = 0xFFFFFFFE;
+    DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &borderNone, sizeof(borderNone));
 }
 
 }  // namespace seal
