@@ -3,12 +3,16 @@ import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
 
+// Generic yes/no dialog: set title, message, tone and titleIcon, then act on
+// confirmed(). Main.qml also reuses this shell for the error and info popups by
+// replacing contentItem outright, so edits to the default content below do not
+// reach those two instances.
 Popup {
     id: root
 
     property string title: "Confirm"
     property string message: ""
-    property color tone: Theme.btnDeleteText
+    property color tone: Theme.btnDeleteText  // Tints the icon, the header wash and the corner blob
     property string titleIcon: Theme.iconTrash
 
     signal confirmed()
@@ -19,7 +23,7 @@ Popup {
     padding: 0
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
-    // Slightly weightier scale+fade transition to match the richer dialog shell.
+    // Scale+fade entrance shared with AccountDialog and RekeyDialog.
     enter: Transition {
         ParallelAnimation {
             NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 175; easing.type: Easing.OutCubic }
@@ -37,7 +41,7 @@ Popup {
         id: dialogBg
         color: Theme.bgDialog
         radius: Theme.radiusLarge
-        border.width: 1
+        border.width: Theme.strokeRegular
         border.color: Theme.borderMedium
 
         Item {
@@ -67,7 +71,7 @@ Popup {
                 anchors.top: parent.top
                 anchors.left: parent.left
                 anchors.right: parent.right
-                height: 1
+                height: Theme.strokeDivider
                 color: Theme.dialogEdgeLight
                 opacity: 0.20
             }
@@ -101,7 +105,7 @@ Popup {
     contentItem: ColumnLayout {
         spacing: 0
 
-        // Title row with a semantic badge anchored to the dialog tone.
+        // Title row: icon slot tinted with tone, then the title text.
         RowLayout {
             Layout.fillWidth: true
             Layout.topMargin: 24
@@ -153,7 +157,7 @@ Popup {
             Layout.rightMargin: 24
             spacing: Theme.spacingSmall
 
-            // Spacer pushes buttons to the right side of the dialog.
+            // Spacer: pushes both buttons to the right edge.
             Item { Layout.fillWidth: true }
 
             // Ghost "No" button, low visual weight.
@@ -185,7 +189,7 @@ Popup {
                         GradientStop { position: 0; color: noButton.pressed ? Theme.ghostBtnPressed : noButton.hovered ? Theme.ghostBtnHoverTop : Theme.ghostBtnTop; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
                         GradientStop { position: 1; color: noButton.pressed ? Theme.ghostBtnPressed : noButton.hovered ? Theme.ghostBtnHoverEnd : Theme.ghostBtnEnd; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
                     }
-                    border.width: 1
+                    border.width: Theme.strokeRegular
                     border.color: noButton.pressed ? Theme.borderPressed
                                 : noButton.hovered ? Theme.borderFocusHover
                                 : Theme.borderSubtle
@@ -200,7 +204,7 @@ Popup {
                 onPressed: noRipple.trigger(noHover.point.position.x, noHover.point.position.y)
             }
 
-            // Primary "Yes" button. Emits confirmed() then closes.
+            // Primary "Yes" button. The handler runs on confirmed(), before close().
             Button {
                 id: yesButton
                 text: "Yes"
@@ -231,7 +235,7 @@ Popup {
                         GradientStop { position: 0; color: yesButton.pressed ? Theme.btnPressTop : yesButton.hovered ? Theme.btnHoverTop : Theme.btnGradTop; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
                         GradientStop { position: 1; color: yesButton.pressed ? Theme.btnPressBot : yesButton.hovered ? Theme.btnHoverBot : Theme.btnGradBot; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
                     }
-                    border.width: 1
+                    border.width: Theme.strokeRegular
                     border.color: yesButton.hovered ? Theme.borderBright : Theme.borderBtn
                     Behavior on border.color { ColorAnimation { duration: Theme.hoverDuration } }
 
