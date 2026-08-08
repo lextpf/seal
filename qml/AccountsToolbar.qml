@@ -2,11 +2,16 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+// Header strip of the accounts grid: record count on the left, sort control on the
+// right. AccountsGrid owns it and supplies accountCount. Sort order is view state:
+// the dropdown writes Theme.sortMode, which is persisted, and Main binds that to the
+// view model. No view here touches the model.
 Rectangle {
     id: root
     property int accountCount: 0
     property bool isCompact: false
 
+    // Index order matches the C++ sort modes: 0 A-Z, 1 Z-A, 2 grouped by brand.
     readonly property var sortLabels: ["A-Z", "Z-A", "Grouped by brand"]
 
     implicitHeight: 32
@@ -14,28 +19,22 @@ Rectangle {
         GradientStop { position: 0; color: Theme.bgTableHeaderTop }
         GradientStop { position: 1; color: Theme.bgTableHeaderEnd }
     }
-    radius: Theme.radiusLarge
+    topLeftRadius: Theme.radiusLarge
+    topRightRadius: Theme.radiusLarge
+    bottomLeftRadius: 0
+    bottomRightRadius: 0
     clip: true
 
     Rectangle {
         anchors.bottom: parent.bottom
         anchors.left: parent.left
         anchors.right: parent.right
-        height: Theme.radiusLarge
-        gradient: Gradient {
-            GradientStop { position: 0; color: Theme.bgTableHeaderEnd }
-            GradientStop { position: 1; color: Theme.bgTableHeaderEnd }
-        }
-    }
-
-    Rectangle {
-        anchors.bottom: parent.bottom
-        anchors.left: parent.left
-        anchors.right: parent.right
-        height: 1
+        height: Theme.strokeDivider
         color: Theme.borderSubtle
     }
 
+    // Small label-plus-chevron dropdown. It reports the chosen index and never stores
+    // it, so the current selection stays a binding on whatever owns the value.
     component DropdownButton: Item {
         id: ddRoot
         property var labels: []
@@ -52,7 +51,7 @@ Rectangle {
             color: ddHover.containsMouse || menuPopup.opened
                    ? Theme.bgHover
                    : "transparent"
-            border.width: 1
+            border.width: Theme.strokeRegular
             border.color: menuPopup.opened
                           ? Theme.borderBright
                           : ddHover.containsMouse
@@ -111,7 +110,7 @@ Rectangle {
             background: Rectangle {
                 implicitWidth: 160
                 color: Theme.bgDialog
-                border.width: 1
+                border.width: Theme.strokeRegular
                 border.color: Theme.borderMedium
                 radius: Theme.radiusMedium
             }
@@ -166,7 +165,7 @@ Rectangle {
 
         DropdownButton {
             labels: root.sortLabels
-            labelPrefix: "Sort: "
+            labelPrefix: root.width < 560 ? "" : "Sort: "
             currentIndex: Theme.sortMode
             visible: !root.isCompact
             onIndexChosen: function(newIndex) { Theme.sortMode = newIndex; }
