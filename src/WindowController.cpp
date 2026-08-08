@@ -6,7 +6,10 @@
 #include "WindowChrome.hpp"
 
 #include <QtGui/QGuiApplication>
+#include <QtGui/QScreen>
 #include <QtGui/QWindow>
+
+#include <algorithm>
 
 #include <windows.h>
 
@@ -124,6 +127,15 @@ void WindowController::toggleAlwaysOnTop()
 
 void WindowController::toggleCompact()
 {
+    // kCompactHeight / kNormalMinimumHeight are mirrored by the minimumHeight
+    // binding in qml/Main.qml, and kWorkAreaInset by its
+    // fitInitialWindowToScreen(). Keep both sides in step.
+    static constexpr int kCompactHeight = 272;
+    static constexpr int kNormalMinimumHeight = 480;
+    static constexpr int kDefaultNormalWidth = 1600;
+    static constexpr int kDefaultNormalHeight = 690;
+    static constexpr int kWorkAreaInset = 64;
+
     auto windows = QGuiApplication::topLevelWindows();
     if (windows.isEmpty())
     {
@@ -135,18 +147,29 @@ void WindowController::toggleCompact()
 
     if (m_Compact)
     {
-        // Save dimensions so we can restore the user's size on exit.
+        // Save the size so leaving compact can restore it. Only the height
+        // collapses; the chosen width is kept as it is.
         m_NormalWidth = win->width();
         m_NormalHeight = win->height();
-        win->setMinimumHeight(272);
-        win->resize(win->width(), 272);
+        win->setMinimumHeight(kCompactHeight);
+        win->resize(win->width(), kCompactHeight);
     }
     else
     {
-        // Restore saved dimensions; default if launched directly compact.
-        win->setMinimumHeight(540);
-        win->resize(m_NormalWidth > 0 ? m_NormalWidth : 1420,
-                    m_NormalHeight > 0 ? m_NormalHeight : 690);
+        // Restore the saved size, clamped to the current monitor's work area,
+        // which also re-fits a strip dragged onto a smaller monitor.
+        win->setMinimumHeight(kNormalMinimumHeight);
+        int restoreWidth = m_NormalWidth > 0 ? m_NormalWidth : kDefaultNormalWidth;
+        int restoreHeight = m_NormalHeight > 0 ? m_NormalHeight : kDefaultNormalHeight;
+        if (QScreen* screen = win->screen())
+        {
+            const QSize available = screen->availableGeometry().size();
+            restoreWidth = std::min(
+                restoreWidth, std::max(win->minimumWidth(), available.width() - kWorkAreaInset));
+            restoreHeight = std::min(
+                restoreHeight, std::max(kNormalMinimumHeight, available.height() - kWorkAreaInset));
+        }
+        win->resize(restoreWidth, restoreHeight);
     }
 
     qCInfo(logBackend).noquote() << QString::fromStdString(
