@@ -16,52 +16,23 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtGui/QGuiApplication>
-#include <QtGui/QScreen>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
 #include <QtQuick/QQuickWindow>
 #include <QtQuickControls2/QQuickStyle>
 
-#include <algorithm>
-
-// DPI-aware text scale factor. Baseline 1920 px = 1.0. Above 1920 px we
-// apply only a fraction of the excess (text-only boost), so buttons +
-// layout don't double on a 4K display. Clamped to [kMinScale, kMaxScale]
-// for extreme displays.
-static qreal computeUiScale()
-{
-    static constexpr qreal kBaselineWidth = 1920.0;
-    static constexpr qreal kTextBoostFactor = 0.45;
-    static constexpr qreal kMinScale = 1.0;
-    static constexpr qreal kMaxScale = 1.5;
-
-    QScreen* screen = QGuiApplication::primaryScreen();
-    if (!screen)
-        return kMinScale;
-
-    const qreal physicalWidth =
-        static_cast<qreal>(screen->size().width()) * screen->devicePixelRatio();
-    if (physicalWidth <= kBaselineWidth)
-        return kMinScale;
-
-    const qreal rawScale = physicalWidth / kBaselineWidth;
-    const qreal textScale = 1.0 + (rawScale - 1.0) * kTextBoostFactor;
-    return std::clamp(textScale, kMinScale, kMaxScale);
-}
-
 int RunQMLMode(int argc, char* argv[])
 {
-    // "Basic" is the non-native Quick Controls style; lets Theme.qml's
-    // palette take full effect regardless of OS look-and-feel.
+    // "Basic" is the non-native Quick Controls style, so Theme.qml's palette
+    // takes full effect regardless of the OS look and feel.
     QQuickStyle::setStyle("Basic");
 
     QGuiApplication app(argc, argv);
 
     app.setApplicationName("seal");
     app.setOrganizationName("seal");
-    const qreal uiScale = computeUiScale();
-    qCInfo(logApp).noquote() << QString::fromStdString(seal::diag::joinFields(
-        {"event=app.startup.begin", "mode=gui", seal::diag::kv("ui_scale", uiScale, 2)}));
+    qCInfo(logApp).noquote() << QString::fromStdString(
+        seal::diag::joinFields({"event=app.startup.begin", "mode=gui"}));
     if (seal::Cryptography::isRemoteSession())
     {
         qCCritical(logApp).noquote() << QString::fromStdString(
@@ -70,25 +41,28 @@ int RunQMLMode(int argc, char* argv[])
                                     "reason=remote_session_detected"}));
     }
 
-    // The Qt-free core (records, session, vault path) is constructed before the
-    // ViewModel and outlives it, so the borrowed pointers AppViewModel hands to
-    // VaultListModel / FillController stay valid for the whole UI session.
+    // CredentialWorkspace is the Qt-free core (records, session, vault path);
+    // AsyncRunner and FillController are QObjects. All three are constructed
+    // before every ViewModel and outlive them, so the pointers borrowed from the
+    // workspace stay valid for the whole UI session: by VaultListModel through
+    // AppViewModel, and by FillController through TypeController::armFor.
     seal::CredentialWorkspace workspace;
     seal::AsyncRunner async;
     seal::FillController fillEngine;
     seal::AppViewModel appViewModel(workspace, async);
     // TypeController owns the auto-type surface (the "Fill" context property) and
-    // drives the borrowed fillEngine. appViewModel serves as both the status sink
-    // (IUiFeedback) and the password gate (IPasswordGate) for deferred arming.
+    // drives the borrowed fillEngine. appViewModel is both its status sink
+    // (IUiFeedback) and its password gate (IPasswordGate) for deferred arming.
     seal::TypeController fill(workspace, appViewModel, appViewModel, fillEngine, async);
     appViewModel.setFillControl(&fill);
-    // Bridge borrows fillEngine (must outlive it) and routes its status messages
-    // through appViewModel's IUiFeedback::setStatus so the shared footer updates.
+    // Bridge borrows fillEngine, which is declared earlier and therefore
+    // outlives it, and routes its status messages through appViewModel's
+    // IUiFeedback::setStatus so the shared footer updates.
     seal::BridgeViewModel bridge(&fillEngine);
-    // Zero-gesture staged auto-fill. Owned collaborator (NOT a context
-    // property): polls the bridge's nav snapshot and auto-arms fillEngine on a
-    // unique host match. Borrows workspace/fillEngine/appViewModel (all declared
-    // earlier, so they outlive it).
+    // Zero-gesture staged auto-fill. An owned collaborator, not a context
+    // property: it polls the bridge's nav snapshot and auto-arms fillEngine on a
+    // unique host match. Borrows workspace, fillEngine and appViewModel, all
+    // declared earlier, so they outlive it.
     seal::StagingController staging(workspace, fillEngine, appViewModel);
     seal::WindowController window;
     // The embedded-CLI surface (the "Cli" context property). Declared last so it
@@ -96,10 +70,10 @@ int RunQMLMode(int argc, char* argv[])
     // IPasswordGate), and fill (as IFillControl), all of which must outlive it.
     seal::CliPanelViewModel cli(workspace, appViewModel, appViewModel, fill);
     appViewModel.setCliPanel(&cli);
-    // Detach the borrowed seams when their owners are destroyed. fill/cli are
-    // declared after appViewModel, so they destruct first; nulling the pointers
-    // here ensures ~AppViewModel's cleanup() never dereferences a freed
-    // TypeController / CliPanelViewModel (teardown use-after-free fix).
+    // Detach the borrowed seams when their owners are destroyed. fill and cli
+    // are declared after appViewModel, so they destruct first; nulling the
+    // pointers here keeps ~AppViewModel's cleanup() from dereferencing a freed
+    // TypeController or CliPanelViewModel.
     QObject::connect(&fill,
                      &QObject::destroyed,
                      &appViewModel,
@@ -119,9 +93,9 @@ int RunQMLMode(int argc, char* argv[])
                      &appViewModel,
                      [p = static_cast<seal::IUiFeedback*>(&appViewModel)](const QString& t)
                      { p->setStatus(t); });
-    // Staged auto-fill: highlight the auto-armed record, and follow the
-    // Bridge.autoStageEnabled master switch. StagingController is not exposed
-    // to QML; the toggle rides the existing Bridge context property.
+    // Staged auto-fill: highlight the auto-armed record and follow the
+    // Bridge.autoStageEnabled master switch. StagingController is not exposed to
+    // QML, so the toggle rides the Bridge context property.
     QObject::connect(&staging,
                      &seal::StagingController::autoArmedForRecord,
                      &appViewModel,
@@ -130,16 +104,16 @@ int RunQMLMode(int argc, char* argv[])
                      &seal::BridgeViewModel::autoStageEnabledChanged,
                      &staging,
                      [&staging, &bridge] { staging.setEnabled(bridge.autoStageEnabled()); });
-    // Surface the TypeController's fill errors through the same error dialog that
-    // AppViewModel's vault errors use, so the QML Connections target stays single.
+    // Route TypeController fill errors into the same error dialog as
+    // AppViewModel's vault errors, so QML keeps a single Connections target.
     QObject::connect(&fill,
                      &seal::TypeController::errorOccurred,
                      &appViewModel,
                      &seal::AppViewModel::errorOccurred);
     QQmlApplicationEngine engine;
-    // Abort on QML construction failure (e.g. Main.qml syntax error)
-    // instead of leaving an empty window. QueuedConnection runs the slot
-    // after the engine finishes its current frame.
+    // Abort on QML construction failure (a Main.qml type error, for example)
+    // instead of leaving an empty window. QueuedConnection defers exit(1) until
+    // control returns to the event loop, so the engine finishes unwinding.
     QObject::connect(
         &engine,
         &QQmlApplicationEngine::objectCreationFailed,
@@ -147,7 +121,6 @@ int RunQMLMode(int argc, char* argv[])
         [] { QCoreApplication::exit(1); },
         Qt::QueuedConnection);
 
-    engine.rootContext()->setContextProperty("UiScale", uiScale);  // DPI-aware text scale factor
     engine.rootContext()->setContextProperty("AppViewModel", &appViewModel);
     engine.rootContext()->setContextProperty("Fill", &fill);
     engine.rootContext()->setContextProperty("Bridge", &bridge);
