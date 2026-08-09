@@ -14,8 +14,8 @@
 namespace
 {
 
-// RAII for OpenClipboard / CloseClipboard. Writers must EmptyClipboard()
-// explicitly after locking.
+// RAII for OpenClipboard / CloseClipboard. A writer calls EmptyClipboard()
+// itself after locking.
 struct ClipboardLock
 {
     bool ok = false;
@@ -34,13 +34,13 @@ struct ClipboardLock
     ClipboardLock& operator=(const ClipboardLock&) = delete;
 };
 
-// TTL thread in unique_ptr. Clipboard::shutdown() resets (= joins) it
-// before main() returns, so we don't rely on static-destruction order
-// (DLL unloads could invalidate clipboard APIs and deadlock the join).
+// TTL thread in a unique_ptr. Clipboard::shutdown() resets (= joins) it before
+// main() returns, so static-destruction order does not matter: a DLL unload
+// could invalidate the clipboard API and deadlock the join.
 std::unique_ptr<std::jthread> s_TtlThread;
 
-// Serialises access to s_TtlThread so concurrent copyWithTTL calls don't
-// race on the jthread assignment.
+// Serialises access to s_TtlThread so concurrent copyWithTTL calls cannot race
+// on the jthread assignment.
 std::mutex s_TtlMutex;
 
 }  // namespace
@@ -108,7 +108,7 @@ bool Clipboard::setText(const std::string& text)
 
 bool Clipboard::copyWithTTL(const char* data, size_t n, DWORD ttl_ms)
 {
-    // Locked, guard-paged storage so the value can't swap during TTL.
+    // Locked, guard-paged storage so the value cannot swap during the TTL.
     seal::secure_string<> val;
     val.assign(data, data + n);
 
@@ -122,14 +122,14 @@ bool Clipboard::copyWithTTL(const char* data, size_t n, DWORD ttl_ms)
     }
 
     // TTL thread: sleeps in short increments (so stop_requested wakes it),
-    // checks the clipboard still holds our value, then clears. Lock
+    // checks the clipboard still holds the copied value, then clears. The lock
     // serialises copyWithTTL so the unique_ptr reset (= join previous) is
     // race-free.
     std::lock_guard<std::mutex> ttlLock(s_TtlMutex);
     s_TtlThread = std::make_unique<std::jthread>(
         [val = std::move(val), ttl_ms](std::stop_token stop) mutable
         {
-            // 100 ms increments so stop_requested wakes us quickly.
+            // 100 ms increments so stop_requested is seen quickly.
             auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ttl_ms);
             while (std::chrono::steady_clock::now() < deadline)
             {
@@ -182,7 +182,7 @@ bool Clipboard::copyWithTTL(const char* data, size_t n, DWORD ttl_ms)
                 same = seal::Cryptography::ctEqual(cur, val);
             }
 
-            // Clear only if the clipboard still holds our value.
+            // Clear only if the clipboard still holds the copied value.
             if (same)
             {
                 EmptyClipboard();
@@ -220,8 +220,8 @@ bool Clipboard::copyInputFile()
     return ok;
 }
 
-// Shared state for the measurement hook. Atomics document the cross-thread
-// publish and rule out subtle reordering.
+// Shared state for the measurement hook. The atomics make the cross-thread
+// publish explicit and rule out reordering.
 std::atomic<LONGLONG> s_CallNextDuration{0};
 std::atomic<bool> s_HookFired{false};
 
@@ -241,8 +241,8 @@ inline long long perfFrequency()
     return std::bit_cast<long long>(v);
 }
 
-// Temporary WH_KEYBOARD_LL callback timing CallNextHookEx only.
-// Single-hook chain returns in <0.1 ms; any third-party hook inflates this.
+// Temporary low-level keyboard callback that times CallNextHookEx only. A
+// single-hook chain returns in <0.1 ms; any third-party hook inflates that.
 static LRESULT CALLBACK MeasureHookProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
     long long before = perfCounter();
@@ -253,13 +253,12 @@ static LRESULT CALLBACK MeasureHookProc(int nCode, WPARAM wParam, LPARAM lParam)
     return r;
 }
 
-// Heuristic for suspicious global keyboard hooks. Advisory only --
-// typeSecret() proceeds either way but emits a warning.
+// Heuristic for suspicious global keyboard hooks. Advisory only - typeSecret()
+// proceeds either way and just emits a warning.
 static bool isKeyboardHookPresent()
 {
-    // Heuristic 1: zero-size foreground window. Keyloggers sometimes own
-    // the foreground with an invisible overlay; legit windows have non-zero
-    // dimensions.
+    // Heuristic 1: zero-size foreground window. A keylogger sometimes owns the
+    // foreground with an invisible overlay; a real window has non-zero size.
     HWND fg = GetForegroundWindow();
     if (fg)
     {
@@ -273,9 +272,10 @@ static bool isKeyboardHookPresent()
         }
     }
 
-    // Heuristic 2: hook-chain latency. Time CallNextHookEx only (not the
-    // pump or Sleep). 3 samples + median filters jitter. Empty chain <0.1
-    // ms; >2 ms catches hooks doing real work (disk/IPC/network).
+    // Heuristic 2: hook-chain latency. Time CallNextHookEx only, not the pump
+    // or Sleep. Three samples plus a median filter jitter. An empty chain
+    // returns in <0.1 ms; >2 ms catches a hook doing real work (disk, IPC,
+    // network).
     long long freq = perfFrequency();
 
     HHOOK hHook = SetWindowsHookExW(WH_KEYBOARD_LL, MeasureHookProc, nullptr, 0);
@@ -299,8 +299,8 @@ static bool isKeyboardHookPresent()
         s_HookFired.store(false, std::memory_order_relaxed);
         SendInput(2, dummyInput, sizeof(INPUT));
 
-        // Pump until the hook fires or 50 ms timeout. Tight PeekMessage
-        // (no Sleep) removes the ~10 ms scheduler noise.
+        // Pump until the hook fires or 50 ms pass. A tight PeekMessage loop
+        // without Sleep removes the ~10 ms scheduler noise.
         auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
         MSG msg;
         while (!s_HookFired.load(std::memory_order_acquire) &&
@@ -343,13 +343,13 @@ bool typeSecret(const wchar_t* bytes, int len, DWORD delay_ms)
         return false;
     }
 
-    // Best-effort keylogger heuristic; a determined attacker evades detection.
+    // Best-effort keylogger heuristic; a determined attacker evades it.
     if (isKeyboardHookPresent())
     {
         OutputDebugStringA("[seal] WARN: suspicious keyboard hooks detected before auto-type\n");
     }
 
-    // Work directly from caller's buffer; copying into pageable
+    // Work straight from the caller's buffer; a copy into a pageable
     // std::wstring would leak the secret.
     if (len < 0)
         len = static_cast<int>(wcslen(bytes));
@@ -378,22 +378,28 @@ bool typeSecret(const wchar_t* bytes, int len, DWORD delay_ms)
         seq.push_back(up);
     }
 
-    // Send one event at a time; 5..12 ms jitter after each down/up pair
-    // stops rate-limiters in web apps / RDP from dropping or reordering
-    // keystrokes.
+    // Send each character as one down+up pair in a single SendInput call, with
+    // 30..45 ms of jitter between characters.
+    //
+    // Windows 11's modern Notepad and other async/TSF text stacks drop or
+    // transpose a character when the UNICODE events arrive too fast or split
+    // across separate calls - an early keystroke lands as its neighbour, e.g.
+    // "gmx.de" typed as "gmx.ee". One call per pair plus this pacing types
+    // reliably, and the jitter still defeats web-app and RDP rate limiters that
+    // key off machine-perfect timing.
+    //
+    // seq holds [down, up] adjacently per character, so &seq[i] points at a
+    // contiguous pair.
     bool allSent = true;
-    for (size_t i = 0; i < seq.size(); ++i)
+    for (size_t i = 0; i + 1 < seq.size(); i += 2)
     {
-        const UINT sent = SendInput(1, &seq[i], sizeof(INPUT));
-        if (sent != 1)
+        const UINT sent = SendInput(2, &seq[i], sizeof(INPUT));
+        if (sent != 2)
         {
             allSent = false;
             break;
         }
-        if ((i & 1) == 1)
-        {
-            Sleep(5 + (GetTickCount64() & 7));
-        }
+        Sleep(30 + (GetTickCount64() & 15));
     }
 
     // Scrub keystroke data; SecureZeroMemory cannot be elided (unlike memset).
@@ -443,8 +449,8 @@ void wipeConsoleBuffer()
     COORD home{0, 0};
     DWORD written = 0;
 
-    // Overwrite every cell so previously displayed secrets (e.g. decrypted
-    // passwords) cannot be screen-scraped. Also reset attributes + cursor.
+    // Overwrite every cell so a secret printed earlier cannot be screen-scraped,
+    // then reset attributes and cursor.
     FillConsoleOutputCharacterA(hOut, ' ', cells, home, &written);
     FillConsoleOutputAttribute(hOut, info.wAttributes, cells, home, &written);
     SetConsoleCursorPosition(hOut, home);
