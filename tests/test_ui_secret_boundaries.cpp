@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -122,6 +123,45 @@ TEST(MvvmNamingTest, BridgeCollaboratorUsesViewModelNaming)
     expectAbsent(bridgeHeader, "BridgePresenter");
     expectAbsent(bridgeCpp, "BridgePresenter");
     expectAbsent(cmake, "src/BridgePresenter.cpp");
+}
+
+TEST(MvvmCommandRoutingTest, EveryBridgeInvokableHasAQmlCaller)
+{
+    const std::string bridgeHeader = readSourceFile("src/BridgeViewModel.hpp");
+    std::string allQml;
+    const std::filesystem::path qmlDir = std::filesystem::path(SEAL_SOURCE_DIR) / "qml";
+    for (const auto& entry : std::filesystem::directory_iterator(qmlDir))
+    {
+        if (entry.is_regular_file() && entry.path().extension() == ".qml")
+        {
+            allQml +=
+                readSourceFile((std::filesystem::path("qml") / entry.path().filename()).string());
+        }
+    }
+
+    const std::regex invokablePattern(R"(Q_INVOKABLE\s+[^(;\r\n]+\s+(\w+)\s*\()");
+    std::size_t count = 0;
+    for (std::sregex_iterator match(bridgeHeader.begin(), bridgeHeader.end(), invokablePattern),
+         end;
+         match != end;
+         ++match)
+    {
+        ++count;
+        const std::string method = (*match)[1].str();
+        expectPresent(allQml, "Bridge." + method + "(");
+    }
+    EXPECT_GT(count, 0U);
+}
+
+TEST(MvvmCommandRoutingTest, BrowserSetupActionLivesInHeaderRow)
+{
+    const std::string headerBar = readSourceFile("qml/HeaderBar.qml");
+    const std::string bridgeSettings = readSourceFile("qml/BridgeSettings.qml");
+
+    expectPresent(headerBar, "text: \"Setup\"");
+    expectPresent(headerBar, "Bridge.runInstallBrowserExtension()");
+    expectPresent(headerBar, "Bridge.runUninstallBrowserExtension()");
+    expectAbsent(bridgeSettings, "text: \"Setup\"");
 }
 
 TEST(MvvmCommandRoutingTest, CliEchoClassificationLivesInCliHandler)
@@ -254,6 +294,43 @@ TEST(Top5FeaturesTest, RekeyFlowIsViewModelMediatedAndSecretSafe)
     // password text to anything but the two invocation arguments.
     expectPresent(rekeyDialog, "function clearFields()");
     expectAbsent(rekeyDialog, "vaultModel");
+}
+
+TEST(ProtectedFolderWiringTest, TogglePreflightAndHeldCloseStayViewModelMediated)
+{
+    const std::string appViewModelHeader = readSourceFile("src/AppViewModel.hpp");
+    const std::string appViewModelCpp = readSourceFile("src/AppViewModel.cpp");
+    const std::string headerBar = readSourceFile("qml/HeaderBar.qml");
+    const std::string mainQml = readSourceFile("qml/Main.qml");
+    const std::string dialog = readSourceFile("qml/ProtectFolderDialog.qml");
+    const std::string cmake = readSourceFile("CMakeLists.txt");
+
+    expectPresent(appViewModelHeader, "protectFolderEnabled");
+    expectPresent(appViewModelHeader, "Q_INVOKABLE void requestProtectFolderEnabled(bool enabled)");
+    expectPresent(appViewModelHeader,
+                  "confirmProtectFolderEnabled(QString password, QString confirmation)");
+    expectPresent(appViewModelCpp, "security/protectFolder/");
+    expectPresent(appViewModelCpp, "m_AutoEncryptDirectory =");
+    expectPresent(appViewModelCpp, "looksLikeVault(");
+    expectPresent(appViewModelCpp, "verifyProtectedFolderProfile(");
+    expectPresent(appViewModelCpp, "createProtectedFolderProfile(");
+
+    expectPresent(headerBar, "signal protectFolderToggled(bool enabled)");
+    expectPresent(headerBar, "property bool protectFolderEnabled");
+    expectPresent(mainQml, "protectFolderEnabled: AppViewModel.protectFolderEnabled");
+    expectPresent(mainQml, "ProtectFolderDialog {");
+    expectPresent(mainQml, "close.accepted = false");
+    expectPresent(mainQml, "AppViewModel.cleanup()");
+    expectPresent(mainQml, "onCleanupFinished");
+
+    expectPresent(dialog, "property var encryptFiles");
+    expectPresent(dialog, "property var skippedFiles");
+    expectPresent(dialog, "property int passwordMode");
+    expectPresent(dialog, "function clearPasswordFields()");
+    expectPresent(dialog, "Irreversible warning:");
+    expectPresent(dialog, ".seal-folder-profile");
+    expectPresent(cmake, "qml/ProtectFolderDialog.qml");
+    expectPresent(cmake, "src/ProtectedFolderProfile.cpp");
 }
 
 TEST(Top5FeaturesTest, AutoLockIsViewModelOwnedAndInvisibleToQml)
@@ -410,8 +487,9 @@ TEST(StagedAutofillBoundary, StagingNeverDecryptsAndReleaseFailsClosed)
     expectPresent(contentJs, "msg.url_host !== location.host");
     expectPresent(contentJs, "msg.visit !== VISIT_TOKEN");
 
-    // typeSecret must report SendInput failure instead of marking fills complete.
-    expectPresent(clipboardSrc, "if (sent != 1)");
+    // typeSecret sends each key as one atomic down+up pair and must report a
+    // short SendInput (partial or failed pair) instead of marking fills complete.
+    expectPresent(clipboardSrc, "if (sent != 2)");
 }
 
 TEST(BrowserExtensionBoundary, ClicksAreSecureAndUsernameRoutesByVisit)
@@ -453,6 +531,35 @@ TEST(BrowserBridgeBoundary, ShellHopsRequireTrustedShellImages)
     expectPresent(signerHpp, "shellPublisherMatches");
     expectPresent(signerHpp, "isShellPathAllowed");
     expectPresent(signerHpp, "winVerifyTrustOk(imagePath)");
+
+    // Inbox shells carry no embedded signature - they are catalog-signed. An
+    // embedded-only gate is unsatisfiable for them and silently kills the
+    // whole shell-hop traversal, so the catalog path is load-bearing rather
+    // than a fallback. SignerFamilyTest.TrustsCatalogSignedInboxShells is the
+    // behavioural check; this only stops the code path being deleted.
+    expectPresent(signerHpp, "detail::catalogTrustOk(imagePath, catalogPublisher)");
+    expectPresent(signerHpp, "WTD_CHOICE_CATALOG");
+}
+
+// host/browser/main.cpp is a separate target and is not compiled into
+// seal_tests, so this lifecycle invariant can only be pinned by a scan.
+//
+// The host's forward loop blocks on a stdin read that only the browser can
+// end, so bridge death is invisible to it; only the reverse-reader thread
+// sees the pipe drop. If that thread merely returns, the process survives
+// its own bridge and keeps the browser's native-messaging port open - and
+// the extension reconnects only once that port drops, so both its backoff
+// and its 30 s alarm stay disarmed. The symptom is that restarting seal
+// never reconnects until the extension is manually reloaded.
+TEST(BrowserHostBoundary, HostExitsWhenItsBridgePipeDies)
+{
+    const std::string hostMain = readSourceFile("host/browser/main.cpp");
+
+    expectPresent(hostMain, "emitExitDiag(0, \"bridge_pipe_closed\")");
+    expectPresent(hostMain, "ExitProcess(0)");
+    // Must stay conditional: an orderly teardown signals shutdownEvent and the
+    // main loop writes its own exit line, so exiting there would be wrong.
+    expectPresent(hostMain, "WaitForSingleObject(shutdownEvent, 0) != WAIT_OBJECT_0");
 }
 
 TEST(BrowserExtensionBoundary, VisibleFieldGateUsesRenderedViewportAndClippingChecks)
@@ -563,4 +670,34 @@ TEST(Phase2aBoundaryTest, SubViewModelsDoNotIncludeAppViewModel)
     expectAbsent(readSourceFile("src/CliPanelViewModel.cpp"), "#include \"AppViewModel.hpp\"");
     expectAbsent(readSourceFile("src/TypeController.cpp"), "#include \"AppViewModel.hpp\"");
     expectAbsent(readSourceFile("src/CredentialWorkspace.hpp"), "#include <Q");  // Qt-free core
+}
+
+TEST(SecureDesktopUnlockBoundary, CapturedPasswordStaysInLockedMemory)
+{
+    const std::string hpp = readSourceFile("src/AppViewModel.hpp");
+    const std::string cpp = readSourceFile("src/AppViewModel.cpp");
+
+    // ViewModel surface: the invokable + the capture-failure signal exist.
+    expectPresent(hpp, "Q_INVOKABLE void requestSecureDesktopUnlock()");
+    expectPresent(hpp, "void secureCaptureFinished(bool");
+
+    // The password comes from the CredUI secure-desktop helper and is MOVED
+    // straight into the shared adopt+verify path -- never turned into a QString
+    // and never pre-filled into the field (contrast the QR path's qrTextReady).
+    expectPresent(cpp, "#include \"Console.hpp\"");
+    expectPresent(cpp, "readPasswordSecureDesktop(");
+    expectPresent(cpp, "adoptPasswordAndDrain(std::move(");
+}
+
+TEST(SecureDesktopUnlockBoundary, ButtonIsWiredThroughTheViewModel)
+{
+    const std::string pwDialog = readSourceFile("qml/PasswordDialog.qml");
+    const std::string mainQml = readSourceFile("qml/Main.qml");
+
+    // The dialog exposes a dedicated signal and delegates to the invokable via
+    // the parent -- it never calls a controller or pre-fills the field.
+    expectPresent(pwDialog, "signal secureScreenRequested()");
+    expectPresent(mainQml, "AppViewModel.requestSecureDesktopUnlock()");
+    // The secure path must NOT reuse the QR pre-fill route for its result.
+    expectPresent(mainQml, "onSecureCaptureFinished");
 }
