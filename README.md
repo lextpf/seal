@@ -10,7 +10,7 @@
 ![Browser Autofill](https://img.shields.io/badge/Browser-Autofill-F59E0B.svg?style=flat&logo=data:image/svg+xml;base64,PHN2ZyBoZWlnaHQ9IjIwMHB4IiB3aWR0aD0iMjAwcHgiIHZlcnNpb249IjEuMSIgaWQ9Il94MzJfIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIiB2aWV3Qm94PSItMjUuNiAtMjUuNiA1NjMuMjAgNTYzLjIwIiB4bWw6c3BhY2U9InByZXNlcnZlIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9IiNmZmZmZmYiIHN0cm9rZS13aWR0aD0iMC4wMDUxMiI+PGcgaWQ9IlNWR1JlcG9fYmdDYXJyaWVyIiBzdHJva2Utd2lkdGg9IjAiPjwvZz48ZyBpZD0iU1ZHUmVwb190cmFjZXJDYXJyaWVyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiIHN0cm9rZT0iI0NDQ0NDQyIgc3Ryb2tlLXdpZHRoPSI0LjA5NiI+PC9nPjxnIGlkPSJTVkdSZXBvX2ljb25DYXJyaWVyIj4gPHN0eWxlIHR5cGU9InRleHQvY3NzIj4gLnN0MHtmaWxsOiNmZmZmZmY7fSA8L3N0eWxlPiA8Zz4gPHBhdGggY2xhc3M9InN0MCIgZD0iTTE4MC40LDIxMi40NzJjLTI0LjA5NCw0MS43MzEtOS43ODksOTUuMTA0LDMxLjk1LDExOS4yMTRjNDEuNzMxLDI0LjA4Niw5NS4xMTIsOS43ODksMTE5LjIxNC0zMS45NSBjMjQuMDk0LTQxLjczOSw5Ljc4OS05NS4xMTItMzEuOTUtMTE5LjIxNEMyNTcuODgyLDE1Ni40MjgsMjA0LjUwOSwxNzAuNzI1LDE4MC40LDIxMi40NzJ6Ij48L3BhdGg+IDxwYXRoIGNsYXNzPSJzdDAiIGQ9Ik0xODguMTEzLDM3My42NjRjLTIxLjM5OS0xMi4zNDktMzguMTIyLTI5LjcwOC00OS42MzYtNDkuNzE1bC0wLjA0OCwwLjAyNEwyOS45NDMsMTM2LjA4NyBDLTM0LjQ5LDI1Ny4yNzIsOC4xODcsNDA4LjYzNiwxMjcuOTgxLDQ3Ny44MDJjMjYuODkzLDE1LjUyMSw1NS40MzIsMjUuNjEyLDg0LjM0NSwzMC41OThsNjguNjk2LTExOC45NzYgQzI1MC4yMzMsMzk1LjIyOSwyMTcuMzA0LDM5MC41MywxODguMTEzLDM3My42NjR6Ij48L3BhdGg+IDxwYXRoIGNsYXNzPSJzdDAiIGQ9Ik0xMzguNDIyLDE4OC4yMjhjMjUuMDcyLTQzLjQzMyw3MC42OTItNjcuNzM0LDExNy41Ni02Ny44MTR2LTAuMDU1aDIxNy4wMzggYy0yMS40NzgtMzQuNDIzLTUxLjQ0OC02NC4yNDMtODkuMDM3LTg1Ljk1MkMyNzQuNDMtMjguODQyLDEzNy41OTUtMS44NjIsNTkuMzU3LDkyLjIzM2w2OC41OTIsMTE4Ljc5MyBDMTMwLjcwMSwyMDMuMjU2LDEzNC4xNDMsMTk1LjYyMywxMzguNDIyLDE4OC4yMjh6Ij48L3BhdGg+IDxwYXRoIGNsYXNzPSJzdDAiIGQ9Ik00OTYuMjIyLDE2Ny43NTlIMzU5LjAyOWMzNi4zOCw0Mi41MSw0NC4wNTMsMTA1LjA3NiwxNC41MTIsMTU2LjIxM0wyNjUuMDQ3LDUxMS45MTQgYzg1LjE1Ni0zLjEwOSwxNjYuODg1LTQ4LjU3LDIxMi42MzItMTI3LjgxQzUxNy4xOTEsMzE1LjY2Myw1MjEuNDg2LDIzNi41NTgsNDk2LjIyMiwxNjcuNzU5eiI+PC9wYXRoPiA8L2c+IDwvZz48L3N2Zz4=)
 ![No Telemetry](https://img.shields.io/badge/%20-No_Telemetry-0F766E.svg?style=flat&logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTY4cHgiIGhlaWdodD0iMTY4cHgiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBpZD0iU1ZHUmVwb19iZ0NhcnJpZXIiIHN0cm9rZS13aWR0aD0iMCI+PC9nPjxnIGlkPSJTVkdSZXBvX3RyYWNlckNhcnJpZXIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PC9nPjxnIGlkPSJTVkdSZXBvX2ljb25DYXJyaWVyIj4gPGcgY2xpcC1wYXRoPSJ1cmwoI2NsaXAwXzQyOV8xMTE1OCkiPiA8cGF0aCBkPSJNMTAuNzMwMiA1LjA3MzE5QzExLjE0NDggNS4wMjQ4NSAxMS41Njg0IDUgMTEuOTk5OSA1QzE2LjY2MzkgNSAyMC4zOTk4IDcuOTAyNjQgMjEuOTk5OSAxMkMyMS42MDUzIDEzLjAxMDQgMjEuMDgwOSAxMy45NDgyIDIwLjQ0NDYgMTQuNzg3N002LjUxOTU2IDYuNTE5NDRDNC40Nzk0OSA3Ljc2NDA2IDIuOTAxMDUgOS42OTI1OSAxLjk5OTk0IDEyQzMuNjAwMDggMTYuMDk3NCA3LjMzNTk3IDE5IDExLjk5OTkgMTlDMTQuMDM3NSAxOSAxNS44OTc5IDE4LjQ0NiAxNy40ODA1IDE3LjQ4MDRNOS44Nzg3MSA5Ljg3ODU5QzkuMzM1NzYgMTAuNDIxNSA4Ljk5OTk0IDExLjE3MTUgOC45OTk5NCAxMkM4Ljk5OTk0IDEzLjY1NjkgMTAuMzQzMSAxNSAxMS45OTk5IDE1QzEyLjgyODQgMTUgMTMuNTc4NSAxNC42NjQyIDE0LjEyMTQgMTQuMTIxMiIgc3Ryb2tlPSIjZmZmZmZmIiBzdHJva2Utd2lkdGg9IjIuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48L3BhdGg+IDxwYXRoIGQ9Ik00IDRMMjAgMjAiIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIyLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCI+PC9wYXRoPiA8L2c+IDxkZWZzPiA8Y2xpcFBhdGggaWQ9ImNsaXAwXzQyOV8xMTE1OCI+IDxyZWN0IHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgZmlsbD0id2hpdGUiPjwvcmVjdD4gPC9jbGlwUGF0aD4gPC9kZWZzPiA8L2c+PC9zdmc+)
 ![Qt6](https://img.shields.io/badge/Qt6-GUI-8B5CF6.svg?style=flat&logo=qt&logoColor=white)
-![CMake](https://img.shields.io/badge/CMake-3.10%2B-c0392b?style=flat&logo=cmake&logoColor=white)
+![CMake](https://img.shields.io/badge/CMake-3.25%2B-c0392b?style=flat&logo=cmake&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-475569.svg?logo=data:image/svg+xml;base64,PHN2ZyBmaWxsPSIjZmZmZmZmIiB3aWR0aD0iMTY0cHgiIGhlaWdodD0iMTY0cHgiIHZpZXdCb3g9IjAgMCA1MTIuMDAgNTEyLjAwIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIwLjAwNTEyIj48ZyBpZD0iU1ZHUmVwb19iZ0NhcnJpZXIiIHN0cm9rZS13aWR0aD0iMCI+PC9nPjxnIGlkPSJTVkdSZXBvX3RyYWNlckNhcnJpZXIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgc3Ryb2tlPSIjQ0NDQ0NDIiBzdHJva2Utd2lkdGg9IjMuMDcyIj48L2c+PGcgaWQ9IlNWR1JlcG9faWNvbkNhcnJpZXIiPjxwYXRoIGQ9Ik0yNTYgOEMxMTkuMDMzIDggOCAxMTkuMDMzIDggMjU2czExMS4wMzMgMjQ4IDI0OCAyNDggMjQ4LTExMS4wMzMgMjQ4LTI0OFMzOTIuOTY3IDggMjU2IDh6bTExNy4xMzQgMzQ2Ljc1M2MtMS41OTIgMS44NjctMzkuNzc2IDQ1LjczMS0xMDkuODUxIDQ1LjczMS04NC42OTIgMC0xNDQuNDg0LTYzLjI2LTE0NC40ODQtMTQ1LjU2NyAwLTgxLjMwMyA2Mi4wMDQtMTQzLjQwMSAxNDMuNzYyLTE0My40MDEgNjYuOTU3IDAgMTAxLjk2NSAzNy4zMTUgMTAzLjQyMiAzOC45MDRhMTIgMTIgMCAwIDEgMS4yMzggMTQuNjIzbC0yMi4zOCAzNC42NTVjLTQuMDQ5IDYuMjY3LTEyLjc3NCA3LjM1MS0xOC4yMzQgMi4yOTUtLjIzMy0uMjE0LTI2LjUyOS0yMy44OC02MS44OC0yMy44OC00Ni4xMTYgMC03My45MTYgMzMuNTc1LTczLjkxNiA3Ni4wODIgMCAzOS42MDIgMjUuNTE0IDc5LjY5MiA3NC4yNzcgNzkuNjkyIDM4LjY5NyAwIDY1LjI4LTI4LjMzOCA2NS41NDQtMjguNjI1IDUuMTMyLTUuNTY1IDE0LjA1OS01LjAzMyAxOC41MDggMS4wNTNsMjQuNTQ3IDMzLjU3MmExMi4wMDEgMTIuMDAxIDAgMCAxLS41NTMgMTQuODY2eiI+PC9wYXRoPjwvZz48L3N2Zz4=)
 <br/>
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=lextpf_sage&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=lextpf_sage)
@@ -41,7 +41,7 @@
 > **Windows 10/11 Only** - seal enforces Windows-specific security mitigations and will not build on other platforms.
 >
 > - For best protection, enable `SeLockMemoryPrivilege` via Group Policy (`gpedit.msc` -> Local Policies -> User Rights Assignment -> Lock pages in memory).
-> - UI icons use [Font Awesome Pro 7.2](https://fontawesome.com/) SVGs, which are **not included** in this repository due to their commercial license. You must supply your own `assets/svgs/` from a valid Font Awesome Pro subscription.
+> - UI icons use [Font Awesome Pro 7.2](https://fontawesome.com/) SVGs, which are **not included** in this repository due to their commercial license. You must supply your own SVGs: `CMakeLists.txt` globs `assets/duotone/*.svg` and `assets/brands/*.svg`, so put UI icons in `assets/duotone/` and brand logos in `assets/brands/`.
 
 ```
 /*  ============================================================================================  *
@@ -109,6 +109,9 @@ seal/
 |   |-- StagingController.*             # Zero-gesture navigation-staged auto-fill
 |   |-- AutoStagePolicy.hpp             # Pure site->record resolver + per-visit latches
 |   |-- UrlBinding.hpp                  # Tiered host / registrable-name matching
+|   |-- PublicSuffixTable.hpp           # GENERATED - see scripts/public_suffixes.txt
+|   |-- ProtectedFolderPolicy.hpp       # Pure encrypt / decrypt plan resolver (tested)
+|   |-- ProtectedFolderProfile.*        # Armed-folder profile: write, read, verify
 |   |-- BrowserBridge.*                 # Per-run named-pipe server + peer hardening
 |   |-- BridgeMessage.*                 # Bounded JSON parser for bridge messages
 |   |-- ProcessPin.hpp                  # RAII process-handle pin vs PID recycling
@@ -135,7 +138,8 @@ seal/
 |   |-- PasswordDialog.qml              # Master-password prompt with QR-scan option
 |   |-- RekeyDialog.qml                 # Master-password change dialog
 |   |-- ConfirmDialog.qml               # Reusable confirm / info / error dialog
-|   |-- BridgeSettings.qml              # Bridge status chips + auto-fill toggle
+|   |-- ProtectFolderDialog.qml         # Arm / disarm a protected folder
+|   |-- BridgeSettings.qml              # Per-browser status + companion setup
 |   |-- CliPanel.qml                    # Embedded terminal: output + command input
 |   |-- StatusFooter.qml                # Status bar: state, file, count, fill dot
 |   |-- ActionBar.qml                   # Add / edit / delete / fill action buttons
@@ -153,11 +157,11 @@ seal/
 |   |-- LaunchOrigin.*                  # argv[1] native-messaging origin gate
 |   |-- ExitLog.*                       # Best-effort exit diagnostics to file/stderr
 |   +-- NtApi.hpp                       # Runtime-resolved ntdll for handle walk
-|-- extensions/browser/                 # MV3 WebExtension companion (Chrome + Firefox)
+|-- extensions/browser/                 # MV3 Chromium-family WebExtension companion
 |   |-- manifest.json                   # MV3 Chrome manifest: pinned key + host
 |   |-- background.js                   # Service worker: connectNative, hashes path
 |   |-- content.js                      # Classifies clicked field + reports nav
-|   |-- firefox/manifest.json           # Firefox MV3 variant (gecko id, UUID)
+|   |-- firefox/manifest.json           # Legacy Gecko draft (not packaged)
 |   +-- icons/                          # Extension icons (16 / 48 / 128 px)
 |-- tests/                              # GoogleTest suites over the Qt-free cores
 |   |-- test_*.cpp                      # crypto, vault, fusion, bridge, csv, ...
@@ -165,7 +169,10 @@ seal/
 |   +-- fixtures/                       # Sample Chrome CSVs for import tests
 |-- cmake/                              # vcpkg overlay triplets (msvc143 release / static)
 |-- scripts/                            # Doxide / MkDocs doc post-processing (Python)
-|-- assets/                             # Bundled assets - NOT included; provide your own 
+|-- assets/                             # NOT included; provide your own (gitignored)
+|   |-- duotone/                        # UI icon SVGs (file(GLOB) - absent is OK)
+|   |-- brands/                         # Brand logo SVGs, matched by platform name
+|   +-- fonts/                          # UI text font; Theme.qml falls back if absent
 |-- CMakeLists.txt                      # seal + seal_browser targets + QML module
 |-- CMakePresets.json                   # default / static / ci / compile-db presets
 |-- vcpkg.json                          # Dependency manifest (Qt6, OpenSSL, OpenCV)
@@ -264,7 +271,7 @@ graph LR
 - 💥 **Crash Dump Suppression** - Windows Error Reporting disabled
 - 🧱 **Process Access DACL** - Restrictive SDDL blocks external processes from reading memory
 - 🔥 **Heap Hardening** - `HeapEnableTerminationOnCorruption` terminates the process immediately on heap corruption
-- 🔑 **SeLockMemoryPrivilege** - Requested at startup to support large-page VirtualLock
+- 🔑 **SeLockMemoryPrivilege** - Requested at startup so `VirtualLock` succeeds beyond the default working-set lock limit. Optional: without it, page locking still works inside the default quota
 - ⌨️ **Keyboard Hook Detection** - Timing-based heuristic detects keylogger hooks before auto-type
 
 ### Vault System
@@ -274,7 +281,7 @@ Credentials are stored in `.seal` files using **on-demand decryption** - each re
 |  Component | Description                                         |
 |------------|-----------------------------------------------------|
 |  Platform  | AES-256-GCM encrypted, displayed as search index    |
-| Credential | `username:password` blob, decrypted only on access  |
+| Credential | `username` + NUL + `password` blob, decrypted only on access  |
 
 ### Additional Capabilities
 
@@ -287,10 +294,10 @@ Credentials are stored in `.seal` files using **on-demand decryption** - each re
 
 | Component       | Technology              |
 |-----------------|-------------------------|
-| Language        | C++20                   |
+| Language        | C++23                   |
 | GUI Framework   | Qt6 (QML + Quick)       |
 | Cryptography    | OpenSSL 3.x             |
-| Build System    | CMake 3.20+             |
+| Build System    | CMake 3.25+             |
 | Package Manager | vcpkg                   |
 | Testing         | Google Test             |
 | Documentation   | Doxide + MkDocs         |
@@ -303,10 +310,11 @@ Credentials are stored in `.seal` files using **on-demand decryption** - each re
 
 - **Windows 10/11** (64-bit)
 - **Visual Studio 2022** (MSVC v143, C++23)
-- **CMake 3.20+**
+- **CMake 3.25+** - required by `CMakePresets.json` (presets schema v6), which `build.bat` uses.
+  3.20 is the floor only when configuring without the presets.
 - **vcpkg** with the toolchain at a known path
 - **Python 3** (for documentation post-processing)
-- **Font Awesome Pro 7.2** SVGs in `assets/svgs/` (not included, requires license)
+- **Font Awesome Pro 7.2** SVGs in `assets/duotone/` (UI icons) and `assets/brands/` (brand logos), plus the UI font at `assets/fonts/` (not included, requires license)
 - **doxide** + **mkdocs** (optional, for API docs generation)
 
 ### Building
@@ -316,8 +324,11 @@ Credentials are stored in `.seal` files using **on-demand decryption** - each re
 git clone https://github.com/lextpf/seal.git
 cd seal
 
-# 2. Build (configure + compile + docs)
+# 2. Full pipeline: clang-format -i (rewrites src/ in place) -> configure ->
+#    clang-tidy (aborts on the first finding) -> Release build -> docs.
+#    Deletes build/CMakeCache.txt first, so every run is a full reconfigure.
 .\build.bat
+.\build.bat --skip-tidy   # same pipeline without the lint gate
 
 # 3. Run
 .\build\bin\Release\seal.exe
@@ -325,27 +336,66 @@ cd seal
 
 Output: `build/bin/Release/seal.exe`
 
+### Browser companion setup
+
+Browser auto-fill needs the local WebExtension companion:
+
+1. 🧭 In seal's top-right action row: **Setup** -> **Install or repair companion**.
+2. 📋 The result dialog lists every detected browser and copies the unpacked extension
+   folder to the clipboard.
+3. 📂 On that browser's extensions page, enable **Developer mode**, choose
+   **Load unpacked**, and paste the folder.
+
+seal never launches a browser or installs an unpacked extension for you. 🗑️ To remove it:
+**Setup** -> **Unregister companion**, then delete **seal companion** from each browser's
+extensions page. 💻 Terminal equivalents: `seal.exe install-browser-extension` and
+`seal.exe uninstall-browser-extension`.
+
+| Browser | Native-host registration |
+|---------|--------------------------|
+| 🌐 Chrome, Edge, Brave, Opera / Opera GX, Vivaldi, Chromium | ✅ Supported |
+| 🌐 Thorium | ✅ Through Chromium's host-discovery root |
+| 🦊 Firefox and Gecko forks | ❌ Not packaged - the legacy manifest has no matching Gecko host registration |
+
+#### Site names and browser binding
+
+The Service field is also the browser security boundary:
+
+- ✅ `github.com`, `https://login.example.co.uk` - a real domain or URL enables browser
+  auto-stage and secret release.
+- ⚠️ `GitHub` - a display-only label has **no site binding**, so browser auto-fill never
+  triggers. Ctrl+Click auto-type still works.
+
+🔎 The account dialog previews the resulting host and warns about duplicate bindings;
+unbindable records carry a small warning marker. 🌳 Parent domains may bind their own
+subdomains, but public suffixes and shared-hosting boundaries such as `co.uk`, `github.io`,
+`pages.dev`, and `vercel.app` never authorize the tenants below them. 🚫 The curated Public
+Suffix List snapshot is compiled in - there is no runtime PSL or network fetch.
+
 ### Release signing (required for production)
 
-The browser bridge authenticates its peer (`seal-browser.exe` ↔ `seal.exe`) by
-comparing Authenticode signer identities: each side derives its *expected* identity
-from its own signature and requires the peer to match. **Both binaries must therefore
-be Authenticode-signed by the same publisher key for release.**
+The browser bridge authenticates its peer (`seal-browser.exe` <-> `seal.exe`) by Authenticode
+signer identity: each side derives its *expected* identity from its own signature and requires
+the peer to match. **Both binaries must be signed by the same publisher key for release.**
 
-An *unsigned* binary has an empty signer identity, which disables that check
-(**dev-mode degradation** — the bridge accepts any local peer so local builds stay
-usable). To keep an unsigned binary from ever shipping with peer authentication off,
-configure a release build with:
+- 🔓 **Unsigned (default, `OFF`)** - an empty signer identity disables the check, so the bridge
+  accepts any local peer and dev builds stay usable. The GUI shows an **"Unsigned build"**
+  warning on the bridge chip.
+- 🔒 **`SEAL_REQUIRE_SIGNED_PEER=ON`** - an unsigned `seal.exe` refuses to start its bridge and
+  an unsigned `seal-browser.exe` refuses to connect. Both fail closed.
 
 ```powershell
-cmake -B build -DSEAL_REQUIRE_SIGNED_PEER=ON   # (plus your normal toolchain args)
+cmake --preset default -DSEAL_REQUIRE_SIGNED_PEER=ON   # or --preset static
+cmake --build build --config Release
+cmake -L build | findstr SEAL_REQUIRE_SIGNED_PEER      # confirm the option stuck
 ```
 
-With `SEAL_REQUIRE_SIGNED_PEER=ON`, an unsigned `seal.exe` refuses to start its bridge
-and an unsigned `seal-browser.exe` refuses to connect (both fail closed) instead of
-degrading. The default is `OFF` for local development. Sign the two binaries out-of-band
-after the build (e.g. `signtool sign /fd sha256 …`) on a trusted machine; when running
-unsigned, the GUI shows an **"Unsigned build"** warning on the bridge chip.
+> [!CAUTION]
+> Do not run `.\build.bat` afterwards. It deletes `build/CMakeCache.txt` and reconfigures from
+> the bare preset, which carries no such cache variable, so the option silently reverts to `OFF`.
+
+🖊️ Sign both binaries out-of-band after the build (e.g. `signtool sign /fd sha256 ...`) on a
+trusted machine.
 
 ## Architecture
 
@@ -367,9 +417,10 @@ graph LR
     Main["🚀 main.cpp"]:::core
 
     subgraph GUI["🖥️ GUI Layer"]
-        Backend["⚙️ Backend"]:::gui
+        AppViewModel["⚙️ AppViewModel"]:::gui
         QML["🎨 QML Views"]:::gui
         Fill["⌨️ FillController"]:::gui
+        Bridge["🌐 BrowserBridge"]:::gui
     end
 
     subgraph Vault["🗄️ Vault Layer"]
@@ -383,25 +434,36 @@ graph LR
         Clipboard["📋 Clipboard"]:::crypto
     end
 
+    Ext["🧩 Browser extension"]:::core
+    Host["🔌 seal-browser.exe"]:::core
+
     Main --> GUI
     Main --> Vault
     GUI --> Vault
     Vault --> Crypto
     GUI --> Crypto
+    Ext --> Host
+    Host --> Bridge
+    Bridge --> Fill
 ```
 
 ## Documentation
 
-API documentation is generated via a three-stage pipeline:
+API documentation is generated by a four-stage pipeline. Run the stages in this
+order: the promote step copies nested subgroup pages to the top level, which is
+where the links that the clean step rewrites point.
 
 ```powershell
-# 1. Generate markdown from C++ headers
+# 1. Generate Markdown from the C++ headers
 doxide build
 
-# 2. Post-process (strip noise, fix formatting, add icons)
-python scripts/clean_docs.py
+# 2. Copy nested subgroup pages to the top level
+python scripts/_promote_subgroups.py
 
-# 3. Build the documentation site
+# 3. Post-process (strip noise, fix formatting, add icons)
+python scripts/_clean_docs.py
+
+# 4. Build the documentation site
 mkdocs build
 ```
 
