@@ -42,9 +42,12 @@ groups:
     title: ":material-monitor: GUI"
     description: Qt6 GUI, QML backend, styling, and view models.
     groups:
-      - name: Backend
-        title: Backend
-        description: QML backend for vault operations and credential management.
+      - name: ViewModel
+        title: ViewModel
+        description: QML-facing view models, async dispatch, and auto-lock supervision.
+      - name: BrandIcon
+        title: BrandIcon
+        description: Brand icon lookup that maps a stored platform name to a bundled SVG.
       - name: FillController
         title: FillController
         description: Credential auto-fill via global Windows input hooks.
@@ -63,14 +66,17 @@ groups:
 
   - name: CLI
     title: ":material-console: CLI"
-    description: Console-mode credential viewer and keystroke injection.
+    description: argv subcommands of seal.exe (gen, shred, hash, verify, list, get,
+      import/export, install-browser-extension), CSV credential import/export, and the
+      interactive --cli console with its masked credential viewer.
     groups:
       - name: MaskedCredentialView
         title: MaskedCredentialView
         description: Interactive masked console UI for decrypted credentials.
       - name: CliHandler
         title: CliHandler
-        description: Built-in CLI command dispatch (help, gen, hex, qr, fill).
+        description: Command dispatch for the terminal panel embedded in the GUI
+          (USE_QT_UI only; separate from the argv subcommands and the --cli REPL).
 
   - name: Utilities
     title: ":material-toolbox: Utilities"
