@@ -3,7 +3,7 @@
 Doxide generates top-level directories for C++ namespaces but not for
 classes.  When a project uses classes instead of namespaces, subgroup
 pages only exist nested under their parent group (e.g.,
-Core/ArchiveService/).  clean_docs.py rewrites subgroup links with ../
+Core/ArchiveService/).  _clean_docs.py rewrites subgroup links with ../
 to point to top-level directories.  This script bridges the gap by
 copying nested subgroup directories to the top level so the links
 resolve correctly.
@@ -20,8 +20,8 @@ directory does not already exist.
 No external dependencies - uses only the Python standard library.
 
 Usage:
-    python scripts/promote_subgroups.py          # defaults to docs/
-    python scripts/promote_subgroups.py path/    # custom docs directory
+    python scripts/_promote_subgroups.py          # defaults to docs/
+    python scripts/_promote_subgroups.py path/    # custom docs directory
 """
 
 import re

@@ -12,8 +12,8 @@ Cleans doxide-generated markdown for MkDocs Material compatibility:
 Only touches files with 'generator: doxide' frontmatter.
 
 Usage:
-    python scripts/clean_docs.py          # defaults to docs/
-    python scripts/clean_docs.py path/    # custom docs directory
+    python scripts/_clean_docs.py          # defaults to docs/
+    python scripts/_clean_docs.py path/    # custom docs directory
 """
 
 import re
