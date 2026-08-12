@@ -21,7 +21,7 @@ Formatting is enforced by `.clang-format`. Contributors should run the formatter
 |-----------------|----------------------------------|
 |        Language | C++23 (`CMAKE_CXX_STANDARD 23`)  |
 |        Compiler | MSVC 2022 (primary)              |
-|    Build system | CMake 3.10+                      |
+|    Build system | CMake 3.20+                      |
 | Package manager | vcpkg                            |
 |         Testing | Google Test with CTest discovery |
 
@@ -58,24 +58,42 @@ Do not restate or fight these rules in review. Run the formatter and move on.
 
 ## Naming Conventions
 
-| Element                          | Style                                       | Examples                                                  |
-|----------------------------------|---------------------------------------------|-----------------------------------------------------------|
-| Files                            | PascalCase                                  | `Logger.hpp`, `RingBuffer.cpp`                            |
-| Classes                          | PascalCase                                  | `Logger`, `Texture`, `ResourceManager`                    |
-| Structs (plain data)             | PascalCase                                  | `Color`, `Vec2`, `Particle`                               |
-| Enums                            | PascalCase                                  | `enum class LogLevel`, `enum class BlendMode`             |
-| Enum values                      | PascalCase                                  | `LogLevel::Warning`, `BlendMode::Additive`                |
-| Functions / Methods              | PascalCase                                  | `LoadTexture()`, `Logger::Write()`                        |
-| Namespaces                       | PascalCase                                  | `Rendering`, `MathUtils`                                  |
-| Local variables                  | camelCase                                   | `itemCount`, `deltaTime`, `isReady`                       |
-| Parameters                       | camelCase                                   | `int itemCount`, `const std::string& filePath`            |
-| Class member variables           | `m_` + PascalCase                           | `m_Buffer`, `m_Window`, `m_ItemCount`                     |
-| Struct fields (plain data)       | camelCase, no prefix                        | `position`, `velocity`, `lifetime`                        |
-| Macros / constants               | UPPER_SNAKE_CASE                            | `MAX_RETRIES`, `DEFAULT_TIMEOUT`                          |
-| File-local constants             | UPPER_SNAKE_CASE, in an anonymous namespace | `constexpr int MAX_CONNECTIONS = 64;`                     |
-| Compile-time constants           | `static constexpr`                          | `static constexpr int MAX_ITEMS = 256;`                   |
-| Type aliases                     | PascalCase via `using`                      | `using EntityId = std::uint32_t;`                         |
-| Global mutable state             | avoided (no `g_` prefix)                    | prefer file-local `constexpr`; see **Scoping & Lifetime** |
+| Element                        | Style                     | Examples                                        |
+|--------------------------------|---------------------------|-------------------------------------------------|
+| Files                          | PascalCase                | `Vault.hpp`, `FillController.cpp`               |
+| Namespaces                     | lower_case                | `seal`, `seal::cfg`, `detail`                   |
+| Classes / structs / enums      | CamelCase                 | `Vault`, `ProbeResult`, `enum class Verdict`    |
+| Enum values                    | CamelCase                 | `Verdict::Password`, `State::Armed`             |
+| Type aliases                   | CamelCase via `using`     | `using SecureWide = ...;`                       |
+| Template parameters            | CamelCase                 | `template <typename CharT>`                     |
+| Functions / methods            | camelBack                 | `loadVaultIndex()`, `decideDetailed()`          |
+| Parameters / local variables   | camelBack                 | `vaultPath`, `recordCount`                      |
+| Class member variables         | `m_` + CamelCase          | `m_Verdict`, `m_Workspace`                      |
+| Struct fields (plain data)     | camelCase, no prefix      | `platform`, `dirty`, `deleted`                  |
+| Statics (file or class scope)  | `s_` + CamelCase          | `s_TtlThread`, `s_Instance`                     |
+| Global mutable state           | `g_` + CamelCase          | `g_CaptureJobActive` (rare; see below)          |
+| `constexpr` / global constants | `k` + CamelCase           | `kTier1Threshold`, `kMargin`                    |
+| Macros                         | UPPER_CASE                | `SEAL_VERSION`, `NOMINMAX`                      |
+
+These rows restate what `.clang-tidy` enforces through `readability-identifier-naming`.
+**`.clang-tidy` and the surrounding code are the authority.** If this table ever disagrees with
+either, follow the tool and the file you are editing, then fix this table.
+
+Three documented deviations exist in the tree, so do not "correct" them:
+
+* **Plain-data struct fields** carry no `m_` (see the next section). `.clang-tidy` cannot express
+  the class/struct split and flags them; that is expected.
+* **Wire-format constants** in `seal::cfg` (`CryptoConfig.hpp`) use UPPER_SNAKE_CASE - `SCRYPT_N`,
+  `TAG_LEN`, `KEY_LEN` - because they name fields of an on-disk format rather than tuning knobs.
+* **The secure-memory layer** uses standard-library naming: `basic_secure_string`,
+  `locked_allocator`, `secure_triplet16`, and members such as `push_back` and `resize`. These types
+  are drop-in replacements for `std::basic_string` and an allocator, so they mirror the interface
+  they substitute for.
+
+A set of free functions in the CLI, dialog and window-chrome layers is still PascalCase
+(`HandleListMode`, `CliEchoLine`, `OpenFileDialog`, `InstallWindowChrome`, `RunQMLMode`). They
+predate the `camelBack` rule. Match the file you are editing rather than renaming across a
+boundary; a rename touches source-scan tests that grep for symbol names as text.
 
 ### Struct fields (plain data)
 
@@ -442,7 +460,13 @@ Do **not** use `@file` - leave file identity implicit.
 
 #### Modules (`@ingroup`)
 
-Every documented entity is grouped under a module with `@ingroup <Module>`. Modules are declared **once** - each as an `@addtogroup <Id> <Title>` block in a single group-definitions header - and every other file only *references* them with `@ingroup`. Never add a new `@addtogroup` outside that one header.
+Every documented entity is grouped under a module with `@ingroup <Module>`. The module list is
+**closed**: it is declared once in the `groups:` tree of `doxide.yml`, and source files only
+*reference* those names. `@ingroup` with a name that `doxide.yml` does not define silently drops the
+entity out of the generated site, so add the group to `doxide.yml` (and to the `nav:` in
+`mkdocs.yml`) before you use it.
+
+This project does **not** use `@addtogroup`, and no group-definitions header exists. Do not add one.
 
 Choose the module by **subsystem role, not filename**: a rendering helper belongs to the rendering module even when its filename names the feature it serves rather than the module.
 
@@ -516,9 +540,20 @@ bool m_Initialized = false;  ///< Whether creation succeeded (for safe teardown)
 
 Documentation commands to use where useful:
 
-`@brief`, `@author`, `@ingroup` (plus `@addtogroup` in the group-definitions header only), `@struct` / `@class` / `@enum`, `@param`, `@return`, `@tparam`, `@pre` / `@post`, `@note` / `@warning`, `@p` / `@c` / `@ref` / `@see`, `@par <Title>`, `@name` / `@{` / `@}`, `@code` / `@endcode` (and `@code{.cpp}`), `@verbatim` / `@endverbatim` for ASCII diagrams, and LaTeX math `@f[ ... @f]` / inline `@f$ ... @f$`.
+`@brief`, `@author`, `@ingroup`, `@struct` / `@class` / `@enum` / `@namespace`, `@param`,
+`@return`, `@tparam`, `@throw`, `@pre` / `@post`, `@note` / `@warning`, `@details`,
+`@p` / `@c` / `@ref` / `@see` / `@copydoc`, `@par <Title>`, `@name` / `@{` / `@}`,
+`@code` / `@endcode`
+(and `@code{.cpp}`), `@verbatim` / `@endverbatim` for ASCII diagrams, and LaTeX math
+`@f[ ... @f]` / inline `@f$ ... @f$`.
 
-Do **not** use: `@file`, `@returns`, `@union`, `@short`, `@defgroup`, `@def`, `@fn`, `@var`, `@internal`.
+Do **not** use: `@file`, `@returns`, `@union`, `@short`, `@defgroup`, `@addtogroup`, `@def`,
+`@fn`, `@var`, `@internal`.
+
+An `@` that starts a word inside doc prose is read as a command name. Put any literal `@` inside
+`@code` / `@endcode` or `@verbatim` / `@endverbatim`, which this repo already uses for exactly that.
+The trap is example URLs and e-mail-shaped strings: `user:pw@accounts.example.com` parses the
+`@accounts` as an unknown command.
 
 ---
 
