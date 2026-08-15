@@ -84,14 +84,14 @@ enum class Mode
 struct ProgramOptions
 {
     Mode mode = Mode::Gui;
-    bool modeExplicit = false;  // true once any mode flag is parsed
-    std::string inputPath;      // primary path or import data
-    std::string outputPath;     // secondary / destination path
-    std::string stringData;     // inline text for -e/-d
-    int genLength = 20;
+    bool modeExplicit = false;      // true once any mode flag is parsed
+    std::string inputPath;          // primary path or import data
+    std::string outputPath;         // secondary / destination path
+    std::string stringData;         // inline text for -e/-d
+    int genLength = 20;             // gen: length, clamped to [8,128] by GeneratePassword
     std::string getField = "pass";  // get: pass | user | both
     bool getStdout = false;         // get: print to stdout instead of clipboard
-    int getTtlSeconds = 6;          // get: clipboard scrub TTL
+    int getTtlSeconds = 6;          // get: clipboard scrub TTL, clamped to [1,600] seconds
     std::string ioFormat = "auto";  // import: auto|seal|chrome ; export: seal|csv
     bool force = false;             // export: skip the plaintext confirmation
 };
@@ -101,7 +101,8 @@ void writeCliDiag(std::ostream& os,
                   std::string_view tag,
                   std::initializer_list<std::string> fields);
 
-// Set the program mode, rejecting conflicts with any previously set mode.
+// Set the program mode. Fails when a mode is already set, so two mode tokens
+// on one command line are rejected.
 static bool trySetMode(ProgramOptions& opts, Mode newMode)
 {
     if (opts.modeExplicit)
@@ -117,7 +118,7 @@ static bool trySetMode(ProgramOptions& opts, Mode newMode)
     return true;
 }
 
-// Alias for backwards compatibility with existing call sites in this file.
+// Short local name for the DPAPI unprotect guard used across this file.
 template <class GuardT>
 using ScopedUnprotect = seal::ScopedDpapiUnprotect<GuardT>;
 
@@ -152,6 +153,9 @@ static void printHelp()
     std::cout << "      --user|--pass|--both    Field selection (default: --pass)\n";
     std::cout << "      --stdout                Print raw value instead of clipboard\n";
     std::cout << "      --ttl <seconds>         Clipboard scrub delay (default 6)\n";
+    std::cout << "      With [vault] omitted, list and get search %SEAL_VAULT%, then the\n";
+    std::cout << "      first *.seal beside seal.exe, then the current directory, then\n";
+    std::cout << "      %USERPROFILE%\n";
     std::cout << "  import <data> [output]    Import credentials into a vault file\n";
     std::cout << "  export <input> [output]   Export vault to plaintext (re-importable format)\n";
     std::cout
@@ -159,8 +163,8 @@ static void printHelp()
     std::cout
         << "  uninstall-browser-extension Remove the browser companion native-messaging host\n\n";
     std::cout << "Options:\n";
-    std::cout << "  -e, --text-encrypt [text] Encrypt a string, output hex\n";
-    std::cout << "  -d, --text-decrypt [hex]  Decrypt a hex string, output plaintext\n";
+    std::cout << "  -e, --text-encrypt [text] Encrypt a string; prints (hex) and (b64) lines\n";
+    std::cout << "  -d, --text-decrypt [hex]  Decrypt a hex or base64 string, output plaintext\n";
     std::cout << "  -u, --ui                  Launch graphical user interface\n";
     std::cout << "  -c, --cli                 Launch command-line interactive mode\n";
     std::cout << "  -v, --version             Display version information\n";
@@ -172,7 +176,9 @@ static void printHelp()
     std::cout << "  <data> is comma-separated entries: plat:user:pass, plat:user:pass,...\n";
     std::cout << "  <data> can also be a path to a text file containing entries\n";
     std::cout << "  Use '-' as <data> to read entries from stdin (pipe or paste)\n";
-    std::cout << "  [output] is the vault file path (default: .seal)\n\n";
+    std::cout << "  [output] is the vault file path (default: .seal)\n";
+    std::cout << "  The default .seal has no file extension, so list and get do not\n";
+    std::cout << "  auto-discover it; pass a name such as vault.seal instead\n\n";
     std::cout << "Export format:\n";
     std::cout << "  <input> is the vault file path (e.g. vault.seal)\n";
     std::cout << "  [output] is the plaintext output path (default: stdout)\n\n";
@@ -181,10 +187,11 @@ static void printHelp()
     std::cout << "  seal decrypt secret.txt.seal             Produces secret.txt\n";
     std::cout << "  seal encrypt photo.png encrypted.seal    Custom output name\n";
     std::cout << "  seal decrypt encrypted.seal photo.png    Custom output name\n";
-    std::cout << "  seal -e \"Hello World\"                    Encrypt string to hex\n";
+    std::cout << "  seal -e \"Hello World\"                    Encrypt string to hex + base64\n";
     std::cout << "  seal -d <hex>                            Decrypt hex to plaintext\n";
+    std::cout << "  seal -d <base64>                         Decrypt base64 to plaintext\n";
     std::cout << "  echo \"Hello\" | seal -e                   Encrypt from stdin\n";
-    std::cout << "  echo \"Hello\" | seal -e | seal -d         Round-trip via pipe\n";
+    std::cout << "  (-e labels each output line, so remove the '(hex) ' prefix before -d)\n";
     std::cout << "  seal gen                                 Random 20-char password\n";
     std::cout << "  seal gen 40                              Random 40-char password\n";
     std::cout << "  seal shred secret.txt                    Securely delete file\n";
@@ -250,7 +257,16 @@ static bool parseRequiredPath(
     return false;
 }
 
-// Returns: -1 = parsed OK (continue), 0 = help shown (exit 0), 1 = error (exit 1)
+// Returns -1 when parsing succeeded (continue), 0 when help or version was
+// printed (exit 0), 1 on error (exit 1). When a flag repeats, the last
+// occurrence wins for --user/--pass/--both, --ttl and --format. A second mode
+// token is rejected by trySetMode, and an unknown token fails the whole parse.
+//
+// Order is free except for --ttl and --format: both consume the next token
+// unconditionally, so they also swallow a following flag. A non-numeric --ttl
+// value falls back to 6 seconds without a diagnostic, and a trailing --ttl with
+// no value is ignored. A swallowed --format value fails later with
+// reason=unknown_format.
 static int parseArguments(int argc, char* argv[], ProgramOptions& opts)
 {
     for (int i = 1; i < argc; ++i)
@@ -507,14 +523,16 @@ static int parseArguments(int argc, char* argv[], ProgramOptions& opts)
     return -1;
 }
 
-// Apply all process-wide security mitigations in dependency order.
-// Returns 0 on success, 1 if a critical mitigation fails.
+// Apply the process-wide security mitigations in dependency order. Returns 0
+// on success, 1 when the process must not continue. The remote-session check
+// is the only path that returns 1: detectDebugger terminates the process
+// itself, and every other step is best-effort and only warns.
 static int initializeSecurity(bool allowDynamicCode)
 {
-    // Order: debugger check first (fail fast before secrets load), process
-    // mitigations (CFG/DEP/ASLR/dynamic-code), then heap/access hardening,
-    // then SeLockMemoryPrivilege - required before any secure_string
-    // allocation hits VirtualLock.
+    // Order: debugger check first, to fail before any secret loads; process
+    // mitigations (CFG/DEP/ASLR/dynamic-code); the remote-session gate; heap
+    // and access hardening plus crash-dump suppression; SeLockMemoryPrivilege
+    // last but before any secure_string allocation reaches VirtualLock.
     seal::Cryptography::detectDebugger();
 
     // Process mitigations are best-effort
@@ -559,8 +577,12 @@ static int initializeSecurity(bool allowDynamicCode)
 }
 
 // Resolve <data> that names a file (or "-" for stdin) into raw content.
-// No newline normalization here: the CSV path needs the raw line structure,
-// and the legacy triple path normalizes for itself in handleImportMode.
+// Newlines are not normalized here: the CSV path needs the raw line structure,
+// and the platform:user:pass path normalizes for itself in handleImportMode.
+//
+// A value that does not name a readable file leaves importData unchanged, to
+// be parsed as inline entries. A file that opens but is empty replaces the
+// argument with an empty string, which fails later as reason=no_valid_entries.
 static void readImportSource(std::string& importData)
 {
     std::string fileContent;
@@ -595,6 +617,14 @@ static void readImportSource(std::string& importData)
     importData = fileContent;
 }
 
+// Parse comma-separated "platform:user:pass" tokens into entries. Returns 0
+// when every token parsed, 1 on the first bad token (no colon, one colon, more
+// than two colons, or an empty field) with nothing imported. Empty tokens are
+// skipped without counting.
+//
+// The token is trimmed as a whole and platform and user are trimmed again, so
+// the password keeps its leading spaces but loses trailing ones. A comma
+// always ends a token, so a password cannot contain one.
 static int parseImportEntries(
     const std::string& importData,
     std::vector<std::tuple<std::string, std::string, std::string>>& entries)
@@ -726,8 +756,8 @@ static int handleImportMode(std::string& importData,
     }
     else if (effectiveFormat == "seal")
     {
-        // Legacy plat:user:pass entries: newlines normalise to commas so
-        // entries can be one-per-line or comma-separated.
+        // plat:user:pass entries: newlines normalise to commas, so entries can
+        // be one per line or comma-separated.
         std::replace_if(
             importData.begin(),
             importData.end(),
@@ -784,9 +814,9 @@ static int handleImportMode(std::string& importData,
                       "reason=password_read_failed"});
         return 1;
     }
-    // DPAPIGuard keeps the master password CryptProtectMemory-encrypted
-    // while idle. ScopedUnprotect decrypts in-place for the loop; reprotect
-    // (or destructor) re-encrypts to minimise plaintext lifetime.
+    // DPAPIGuard keeps the master password CryptProtectMemory-encrypted while
+    // idle. ScopedUnprotect decrypts it in place for the loop; reprotect, or
+    // the destructor, re-encrypts it to keep the plaintext window short.
     seal::DPAPIGuard<seal::basic_secure_string<wchar_t>> importDpapi(&masterPassword);
 
     std::vector<seal::VaultRecord> records;
@@ -888,9 +918,9 @@ static int handleExportMode(const std::string& inputPath,
     }
     const bool csvFormat = (format == "csv");
 
-    // Plaintext gate: every export emits secrets in the clear, so an
-    // explicit confirmation (or --force for scripts) is required first --
-    // before the password prompt, so a refusal costs nothing.
+    // Plaintext gate: every export emits secrets in the clear, so it needs an
+    // explicit confirmation, or --force for scripts. The gate runs before the
+    // password prompt, so a refusal costs nothing.
     const char* confirmPrompt = outputPath.empty()
                                     ? "Print ALL credentials in PLAINTEXT to this console?"
                                     : "Export ALL credentials in PLAINTEXT to a file?";
@@ -1093,8 +1123,8 @@ static void processSealFileBatch(seal::DPAPIGuard<seal::basic_secure_string<wcha
     std::cout << "\n";
 }
 
-// Re-read "seal" on Esc. Only fires when the file contains real paths
-// (not raw hex) - a quick re-encrypt/re-decrypt shortcut on exit.
+// Re-read "seal" on Esc: a quick re-encrypt/re-decrypt shortcut on exit. It
+// runs only when the file holds real paths, not raw hex.
 static bool handleEscSealFile(seal::DPAPIGuard<seal::basic_secure_string<wchar_t>>& dpapi,
                               seal::basic_secure_string<wchar_t>& password)
 {
@@ -1175,9 +1205,31 @@ static int handleCliMode()
     return 0;
 }
 
-// Entry point. Dispatches by mode: -e/-d stream encrypt/decrypt (stdin->stdout);
-// -u / no args Qt GUI mode (default); --cli interactive console; --import/--export
-// vault import/export; -h/--help usage.
+// Entry point. Parses argv into one Mode, applies the process-wide security
+// mitigations, then dispatches:
+// - -e / -d: text encrypt/decrypt, from an inline argument or stdin.
+// - encrypt / decrypt: the file equivalents.
+// - Vault subcommands: rekey, list, get, import, export; plus the
+//   browser-extension register/unregister pair.
+// - File and utility subcommands: gen, shred, hash, verify, wipe. None of them
+//   opens a vault: gen makes a password, shred/hash/verify act on any file, and
+//   wipe clears the clipboard and the console buffer.
+// - -c / --cli: interactive console.
+// - -u / --ui, or no argument at all: the Qt GUI. This is the default and the
+//   only mode that needs dynamic code, for the QML JIT.
+// -h/--help and -v/--version print and exit inside the parser.
+//
+// Process contract for script authors:
+//   0     success.
+//   1     parse error, missing or locked file, wrong password, refused
+//         confirmation, or a remote session.
+//   2     platform not found, or an ambiguous prefix. Only `get` returns it.
+//   57005 (0xDEAD) debugger detected. TerminateProcess runs before any mode
+//         handler, so the exit code is the only status a caller gets. The check
+//         does emit one stderr line first, because the message handler is
+//         installed before initializeSecurity().
+// stdout carries the command payload only. Prompts and diagnostics go to
+// stderr, so stdout stays pipe-clean.
 int main(int argc, char* argv[])
 {
     ProgramOptions opts;
