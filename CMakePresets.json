@@ -104,7 +104,8 @@
       "name": "default-debug",
       "configurePreset": "default",
       "configuration": "Debug",
-      "displayName": "Build (dynamic Qt, Debug)"
+      "displayName": "Build (dynamic Qt, Debug)",
+      "description": "Local experimentation only. The pinned msvc143 overlay triplets set VCPKG_BUILD_TYPE release, so no debug Qt or OpenSSL is installed and this configuration links /MDd against release-only import libraries."
     },
     {
       "name": "static",
