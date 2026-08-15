@@ -22,17 +22,23 @@ namespace seal
  * @author Alex (https://github.com/lextpf)
  * @ingroup Crypto
  *
- * Packet wire format (the 8-byte AAD header is the magic plus the four raw
- * KDF-parameter bytes, fed verbatim as GCM AAD):
+ * Packet wire format; the 8-byte AAD header is the magic plus the four raw KDF-parameter
+ * bytes, fed verbatim as GCM AAD:
  * @f$[\text{AAD}_{8} \mid \text{Salt}_{16} \mid \text{IV}_{12} \mid \text{CT}_{n} \mid
- * \text{Tag}_{16}]@f$ where @f$n = |\text{plaintext}|@f$.
+ * \text{Tag}_{16}]@f$ where @f$n = |\text{plaintext}|@f$. GCM is a stream mode, so
+ * ciphertext length equals plaintext length and framing costs a constant 52 bytes:
+ * @f$|\text{packet}| = 52 + n@f$. scrypt memory at the default parameters is
+ * @f$M = 128 \cdot r \cdot N = 128 \cdot 8 \cdot 2^{16} = 64\text{ MiB}@f$.
  *
- * scrypt memory usage: @f$M = 128 \cdot r \cdot N = 128 \cdot 8 \cdot 2^{16} = 64\text{ MiB}@f$.
+ * @note The header stays plaintext so a packet is rejected before key derivation runs; the
+ *       GCM tag still covers it, so an edited header fails authentication. This magic names
+ *       one packet, while a vault file writes its own frame magic `SVH2` ahead of the
+ *       packet records; the two values differ on purpose.
  *
  * @par AAD header layout (8 bytes, fed verbatim as GCM AAD)
  * | Offset | Size | Field | Value / source                          |
  * |--------|------|-------|-----------------------------------------|
- * | 0..3   | 4    | magic | `AAD_HDR` = "seal" (`MAGIC_LEN` bytes)   |
+ * | 0..3   | 4    | magic | `AAD_HDR` = "seal" (`MAGIC_LEN` bytes)  |
  * | 4      | 1    | alg   | `KdfParams::alg` (0x01 = scrypt)        |
  * | 5      | 1    | log2N | `KdfParams::log2N`; scrypt N = 2^log2N  |
  * | 6      | 1    | r     | `KdfParams::r` (scrypt block size)      |
@@ -44,15 +50,16 @@ static constexpr size_t SALT_LEN = 16;         ///< scrypt salt length in bytes.
 static constexpr size_t KEY_LEN = 32;          ///< AES-256 key length in bytes.
 static constexpr size_t IV_LEN = 12;           ///< AES-GCM initialisation vector length in bytes.
 static constexpr size_t TAG_LEN = 16;          ///< GCM authentication tag length in bytes.
-static constexpr size_t FILE_CHUNK = 1 << 20;  ///< Read-buffer chunk size (1 MiB).
+static constexpr size_t FILE_CHUNK = 1 << 20;  ///< File block size and stream threshold (1 MiB).
 static constexpr uint64_t SCRYPT_N =
-    1ULL << 16;  ///< scrypt CPU/memory cost parameter (@f$2^{16} = 65536@f$).
-static constexpr uint64_t SCRYPT_R = 8;  ///< scrypt block size parameter.
-static constexpr uint64_t SCRYPT_P = 1;  ///< scrypt parallelisation parameter.
+    1ULL << 16;  ///< scrypt cost reference (@f$2^{16} = 65536@f$); runtime N comes from KdfParams.
+static constexpr uint64_t SCRYPT_R = 8;  ///< scrypt block size reference; see KdfParams::r.
+static constexpr uint64_t SCRYPT_P = 1;  ///< scrypt parallelisation reference; see KdfParams::p.
 static constexpr uint64_t SCRYPT_MAXMEM =
-    128ULL * 1024 * 1024;  ///< scrypt maximum memory allowance (128 MiB, ~2x working set).
+    128ULL * 1024 * 1024;  ///< scrypt maxmem floor (128 MiB = 2x the default working set).
 
 /// @brief AAD magic identifying a seal packet (prefixes the self-describing KDF header).
+/// Only the first `MAGIC_LEN` bytes reach the wire; the string terminator is not written.
 static constexpr char AAD_HDR[] = "seal";
 /// @brief Magic-prefix length: bytes compared to identify a packet before parsing.
 static constexpr size_t MAGIC_LEN = sizeof(AAD_HDR) - 1;
@@ -60,10 +67,12 @@ static constexpr size_t MAGIC_LEN = sizeof(AAD_HDR) - 1;
 static constexpr size_t HDR_LEN = 8;
 
 /**
+ * @struct KdfParams
  * @brief Self-describing KDF parameters carried in the packet header.
  *
- * Serialized as four raw bytes (alg, log2N, r, p) inside the
- * GCM-authenticated AAD, so they are tamper-evident. `alg` 0x01 = scrypt.
+ * Serialized as four raw bytes (alg, log2N, r, p) at header offsets 4..7, inside the
+ * GCM-authenticated AAD, so they are tamper-evident. The defaults below are the write-side
+ * values; a parsed packet may carry any values that kdfParamsAcceptable() admits.
  */
 struct KdfParams
 {
@@ -73,15 +82,18 @@ struct KdfParams
     uint8_t p = 1;       ///< scrypt parallelisation.
 };
 
-/// @brief Default write-side parameters (identical to the legacy constants).
+/// @brief Default write-side parameters; the values mirror SCRYPT_N, SCRYPT_R and SCRYPT_P.
 static constexpr KdfParams DEFAULT_KDF{};
 
 static constexpr uint8_t KDF_ALG_SCRYPT = 0x01;  ///< scrypt algorithm id.
-static constexpr uint8_t KDF_LOG2N_MIN = 14;     ///< floor: 16 MiB working set.
-static constexpr uint8_t KDF_LOG2N_MAX = 22;     ///< ceiling: 4 Mi iterations.
+static constexpr uint8_t KDF_LOG2N_MIN = 14;     ///< Floor: 16 MiB working set at r = 8.
+static constexpr uint8_t KDF_LOG2N_MAX = 22;     ///< Ceiling: N = 2^22; see the memory cap.
 static constexpr uint8_t KDF_R_MAX = 32;         ///< scrypt r ceiling.
 static constexpr uint8_t KDF_P_MAX = 16;         ///< scrypt p ceiling.
 /// @brief Decrypt-side memory ceiling: hostile packets cannot demand more.
+/// Cryptography::deriveKey() passes `max(SCRYPT_MAXMEM, 2 * 128 * r * N)` to OpenSSL, so
+/// SCRYPT_MAXMEM is a floor and this constant is the real ceiling. kdfParamsAcceptable()
+/// enforces it before derivation starts; OpenSSL does not.
 static constexpr uint64_t KDF_MAX_MEM_BYTES = 512ULL * 1024 * 1024;
 
 /**
@@ -96,13 +108,18 @@ static constexpr uint64_t KDF_MAX_MEM_BYTES = 512ULL * 1024 * 1024;
  * @par Write-side default vs. decode-side caps
  * | Field | Default (`DEFAULT_KDF`) | Accepted range                  |
  * |-------|-------------------------|---------------------------------|
- * | alg   | 0x01 (scrypt)           | `== KDF_ALG_SCRYPT` (0x01)       |
- * | log2N | 16                      | `KDF_LOG2N_MIN..MAX` = 14..22    |
+ * | alg   | 0x01 (scrypt)           | `== KDF_ALG_SCRYPT` (0x01)      |
+ * | log2N | 16                      | `KDF_LOG2N_MIN..MAX` = 14..22   |
  * | r     | 8                       | 1..`KDF_R_MAX` = 32             |
  * | p     | 1                       | 1..`KDF_P_MAX` = 16             |
  *
  * @param k Parameters parsed from a packet header.
  * @return `true` when every field and the implied memory cost are in range.
+ * @note At the top of the log2N range the memory bound binds first:
+ *       `log2N == KDF_LOG2N_MAX` passes only with `r == 1`, because
+ *       @f$128 \cdot 2 \cdot 2^{22}@f$ is already past the cap.
+ * @warning This is the decode-side gate. Cryptography::makeHeader() serializes whatever
+ *          parameters it is given, so encode-side callers must not take them from a packet.
  */
 constexpr bool kdfParamsAcceptable(const KdfParams& k)
 {
@@ -126,7 +143,14 @@ constexpr bool kdfParamsAcceptable(const KdfParams& k)
     return mem <= KDF_MAX_MEM_BYTES;
 }
 
-/// @brief Compile-time validation of cryptographic configuration invariants.
+/**
+ * @brief Compile-time validation of the cryptographic configuration invariants.
+ *
+ * The static_asserts in the body are checked when this definition is compiled, so a broken
+ * invariant fails the build even when nothing calls the function.
+ *
+ * @return Always `true`; the value exists so that @ref kConfigValid can bind to it.
+ */
 consteval bool validate()
 {
     static_assert(kdfParamsAcceptable(DEFAULT_KDF),
@@ -143,18 +167,25 @@ consteval bool validate()
                   "scrypt MAXMEM must cover the working set (128 * r * N)");
     return true;
 }
-/// @brief Forces validate() to run at compile time; a failed static_assert breaks the build.
+/// @brief Names the validated configuration set and constant-evaluates validate().
+/// The build fails inside validate() itself, so this variable records the invariant set
+/// rather than enforcing it. Nothing reads the value.
 inline constexpr bool kConfigValid = validate();
 }  // namespace cfg
 
-/// @brief Concept for byte-addressable element types.
+/// @brief Concept for element types that may alias raw bytes.
+/// @details Accepts `char`, `unsigned char` and `std::byte` with any cv-qualification.
+///          `signed char` and `wchar_t` are rejected; `std::uint8_t` is accepted because
+///          MSVC defines it as `unsigned char`.
 template <class T>
 concept byte_like =
     std::same_as<std::remove_cv_t<T>, unsigned char> || std::same_as<std::remove_cv_t<T>, char> ||
     std::same_as<std::remove_cv_t<T>, std::byte>;
 
 /// @brief Concept for secure password containers (e.g. basic_secure_string).
-/// @details Requires public `.data()` and `.size()` accessors on the container.
+/// @details Requires public `.data()` and `.size()` accessors. The concept does not demand
+///          locked memory, and `.size()` counts code units, not bytes: key derivation
+///          scales it by `sizeof(CharT)` to get the scrypt password length.
 template <class T>
 concept secure_password = requires(const T& pwd) {
     { pwd.data() };
@@ -168,6 +199,8 @@ concept secure_password = requires(const T& pwd) {
  * @param a Alignment step.
  * @return The smallest multiple of @p a that is not less than @p v.
  * @pre @p a is a non-zero power of two.
+ * @warning @p a must be a power of two. `NDEBUG` (every Release build) drops the assert,
+ *          so @p a == 0 silently returns 0, and @p v near `SIZE_MAX` wraps.
  */
 static constexpr size_t align_up(size_t v, size_t a)
 {

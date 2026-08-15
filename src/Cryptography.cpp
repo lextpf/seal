@@ -14,9 +14,8 @@ namespace seal
 
 bool Cryptography::ctEqualRaw(const unsigned char* a, const unsigned char* b, size_t n)
 {
-    // Constant-time comparison: XOR each byte, OR-accumulate into v.
-    // Any difference sets a bit in v; every iteration runs identical work
-    // so timing is data-independent.
+    // XOR each byte and OR-accumulate into v: any difference sets a bit. Every iteration
+    // runs identical work, so timing is data-independent.
     unsigned char v = 0;
     for (size_t i = 0; i < n; ++i)
         v |= static_cast<unsigned char>(a[i] ^ b[i]);
@@ -30,15 +29,17 @@ void Cryptography::hardenHeap()
 
 void Cryptography::hardenProcessAccess()
 {
-    // Build a DACL that denies dangerous process-access rights to Everyone
-    // while leaving SYSTEM/Administrators full control. Blocks procdump,
-    // Process Hacker, and malware memory reads.
+    // Deny the dangerous process-access rights to Everyone, then allow SYSTEM and
+    // Administrators. The deny ACE comes first and Everyone covers both principals, so they
+    // keep only the rights the deny mask leaves over. This blocks procdump, Process Hacker
+    // and malware memory reads; a caller holding SeDebugPrivilege still bypasses the DACL.
 
     PSECURITY_DESCRIPTOR pSD = nullptr;
     PACL pDacl = nullptr;
 
     // SDDL "D:(D;;0x147A;;;WD)(A;;GA;;;SY)(A;;GA;;;BA)": DACL denying Everyone (WD)
-    //   0x147A = VM_READ|VM_WRITE|VM_OPERATION|DUP_HANDLE|QUERY_INFORMATION|CREATE_THREAD,
+    //   0x147A = CREATE_THREAD|VM_OPERATION|VM_READ|VM_WRITE|DUP_HANDLE|
+    //            QUERY_INFORMATION|QUERY_LIMITED_INFORMATION,
     //   and allowing SYSTEM (SY) and Administrators (BA) GENERIC_ALL (GA).
     BOOL ok = ConvertStringSecurityDescriptorToSecurityDescriptorA(
         "D:(D;;0x147A;;;WD)(A;;GA;;;SY)(A;;GA;;;BA)", SDDL_REVISION_1, &pSD, nullptr);
@@ -60,6 +61,8 @@ void Cryptography::hardenProcessAccess()
     }
 
 #ifdef USE_QT_UI
+    // `ok` reports the SDDL conversion only. SetSecurityInfo has no checked result, so a
+    // failed apply is still logged as result=ok.
     qCInfo(logCrypto).noquote() << QString::fromStdString(seal::diag::joinFields(
         {"event=security.process_access.apply", seal::diag::kv("result", ok ? "ok" : "fail")}));
 #endif
@@ -70,8 +73,7 @@ void Cryptography::disableCrashDumps()
     // Suppress WER - minidumps could contain secrets.
     SetErrorMode(SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS);
 
-    // Unhandled-exception filter: terminate before the default handler can
-    // write a crash dump.
+    // Terminate before the default handler can write a crash dump.
     SetUnhandledExceptionFilter(
         [](PEXCEPTION_POINTERS) -> LONG
         {
@@ -99,11 +101,11 @@ void Cryptography::detectDebugger()
 #else
         OutputDebugStringA("[seal] FATAL: debugger detected\n");
 #endif
-        // 0xDEAD is the seal "security kill" exit code - recognizable in
-        // logs and crash reports as an anti-debug termination.
+        // 0xDEAD is the seal security-kill exit code: it marks an anti-debug termination
+        // in logs and crash reports.
         TerminateProcess(GetCurrentProcess(), 0xDEAD);
-        // __fastfail(7) = FAST_FAIL_FATAL_APP_EXIT: immediate kernel-level
-        // termination that cannot be caught.
+        // __fastfail(7) = FAST_FAIL_FATAL_APP_EXIT: kernel-level termination that cannot
+        // be caught. It backs up TerminateProcess and never returns.
         __fastfail(7);
         return;
     }
@@ -126,8 +128,8 @@ void Cryptography::detectDebugger()
         return;
     }
 
-    // Check 3: NtQueryInformationProcess(ProcessDebugPort).
-    // Resolve dynamically to avoid a hard ntdll dependency.
+    // Check 3: NtQueryInformationProcess(ProcessDebugPort), resolved dynamically to avoid
+    // a hard ntdll dependency. It is skipped when the export cannot be resolved.
     using PFN_NtQueryInformationProcess = LONG(WINAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
     HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
     if (hNtdll)
@@ -168,8 +170,8 @@ void Cryptography::detectDebugger()
 
 void Cryptography::trimWorkingSet()
 {
-    // Force pages out so plaintext doesn't linger in physical RAM
-    // after sensitive operations.
+    // Force pages out so plaintext does not linger in physical RAM after sensitive
+    // operations. VirtualLock'd pages stay resident.
     EmptyWorkingSet(GetCurrentProcess());
 }
 
@@ -188,8 +190,8 @@ BOOL Cryptography::setSecureProcessMitigations(bool allowDynamicCode)
 
     BOOL allSuccess = TRUE;
 
-    // 1. Block dynamic code generation (JIT-injection mitigation).
-    // Skipped in QML UI mode because Qt Quick's V4 needs JIT.
+    // 1. Block dynamic code generation (JIT-injection mitigation). Skipped in QML UI mode
+    // because Qt Quick's V4 engine needs a JIT.
     if (!allowDynamicCode)
     {
         PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynCodePolicy = {};
@@ -270,9 +272,9 @@ BOOL Cryptography::tryEnableLockPrivilege()
         return FALSE;
     }
 
-    // CRITICAL: AdjustTokenPrivileges returns TRUE on partial success (e.g.
-    // privilege absent from token). Must check GetLastError() for
-    // ERROR_SUCCESS to confirm the privilege was actually enabled.
+    // AdjustTokenPrivileges returns TRUE on partial success, for example when the
+    // privilege is absent from the token. Only GetLastError() == ERROR_SUCCESS confirms
+    // that the privilege was enabled.
     DWORD gle = GetLastError();
     CloseHandle(hToken);
 
@@ -312,8 +314,8 @@ Cryptography::PacketHeader Cryptography::makeHeader(const seal::cfg::KdfParams& 
 {
     PacketHeader h;
     h.kdf = kdf;
-    // Copy the magic bytes into the fixed header buffer; the destination
-    // capacity is proven at compile time, so no overflow is constructible.
+    // Copy the magic into the fixed header buffer. The destination capacity is proven at
+    // compile time, so no overflow is constructible.
     static_assert(sizeof(h.bytes) >= seal::cfg::MAGIC_LEN,
                   "packet header buffer must hold the magic bytes");
     std::copy_n(seal::cfg::AAD_HDR, seal::cfg::MAGIC_LEN, h.bytes.begin());
@@ -343,8 +345,8 @@ Cryptography::PacketHeader Cryptography::parsePacketHeader(std::span<const unsig
         {
             throw std::runtime_error("Rejected KDF parameters (out of accepted range)");
         }
-        // Source length was validated (data.size() >= HDR_LEN) above, and the
-        // destination capacity is proven here, so neither buffer can overflow.
+        // The source length was checked above (data.size() >= HDR_LEN) and the destination
+        // capacity is proven here, so neither buffer can overflow.
         static_assert(sizeof(h.bytes) >= seal::cfg::HDR_LEN,
                       "packet header buffer must hold the full header");
         std::copy_n(data.data(), seal::cfg::HDR_LEN, h.bytes.begin());
@@ -363,10 +365,10 @@ Cryptography::LockedKeyBuffer Cryptography::deriveKey(const SecurePwd& pwd,
     // Key material lives in guard-paged, VirtualLock'd memory; never swaps.
     LockedKeyBuffer key(seal::cfg::KEY_LEN);
 
-    // Master password pages are PAGE_NOACCESS most of the time so stray
-    // reads trap. scrypt needs raw bytes, so RWGuard flips to
-    // PAGE_READWRITE for exactly this span and restores PAGE_NOACCESS on
-    // every exit (including throws from opensslCheck below).
+    // scrypt needs raw bytes, so RWGuard flips the payload span to PAGE_READWRITE and
+    // restores the previous protection on every exit, including a throw from opensslCheck
+    // below. No call site leaves a payload at PAGE_NOACCESS today, so the flip is usually a
+    // no-op; the guard keeps the contract for a caller that does.
     seal::RWGuard<CharT> guard(pwd.data());
 
     const char* pass = nullptr;
@@ -436,7 +438,7 @@ std::vector<unsigned char> Cryptography::encryptPacket(std::span<const unsigned 
     opensslCheck(EVP_EncryptInit_ex(ctx.p, nullptr, nullptr, key.data(), iv.data()),
                  "EncryptInit(key/iv) failed");
 
-    // AAD (optional)
+    // AAD. makeHeader() always yields 8 bytes; the empty check is defensive only.
     if (!aad.empty())
     {
         int tmp = 0;
@@ -460,9 +462,9 @@ std::vector<unsigned char> Cryptography::encryptPacket(std::span<const unsigned 
     opensslCheck(EVP_CIPHER_CTX_ctrl(ctx.p, EVP_CTRL_GCM_GET_TAG, (int)tag.size(), tag.data()),
                  "GET_TAG failed");
 
-    // Wire format: [ AAD (optional) | salt | IV | ciphertext | GCM tag ].
-    // Receiver parses fixed-size fields; ciphertext length = remainder.
-    // AAD stays unencrypted so the header can be verified before scrypt.
+    // Wire format: [ AAD (8) | salt (16) | IV (12) | ciphertext | GCM tag (16) ]. The
+    // receiver parses the fixed-size fields and takes the remainder as ciphertext. The AAD
+    // stays unencrypted so the header can be checked before scrypt runs.
     std::vector<unsigned char> out;
     out.reserve(aad.size() + salt.size() + iv.size() + ct.size() + tag.size());
     if (!aad.empty())
@@ -487,8 +489,8 @@ template <secure_password SecurePwd>
 std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned char> packet,
                                                        const SecurePwd& password)
 {
-    // Parse [ header | salt | IV | ciphertext | tag ]. The header doubles
-    // as the AAD and carries cap-validated KDF parameters.
+    // Parse [ header | salt | IV | ciphertext | tag ]. The header doubles as the AAD and
+    // carries cap-validated KDF parameters.
     const PacketHeader header = parsePacketHeader(packet);
     std::span<const unsigned char> aad_expected(header.bytes.data(), header.size);
     const unsigned char* p = packet.data();
@@ -524,7 +526,8 @@ std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned 
     opensslCheck(EVP_DecryptInit_ex(ctx.p, nullptr, nullptr, key.data(), iv),
                  "DecryptInit(key/iv) failed");
 
-    // AAD (if required)
+    // AAD: always the 8 header bytes, taken verbatim from the packet so that a tampered
+    // header fails the tag check.
     if (!aad_expected.empty())
     {
         int tmp = 0;
@@ -533,14 +536,15 @@ std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned 
             "DecryptUpdate(AAD) failed");
     }
 
-    // Decrypt
+    // Decrypt. `plain` is an ordinary vector, so the plaintext is pageable: the caller
+    // wipes the result with cleanseString() once it has consumed it.
     std::vector<unsigned char> plain(ct_len);
     int outlen = 0, fin = 0;
     opensslCheck(EVP_DecryptUpdate(ctx.p, plain.data(), &outlen, ct, (int)ct_len),
                  "DecryptUpdate(CT) failed");
 
-    // Set tag and finalize - this is the auth check. SET_TAG takes void*,
-    // not const void*, so copy into a mutable buffer.
+    // Set the tag and finalize: this is the authentication check. SET_TAG takes void*, not
+    // const void*, so copy into a mutable buffer.
     std::vector<unsigned char> tagCopy(tag, tag + seal::cfg::TAG_LEN);
     opensslCheck(
         EVP_CIPHER_CTX_ctrl(ctx.p, EVP_CTRL_GCM_SET_TAG, (int)seal::cfg::TAG_LEN, tagCopy.data()),
@@ -606,9 +610,9 @@ void Cryptography::verifyPacket(std::span<const unsigned char> packet, const Sec
             "DecryptUpdate(AAD) failed");
     }
 
-    // Stream ciphertext through GCM and discard plaintext; only the tag
-    // matters here. thread_local scratch keeps allocation at O(1) without
-    // burning 64 KB of stack per call.
+    // Stream the ciphertext through GCM and discard the plaintext; only the tag matters
+    // here. The thread_local scratch keeps allocation at O(1) without burning 64 KiB of
+    // stack per call.
     constexpr size_t VERIFY_CHUNK = 65536;
     thread_local unsigned char scratch[VERIFY_CHUNK];
     int outlen = 0;
@@ -644,7 +648,8 @@ void Cryptography::verifyPacket(std::span<const unsigned char> packet, const Sec
     }
 }
 
-// Explicit instantiations for narrow (UTF-8) and wide (UTF-16) passwords.
+// Explicit instantiations for narrow (char) and wide (wchar_t) password containers. These
+// two types are what links; another container type gives a link error, not a compile error.
 template Cryptography::LockedKeyBuffer Cryptography::deriveKey(const secure_string<>&,
                                                                std::span<const unsigned char>,
                                                                const seal::cfg::KdfParams&);
