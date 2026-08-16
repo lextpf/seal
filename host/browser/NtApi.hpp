@@ -5,16 +5,16 @@
  * @author Alex (https://github.com/lextpf)
  * @ingroup FillController
  *
- * seal-browser proves its stdio pipes were created by the real browser (not a
- * re-parented puppet) by walking the claimed parent's handle table and matching
- * an entry against its own stdin's pipe object. That needs two NT-private calls
- * - NtQuerySystemInformation and NtQueryObject - plus the undocumented structs
- * they fill. Both are resolved at runtime via GetProcAddress so the binary
- * carries no ntdll import; the loaders return nullptr when unavailable and
- * callers fail closed.
+ * seal-browser proves its stdio pipes came from a real browser, and not from a
+ * re-parented puppet, by walking the claimed parent's handle table and matching an
+ * entry against its own stdin pipe object. That needs two NT-private calls,
+ * NtQuerySystemInformation and NtQueryObject, plus the undocumented structs they
+ * fill. Both resolve at runtime through GetProcAddress, so the binary carries no
+ * ntdll import. The loaders return nullptr when the export is missing and callers
+ * fail closed.
  *
- * The struct field names deliberately mirror the OS ABI layout verbatim; do not
- * rename them to the project's field convention.
+ * The struct and field names mirror the OS ABI layout verbatim. Do not rename them
+ * to the project's naming convention.
  */
 
 #ifndef NOMINMAX
@@ -30,6 +30,7 @@
 namespace nt
 {
 
+// winternl.h declares neither info class nor this status, hence the raw values.
 constexpr SYSTEM_INFORMATION_CLASS SystemExtendedHandleInformation =
     static_cast<SYSTEM_INFORMATION_CLASS>(64);
 constexpr OBJECT_INFORMATION_CLASS ObjectNameInformation = static_cast<OBJECT_INFORMATION_CLASS>(1);

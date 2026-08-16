@@ -8,11 +8,10 @@
 namespace seal::browser_host
 {
 
-// Kernel-level pipe name for a handle. CreatePipe() pipes get an internal
-// name like `\Device\NamedPipe\Win32Pipes.<tid>.<seq>`; both ends share
-// it. Empty on any failure - callers treat empty as "unverifiable" and
-// fall back to the surrounding policy (fail closed in production, soft-
-// pass in dev).
+// Kernel object name of a pipe handle. A CreatePipe() pipe gets an internal name
+// like `\Device\NamedPipe\Win32Pipes.<tid>.<seq>`, and both ends share it. Empty
+// on any failure; the caller treats empty as unverifiable and applies its own
+// policy (a signed build fails closed, an unsigned build continues).
 std::wstring getHandlePipeName(HANDLE handle)
 {
     static const nt::NtQueryObjectFn queryObject = nt::loadQueryObject();
@@ -45,10 +44,11 @@ std::wstring getHandlePipeName(HANDLE handle)
     return std::wstring(info->Name.Buffer, info->Name.Length / sizeof(wchar_t));
 }
 
-// Prove the parent owns the other end of `handle`. Both pipe ends share
-// an NT object name; the parent's handle table contains that object IFF
-// the parent created the pipe. Defeats puppet attacks that re-parent via
-// PROC_THREAD_ATTRIBUTE_PARENT_PROCESS. Best-effort; false on failure.
+// Prove the parent owns the other end of the pipe named `expectedPipeName`. Both
+// ends share one NT object name, and that object appears in the parent's handle
+// table only if the parent created the pipe. This defeats a puppet that claims a
+// browser parent through PROC_THREAD_ATTRIBUTE_PARENT_PROCESS. Best effort: any
+// failure returns false.
 bool parentOwnsPipe(DWORD parentPid, const std::wstring& expectedPipeName)
 {
     if (expectedPipeName.empty() || parentPid == 0)
@@ -67,8 +67,9 @@ bool parentOwnsPipe(DWORD parentPid, const std::wstring& expectedPipeName)
         return false;
     }
 
-    // SystemExtendedHandleInformation: every handle in every process.
-    // Start at 1 MB; resize-and-retry on STATUS_INFO_LENGTH_MISMATCH.
+    // SystemExtendedHandleInformation returns every handle in every process, so the
+    // buffer starts at 1 MB and doubles on STATUS_INFO_LENGTH_MISMATCH. The attempt
+    // cap bounds the growth when the system handle count keeps outrunning it.
     std::vector<BYTE> buf(1 * 1024 * 1024);
     ULONG returned = 0;
     NTSTATUS status = nt::STATUS_INFO_LENGTH_MISMATCH_VALUE;
@@ -98,8 +99,8 @@ bool parentOwnsPipe(DWORD parentPid, const std::wstring& expectedPipeName)
         {
             continue;
         }
-        // Duplicate into our process so we can query the name; skip
-        // protected / pseudo handles where DuplicateHandle fails.
+        // Duplicate into this process to query the name. Protected and pseudo
+        // handles fail DuplicateHandle and are skipped.
         HANDLE dup = nullptr;
         if (!DuplicateHandle(parentHandle,
                              reinterpret_cast<HANDLE>(entry.HandleValue),
@@ -111,8 +112,8 @@ bool parentOwnsPipe(DWORD parentPid, const std::wstring& expectedPipeName)
         {
             continue;
         }
-        // Fast filter: only pipes can match. GetFileType is much cheaper
-        // than NtQueryObject(ObjectNameInformation).
+        // Fast filter: a pipe is the only type that can match, and GetFileType is
+        // far cheaper than NtQueryObject(ObjectNameInformation) on every handle.
         if (GetFileType(dup) == FILE_TYPE_PIPE)
         {
             const std::wstring dupName = getHandlePipeName(dup);
@@ -127,12 +128,12 @@ bool parentOwnsPipe(DWORD parentPid, const std::wstring& expectedPipeName)
     return found;
 }
 
-// Verify a stdio handle is a pipe from a trusted process. Soft-passes:
-// (1) anonymous pipes - GetNamedPipeServerProcessId fails, bridge-side
-// parent check still applies; (2) Chrome's split-process model where the
-// server (browser) and our parent (utility) are different chrome.exe --
-// accept iff the server is itself a known signed browser. Untrusted
-// servers (malware puppets) still fail.
+// Verify a stdio handle is a pipe served by a trusted process. Two soft-passes:
+// an anonymous pipe fails GetNamedPipeServerProcessId and passes here, leaving the
+// bridge-side parent check to carry the weight; Chrome's split-process model puts
+// the server (browser) and the parent (utility) in different chrome.exe processes,
+// so a server that is itself a known signed browser passes. An untrusted server,
+// such as a malware puppet, fails.
 bool isStdHandleFromProcess(HANDLE handle, DWORD expectedPid)
 {
     if (handle == nullptr || handle == INVALID_HANDLE_VALUE)
@@ -146,14 +147,14 @@ bool isStdHandleFromProcess(HANDLE handle, DWORD expectedPid)
     DWORD serverPid = 0;
     if (!GetNamedPipeServerProcessId(handle, &serverPid))
     {
-        return true;  // anonymous pipe - soft-pass (see header comment).
+        return true;  // anonymous pipe: soft-pass, see the comment above.
     }
     if (serverPid == 0 || serverPid == expectedPid)
     {
         return true;
     }
-    // Server diverged from parent - accept only if it's a known browser
-    // signed by that browser's expected publisher (Chrome's utility-process split).
+    // The server and the parent differ. Accept only a known browser image signed by
+    // that browser's expected publisher, which is Chrome's utility-process split.
     const std::wstring serverPath = seal::signer::resolveProcessPath(serverPid);
     if (serverPath.empty())
     {

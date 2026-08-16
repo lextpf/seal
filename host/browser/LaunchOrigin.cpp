@@ -18,15 +18,15 @@ namespace seal::browser_host
 namespace
 {
 
-// Pinned Chrome extension origin (deterministic from the manifest "key";
-// see src/CliModes.cpp kSealExtensionIdAscii). Update in lockstep if the
-// key is ever regenerated.
+// Pinned Chrome extension origin. The id derives from the manifest "key" and is
+// hardcoded twice: here, and as kSealExtensionIdAscii in src/CliModes.cpp, which
+// writes the allowed_origins list. Regenerating the key means updating both.
 constexpr std::wstring_view kPinnedChromeOrigin =
     L"chrome-extension://dfjclelhkideboildnjihgildihjjmdo/";
 constexpr std::wstring_view kFirefoxOriginPrefix = L"moz-extension://";
 
-// Wide prefix compare; we control the origin strings so case-sensitivity
-// is fine.
+// Wide prefix compare. The origin strings are fixed and lower-case, so a
+// case-sensitive match is enough.
 bool hasPrefix(std::wstring_view full, std::wstring_view prefix) noexcept
 {
     if (full.size() < prefix.size())
@@ -38,10 +38,10 @@ bool hasPrefix(std::wstring_view full, std::wstring_view prefix) noexcept
 
 }  // namespace
 
-// argv[1] must be the native-messaging origin the browser passes:
-// Chrome -> `chrome-extension://<id>/`, Firefox -> `moz-extension://<uuid>/`.
-// Any other shape (raw exec, malware spawn) is rejected before we touch
-// the bridge pipe.
+// argv[1] has to be the native-messaging origin the browser passes: Chrome sends
+// `chrome-extension://<id>/`, Firefox sends `moz-extension://<uuid>/`. Any other
+// shape, such as a raw exec or a malware spawn, is rejected before this process
+// touches the bridge pipe.
 bool isLegitimateLaunchOrigin()
 {
     int argc = 0;
@@ -60,9 +60,9 @@ bool isLegitimateLaunchOrigin()
         }
         else if (hasPrefix(origin, kFirefoxOriginPrefix))
         {
-            // Firefox uses a per-install UUID, so the scheme is the
-            // strongest claim we can make here. The bridge still
-            // requires the parent to be a signed firefox.exe.
+            // Firefox derives the origin from a per-install UUID, so there is no
+            // fixed id to pin and the scheme is the strongest claim available
+            // here. The bridge still requires a signed firefox.exe parent.
             ok = true;
         }
     }

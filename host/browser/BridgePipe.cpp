@@ -10,15 +10,21 @@ namespace
 {
 
 constexpr DWORD kConnectTimeoutMs = 5000;
-// Candidate-pipe scan cap; only one should match our signer.
+// Candidate-pipe scan cap. The first match wins, and more than one candidate can
+// match: the signer compare is publisher-granular, and a second seal.exe instance
+// publishes its own seal-fill-* pipe, so enumeration order decides which bridge this
+// host binds to. The cap bounds scan cost. The trade-off is that more decoys than
+// this limit enumerating ahead of the real pipe hide it, and the launch then fails
+// with exit code 2.
 constexpr int kPipeBruteForceLimit = 32;
 
 }  // namespace
 
-// Open the seal bridge pipe. Each `seal-fill-*` candidate's server must
-// match our publisher's SPKI thumbprint - a same-user attacker can pre-
-// create a sorting-earlier pipe but cannot sign with seal's key. Dev mode
-// (empty expectedIdentity) accepts the first pipe (mirrors bridge M6).
+// Open the seal bridge pipe. The server behind a `seal-fill-*` candidate has to
+// match this host's own publisher SPKI thumbprint: a same-user attacker can
+// pre-create a pipe that sorts earlier, but cannot sign it with seal's key. An
+// unsigned build passes an empty expectedIdentity and accepts the first reachable
+// candidate, matching the degraded mode of the bridge's M6 signer gate.
 HANDLE openBridgePipe(const std::string& expectedIdentity)
 {
     WIN32_FIND_DATAW data{};
@@ -39,11 +45,11 @@ HANDLE openBridgePipe(const std::string& expectedIdentity)
         std::wstring fullName = L"\\\\.\\pipe\\";
         fullName += data.cFileName;
 
-        // FILE_FLAG_OVERLAPPED is REQUIRED: the host reads (reverse
-        // username-injection directives) and writes (forward click/nav
-        // reports) this one duplex handle from two threads concurrently. On a
-        // synchronous handle a pending blocking ReadFile holds the file-object
-        // lock and would serialize - in fact deadlock - the forward WriteFile.
+        // FILE_FLAG_OVERLAPPED is load-bearing. Two threads use this one duplex
+        // handle at the same time: the reverse reader takes username-injection
+        // directives, the forward writer sends click and nav reports. On a
+        // synchronous handle a pending blocking ReadFile holds the file-object lock,
+        // which serializes and in practice deadlocks the forward WriteFile.
         HANDLE pipe = CreateFileW(fullName.c_str(),
                                   GENERIC_READ | GENERIC_WRITE,
                                   0,
@@ -73,8 +79,8 @@ HANDLE openBridgePipe(const std::string& expectedIdentity)
             }
         }
 
-        // Default client side is BYTE mode; flip to message mode so framed
-        // reads/writes are atomic. Failure -> not a real seal bridge.
+        // The client side starts in byte mode; message mode makes each framed read
+        // and write atomic. A failure here means the pipe is not a seal bridge.
         DWORD mode = PIPE_READMODE_MESSAGE;
         if (!SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr))
         {
@@ -82,8 +88,8 @@ HANDLE openBridgePipe(const std::string& expectedIdentity)
             continue;
         }
 
-        // Signer gate. Without it, a same-user attacker who pre-created a
-        // matching pipe would intercept the handshake + click reports.
+        // Signer gate. Without it, a same-user attacker who pre-created a matching
+        // pipe would intercept the handshake and every click report.
         DWORD serverPid = 0;
         if (!GetNamedPipeServerProcessId(pipe, &serverPid) || serverPid == 0)
         {

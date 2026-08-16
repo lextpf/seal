@@ -8,6 +8,8 @@ namespace seal::browser_host
 namespace
 {
 
+// Read-side frame cap, matching the bridge's own limit: a frame the bridge would
+// refuse ends the relay here instead of being forwarded.
 constexpr DWORD kMaxMessageBytes = 4096;
 
 bool readExact(HANDLE h, void* buf, DWORD n)
@@ -47,7 +49,7 @@ bool writeAll(HANDLE h, const void* buf, DWORD n)
 }
 
 // Overlapped write of exactly n bytes to the duplex bridge pipe. `ev` is a
-// caller-owned manual-reset event dedicated to the write direction, so a
+// caller-owned manual-reset event used by the write direction alone, so the
 // concurrent overlapped read on the same handle never aliases it.
 bool overlappedPipeWrite(HANDLE pipe, HANDLE ev, const void* buf, DWORD n)
 {
@@ -79,9 +81,9 @@ bool overlappedPipeWrite(HANDLE pipe, HANDLE ev, const void* buf, DWORD n)
     return true;
 }
 
-// Overlapped read of exactly n bytes from the duplex bridge pipe, waking early
-// when `shutdownEvent` is signaled - deterministic teardown with no CancelIoEx
-// timing race and no file-object-lock serialization against concurrent writes.
+// Overlapped read of exactly n bytes from the duplex bridge pipe. Waiting on both
+// `ev` and `shutdownEvent` gives teardown a deterministic wake with no CancelIoEx
+// timing race, and no file-object-lock serialization against a concurrent write.
 bool overlappedPipeRead(HANDLE pipe, HANDLE ev, HANDLE shutdownEvent, void* buf, DWORD n)
 {
     DWORD total = 0;
@@ -103,8 +105,9 @@ bool overlappedPipeRead(HANDLE pipe, HANDLE ev, HANDLE shutdownEvent, void* buf,
             if (w != WAIT_OBJECT_0)
             {
                 CancelIoEx(pipe, &ov);
-                GetOverlappedResult(pipe, &ov, &got, TRUE);  // drain the cancel
-                return false;                                // shutdown / wait error
+                // Wait out the cancellation before `ov` leaves scope.
+                GetOverlappedResult(pipe, &ov, &got, TRUE);
+                return false;  // shutdown or wait error
             }
             if (!GetOverlappedResult(pipe, &ov, &got, TRUE))
             {
@@ -135,8 +138,9 @@ DWORD decodeLen(const std::array<unsigned char, 4>& b)
            (static_cast<DWORD>(b[2]) << 16) | (static_cast<DWORD>(b[3]) << 24);
 }
 
-// Read one length-prefixed frame via `read(buf, n) -> bool`. Empty vector on
-// EOF / oversized / read error - the contract both public readers share.
+// Read one length-prefixed frame through `read(buf, n) -> bool`. Returns an empty
+// vector on end-of-file, an out-of-range length, or a read error. A zero length is
+// rejected as well, so callers can treat empty as "no more traffic".
 template <typename ReadFn>
 std::vector<char> readFrame(ReadFn read)
 {
@@ -158,7 +162,7 @@ std::vector<char> readFrame(ReadFn read)
     return payload;
 }
 
-// Write one length-prefixed frame via `write(buf, n) -> bool`.
+// Write one length-prefixed frame through `write(buf, n) -> bool`.
 template <typename WriteFn>
 bool writeFrame(WriteFn write, const std::vector<char>& payload)
 {
@@ -173,14 +177,14 @@ bool writeFrame(WriteFn write, const std::vector<char>& payload)
 
 }  // namespace
 
-// Read one Chrome native-messaging frame from stdin: 4-byte LE length +
-// UTF-8 JSON. Empty vector on EOF, oversized, or read error.
+// Read one Chrome native-messaging frame from stdin: 4-byte little-endian length
+// plus UTF-8 JSON. Empty vector on end-of-file, oversize, or read error.
 std::vector<char> readNativeMessage(HANDLE in)
 {
     return readFrame([in](void* buf, DWORD n) { return readExact(in, buf, n); });
 }
 
-// Forward one bridge payload to stdout (extension consumes the handshake).
+// Forward one bridge payload to stdout, where the extension consumes it.
 bool writeNativeMessage(HANDLE out, const std::vector<char>& payload)
 {
     return writeFrame([out](const void* buf, DWORD n) { return writeAll(out, buf, n); }, payload);
