@@ -91,8 +91,10 @@ bool containsUsernameHint(const QString& rawText)
     if (text.isEmpty())
         return false;
 
-    // Compound forms only - bare "user" would false-positive on user-agent,
-    // user-profile-pic, etc. English and German keywords only.
+    // Bare "user" is absent: it would false-positive on user-agent,
+    // user-profile-pic, etc. Only the four user-stem entries are compounds; the
+    // rest are standalone words matched as unanchored substrings, so a
+    // container named "account-menu" also hits. English and German only.
     static const std::array<QStringView, 15> kUsernameHints = {
         QStringView{u"username"},
         QStringView{u"user-name"},
@@ -425,10 +427,9 @@ bool searchDescendantsForPassword(IUIAutomationTreeWalker* walker,
     return false;
 }
 
-// Walk up from `start` for a form-like container: ancestor with >=2 direct
-// Edit/Custom children and a bounding rect <= half the primary monitor
-// (the cap prevents landing on <body> for short pages). Caller owns the
-// returned element.
+// Walk up from `start` for a form-like container: an ancestor with >=2 direct
+// Edit/Custom children and a bounding rect <= half the primary monitor (the
+// cap prevents landing on <body> for short pages). Caller owns the result.
 IUIAutomationElement* findFormAncestor(IUIAutomationTreeWalker* walker, IUIAutomationElement* start)
 {
     if (!walker || !start)
@@ -552,7 +553,7 @@ void enumerateFormInputs(IUIAutomationTreeWalker* walker,
         f.elem->Release();
     }
 
-    // Release remaining frames if we hit the budget cap.
+    // Release remaining frames when the budget cap ended the walk early.
     for (Frame& f : stack)
         f.elem->Release();
 }

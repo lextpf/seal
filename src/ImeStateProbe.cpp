@@ -28,7 +28,9 @@ ProbeResult ImeStateProbe::run(const ProbeContext& ctx)
 
     if (!hasContext)
     {
-        // Field has explicitly disabled IME - mild Password signal.
+        // No IME context on the target window, usually an explicit opt-out
+        // by the field. Mild Password signal only - see the header warning
+        // that this is a per-window answer, not a per-field one.
         result.m_Verdict = Verdict::Password;
         result.m_Confidence = 0.3F;
         result.m_Evidence = "ime_context=disabled";

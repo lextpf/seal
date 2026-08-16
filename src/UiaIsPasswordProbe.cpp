@@ -109,9 +109,9 @@ ProbeResult UiaIsPasswordProbe::run(const ProbeContext& ctx)
         return result;
     }
 
-    // inspectElementPasswordState yields m_Source "IsPassword" or
-    // "LegacyState" for the strong UIA signals; we accept only those and
-    // leave its weaker metadata fallback to UiaMetadataProbe.
+    // inspectElementPasswordState reports m_Source "IsPassword" or
+    // "LegacyState" for the strong UIA signals. Only those two count here;
+    // its weaker metadata fallback belongs to UiaMetadataProbe.
     const UiaHintObservation obs =
         inspectElementPasswordState(element, /*skipControlTypeGate=*/true);
     element->Release();

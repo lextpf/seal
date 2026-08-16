@@ -85,8 +85,9 @@ bool runMsaaHintPath(POINT pt, ProbeResult& result)
     return matched;
 }
 
-// Form-context peer inference (formerly FillController::probeFormContext).
-// Returns Password/Username at confidence 0.4, or leaves Unknown.
+// Form-context peer inference. Sets Password/Username at confidence 0.4. The
+// result stays Unknown when an argument is null, no form-like ancestor is found,
+// fewer than two inputs are enumerated, or no clicked peer is identified.
 void runFormContextPath(IUIAutomation* automation,
                         IUIAutomationTreeWalker* walker,
                         IUIAutomationElement* hit,
@@ -274,7 +275,7 @@ ProbeResult UiaMetadataProbe::run(const ProbeContext& ctx)
 
     // Phase 1: MSAA accName / accDescription hint match. The sibling
     // UiaIsPasswordProbe already warmed the a11y tree and handled
-    // STATE_SYSTEM_PROTECTED; here we cover Tier-2 name/description metadata.
+    // STATE_SYSTEM_PROTECTED; this phase covers name/description metadata.
     if (runMsaaHintPath(pt, result))
     {
         return result;
