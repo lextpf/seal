@@ -8,9 +8,12 @@
 namespace
 {
 
-// RFC 4180 tokenizer: emits rows of fields; quotes, doubled-quote escapes,
-// and embedded separators per the spec; tolerates LF-only endings and a
-// missing final newline. Blank lines are skipped.
+// RFC 4180 tokenizer: emits rows of fields, with quotes, doubled-quote escapes
+// and embedded separators as the spec requires. Tolerates LF-only endings and a
+// missing final newline. Blank lines are skipped, so the header is the first
+// non-blank row. Two deliberate leniencies: a lone CR ends a row, and a '"'
+// that is not the first character of a field is kept as a literal character
+// instead of failing the parse.
 std::vector<std::vector<std::string>> parseRows(std::string_view content)
 {
     std::vector<std::vector<std::string>> rows;
@@ -28,6 +31,8 @@ std::vector<std::vector<std::string>> parseRows(std::string_view content)
     auto endRow = [&]()
     {
         endField();
+        // A row of exactly one empty field is a blank line, not a data row.
+        // A row of several empty fields (",,") is kept: it is a real short row.
         if (!(row.size() == 1 && row[0].empty()))
         {
             rows.push_back(std::move(row));
@@ -145,6 +150,7 @@ bool ParseChromeCsv(std::string_view content, std::vector<Credential>& out, Stat
     }
 
     // Column lookup from the header row (case-insensitive, extras ignored).
+    // A duplicated header name resolves to its last occurrence.
     int colName = -1;
     int colUrl = -1;
     int colUser = -1;
@@ -187,6 +193,8 @@ bool ParseChromeCsv(std::string_view content, std::vector<Credential>& out, Stat
     for (size_t r = 1; r < rows.size(); ++r)
     {
         const auto& row = rows[r];
+        // Too short to hold the right-most required column. A longer row is
+        // fine; the surplus fields are never read.
         if (static_cast<int>(row.size()) <= maxNeeded)
         {
             ++stats.badRows;
