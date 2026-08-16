@@ -10,14 +10,15 @@ namespace seal
 class BrowserBridge;
 
 /**
+ * @class BrowserBridgeProbe
  * @brief Tier-1 candidate probe that consults the BrowserBridge in-memory map.
  * @author Alex (https://github.com/lextpf)
  * @ingroup FillController
  *
  * Returns Password at confidence 0.97 or Username at confidence 0.95 when the
- * bridge has a fresh entry matching the click's (browser-pid, x, y) within
- * jitter tolerance. Returns Unknown when the bridge is offline, disabled
- * (M8 panic mode), or has no recent matching entry.
+ * bridge holds a fresh entry matching the click's (browser-pid, x, y) within
+ * tolerance. Returns Unknown when the bridge is offline, panic-disabled (M8),
+ * or has no matching entry.
  *
  * @par Result map
  * | Condition                            | Verdict  | Conf | Evidence token        |
@@ -28,17 +29,21 @@ class BrowserBridge;
  * | Entry verdict Username               | Username | 0.95 | bridge_match          |
  * | Entry verdict neither                | Unknown  | 0    | entry_unknown_verdict |
  *
- * The probe sets confidences high enough to qualify for Tier-1 short-
- * circuit, but FusionDecider's M5 rule requires agreement with at least
- * one other Tier-1 probe before honoring a bridge-alone verdict; that
- * gate lives in FusionDecider.cpp, not here. The reason for the M5
- * carve-out: a bridge-alone hit depends on a remote browser extension
- * that's outside seal's signed-binary trust boundary, so it needs a
- * second on-disk signal (Win32 style or UIA IsPassword) to corroborate
- * before it's allowed to drive a fill on its own.
+ * @par Why M5 exists
+ * These confidences qualify for the Tier-1 short-circuit, but FusionDecider's
+ * M5 rule still requires a second Tier-1 probe to agree. That gate lives in
+ * FusionDecider.cpp, not here. A bridge-alone hit rests on a browser extension
+ * outside seal's signed-binary trust boundary, so an on-disk signal (Win32
+ * style or UIA IsPassword) must corroborate it before it drives a fill.
  *
- * The probe does not own the BrowserBridge instance - FillController owns
- * the bridge and passes a non-owning pointer at construction time.
+ * @par Ownership
+ * FillController owns the BrowserBridge and passes a non-owning pointer at
+ * construction.
+ *
+ * @note The probe reports only the verdict and a short evidence token. The
+ *       matched entry's host stays off the evidence channel because it leaks
+ *       a browsing pattern into the log; FillController reads that host
+ *       directly from @ref BrowserBridge::lookup for the URL-binding gate.
  */
 class BrowserBridgeProbe : public IProbe
 {
@@ -53,10 +58,10 @@ public:
     /**
      * @brief Look up the click site in the bridge's in-memory map.
      *
-     * Tries a quantised lookup with @c kLookupToleranceRawPx Chebyshev
-     * radius (currently ~48 px) and the freshest match wins. The bridge
-     * itself handles all the expiry / authentication / parent-process
-     * checking; this probe just reads the cooked result.
+     * Runs one quantised lookup with a Chebyshev radius of
+     * @c kLookupToleranceRawPx (48 px); the freshest match wins. The bridge has
+     * already applied expiry, peer authentication and the ancestor check, so
+     * this probe only reads the result.
      *
      * @verbatim
      *   Chebyshev match window, half-width kLookupToleranceRawPx = 48 px
@@ -88,10 +93,9 @@ public:
     /**
      * @brief Per-call budget in milliseconds.
      *
-     * The probe's actual cost is a single map lookup with a tiny
-     * neighbourhood scan - microseconds. The 5 ms budget is the soft
-     * cap for telemetry; we'd be alarmed if a single lookup ever
-     * approached it.
+     * The real cost is one bounded map scan, in microseconds. The 5 ms value is an
+     * advisory budget - nothing measures the call - chosen so the five declared
+     * budgets stay inside the 300 ms pass deadline.
      */
     std::chrono::milliseconds budget() const override { return std::chrono::milliseconds(5); }
 

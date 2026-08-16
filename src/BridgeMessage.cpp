@@ -35,27 +35,29 @@ constexpr std::uint32_t kKeyForm = 1U << 8;
 constexpr std::uint32_t kKeyUser = 1U << 9;
 constexpr std::uint32_t kKeyVisit = 1U << 10;
 
-// Click report: the field-click shape. `kind` is optional (absent == click);
-// `secure` is required so http and https are not indistinguishable downstream;
-// `visit` is OPTIONAL - the per-document page-load token that binds a cached
-// click authorization to the document it was reported from (absent on an older
-// extension, which then falls back to host-only binding). `form`/`user` remain
-// forbidden on the click shape.
+// Click report: the field-click shape. `kind` is optional and absent means
+// click. `secure` is required so http and https stay distinguishable
+// downstream. `visit` is optional: it is the per-document page-load token that
+// binds a cached click authorization to the document it came from, and a report
+// without one falls back to host-only binding. `form` and `user` are forbidden
+// on the click shape.
 constexpr std::uint32_t kClickRequired =
     kKeyV | kKeyX | kKeyY | kKeyTag | kKeyUrlHost | kKeyUrlPathHash | kKeySecure;
 constexpr std::uint32_t kClickAllowed = kClickRequired | kKeyKind | kKeyVisit;
 
-// Nav report: host + secure/form flags, no click coordinates. `user` (a login-identifier
-// field for email-first / multi-step logins) and `visit` (the per-document page-load token
-// behind the once-per-visit staging latches) are OPTIONAL, so a stale extension sending an
-// older nav shape still parses; an absent visit makes staging fail closed downstream.
+// Nav report: host plus the secure/form flags, no click coordinates. Both
+// `user` (a login-identifier field for email-first or multi-step logins) and
+// `visit` (the per-document page-load token behind the once-per-visit staging
+// latches) are optional, so a report that omits them still parses. An absent
+// visit makes staging fail closed downstream.
 constexpr std::uint32_t kNavRequired = kKeyV | kKeyKind | kKeyUrlHost | kKeySecure | kKeyForm;
 constexpr std::uint32_t kNavAllowed = kNavRequired | kKeyUser | kKeyVisit;
 
-// Hand-rolled bounded recursive-descent JSON parser. Supports only the schema subset:
-// objects, ASCII-printable strings, signed decimal ints, structural punctuation. No floats,
-// scientific notation, leading zeros, Unicode escapes, or escapes other than \\ and \". Depth
-// is capped at every object/array entry to defend the C stack from deep nesting.
+// Hand-rolled bounded JSON parser. It supports only the schema subset: one flat
+// object, ASCII-printable strings, signed decimal ints, structural punctuation.
+// No floats, scientific notation, leading zeros, Unicode escapes, or escapes
+// other than \\ and \". No schema key accepts an object or array value, so the
+// parser never recurses and the depth budget is a guard the grammar cannot trip.
 class Parser
 {
 public:
@@ -409,9 +411,10 @@ private:
         return BridgeParseError::None;
     }
 
-    // Parse a short (<=15 char) string value and map it against `table` by exact
-    // match, writing the matched enumerator to `out`. BadValue if unmatched.
-    // Shared by the tag and kind keys (their whitelists are the tables).
+    // Parse a short (<=16 char) string value and map it against `table` by exact
+    // match, writing the matched enumerator to `out`. Longer than the buffer is
+    // TooLarge; in-buffer but unmatched is BadValue. Shared by the tag and kind
+    // keys (their whitelists are the tables).
     template <typename Enum, std::size_t N>
     BridgeParseError parseEnumValue(const std::array<std::pair<std::string_view, Enum>, N>& table,
                                     Enum* out) noexcept
@@ -488,9 +491,10 @@ private:
     // Per-key dispatch with strict type/range checks.
     BridgeParseError parseValueForKey(std::uint32_t keyBit, ParsedBridgeMessage* out, int depth)
     {
-        // No schema key legitimately holds an object/array; the depth
-        // budget only defends against attacker payloads that try to
-        // exhaust the C stack before reaching a value.
+        // No schema key holds an object or array, so every such value is
+        // refused as BadType. The depth test in front of it only matters if a
+        // future schema ever descends here; today `depth` is always 0 and the
+        // DepthExceeded branch is unreachable.
         if (peek() == '{' || peek() == '[')
         {
             if (depth + 1 >= kMaxDepth)

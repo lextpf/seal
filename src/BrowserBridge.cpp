@@ -102,17 +102,17 @@ constexpr DWORD kAcceptBackoffMs = 50;
 constexpr DWORD kMessageReadTimeoutMs = 5000;
 constexpr DWORD kMaxMessageBytes = 4096;
 // Bridge-entry TTL. Matches FillController::FILL_TIMEOUT_SECONDS so the cache
-// and armed window share one "30 s from the prior mousedown" model - enough for
-// click-to-focus then alt-tab to seal then Ctrl+Click. The earlier 2 s was too
-// tight for human-paced autofill and caused silent "browser_extension=unknown" misses.
+// and the armed window share one "30 s from the prior mousedown" model - enough
+// for click-to-focus, then alt-tab to seal, then Ctrl+Click. A window of a few
+// seconds produces silent "browser_extension=unknown" misses.
 constexpr auto kEntryLifetime = std::chrono::seconds(30);
 
 // Quantises a raw screen coordinate to the map's bucket resolution.
 constexpr int kQuantShift = 2;
 
-// Navigation-snapshot freshness. Short: a staged auto-arm must reflect where
-// the user *is now*, not a page they left minutes ago. StagingController
-// polls at ~100 ms, so a few seconds is ample to catch a fresh navigation.
+// Navigation-snapshot freshness. Short on purpose: a staged auto-arm must
+// reflect the page the user is on now. StagingController polls at ~100 ms, so a
+// few seconds catches every fresh navigation.
 constexpr auto kNavLifetime = std::chrono::seconds(10);
 
 // Per-connection navigation-report rate limit (a DoS guard against SPA route
@@ -216,9 +216,10 @@ struct ConnectionWorker
     std::shared_ptr<std::atomic<bool>> m_Done;
 };
 
-// Build SECURITY_ATTRIBUTES that grant the current user SID rwx + sync,
-// no Authenticated-Users / Administrators ACE. CreateNamedPipe consumes
-// the contents, but storage must outlive the call - hence the carrier.
+// Build SECURITY_ATTRIBUTES with one ACE granting the current user SID
+// GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE - no Authenticated-Users and no
+// Administrators ACE. CreateNamedPipe reads the contents, but the descriptor,
+// the ACL and the token-user buffer must outlive the call - hence the carrier.
 struct PipeSecurity
 {
     SECURITY_ATTRIBUTES m_Attributes{};
@@ -299,8 +300,8 @@ std::string hexEncode(const unsigned char* data, std::size_t length)
     return out;
 }
 
-// BCrypt RNG wrapper - system-preferred algorithm is an unbiased CSPRNG
-// without us enumerating providers.
+// BCrypt RNG wrapper. The system-preferred algorithm is an unbiased CSPRNG and
+// needs no provider enumeration.
 bool generateRandom(unsigned char* out, std::size_t bytes)
 {
     return BCRYPT_SUCCESS(
@@ -362,12 +363,15 @@ struct BrowserBridge::Impl
     std::jthread m_AcceptThread;
     std::atomic<bool> m_Running{false};
     std::atomic<bool> m_Disabled{false};
-    // Per-browser connected counts (ref-counted: N concurrent hosts of one
-    // browser). Indexed by static_cast<size_t>(BrowserKind); a browser counts
-    // as connected while its entry is > 0. Replaces the old single-bool flag so
-    // distinct browsers can be reported connected at the same time.
+    // Per-browser connected counts, ref-counted so several concurrent hosts of
+    // one browser collapse to one indicator. Indexed by
+    // static_cast<size_t>(BrowserKind); a browser counts as connected while its
+    // entry is > 0.
     std::array<std::atomic<int>, static_cast<std::size_t>(seal::signer::BrowserKind::Count)>
         m_PeerCounts{};
+    // Per-start 32-byte random seed, despite the name. Its SHA-256 is the
+    // pipe-name suffix (M7). It never leaves the process and keys no MAC: the
+    // pipe frames carry no HMAC.
     std::array<unsigned char, 32> m_HmacKey{};
     std::wstring m_PipeName;
     PipeSecurity m_PipeSecurity;  // Per-user DACL, built once, applied to every pipe instance.
@@ -432,10 +436,10 @@ HANDLE BrowserBridge::Impl::createPipeInstance(bool firstInstance)
     DWORD openMode = PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED;
     if (firstInstance)
     {
-        // The very first instance must be the one *we* create, so a same-user
-        // process cannot pre-own the (secret) pipe name and accept our hosts.
-        // Subsequent instances must omit this flag or CreateNamedPipe fails
-        // with ERROR_ACCESS_DENIED.
+        // This process must own the very first instance, so a same-user process
+        // cannot pre-own the secret pipe name and accept seal's hosts.
+        // Subsequent instances must omit the flag or CreateNamedPipe fails with
+        // ERROR_ACCESS_DENIED.
         openMode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
     }
     return CreateNamedPipeW(m_PipeName.c_str(),
@@ -483,9 +487,9 @@ bool BrowserBridge::Impl::startImpl()
     }
     const std::string hashHex = hexEncode(keyHash.data(), keyHash.size());
 
-    // M7: pipe name embeds the hashed-key suffix so a stale token from a
-    // previous run cannot connect. Hash is one-way; the secret token never
-    // leaves process memory until the handshake.
+    // M7: the pipe name embeds the hashed-key suffix, so a stale name from a
+    // previous run cannot connect. The hash is one-way and the key itself is
+    // never transmitted; it only ever derives this suffix.
     std::wstring name;
     name.reserve(32 + hashHex.size());
     name.assign(L"\\\\.\\pipe\\seal-fill-");
@@ -503,10 +507,10 @@ bool BrowserBridge::Impl::startImpl()
         return false;
     }
 
-    // Pre-create the first instance so (a) creation failures surface
-    // synchronously to the caller and (b) a listening instance exists before we
-    // return - otherwise the extension's first connectNative would miss and
-    // back off for seconds before retrying.
+    // Pre-create the first instance so creation failures surface synchronously
+    // to the caller and a listening instance exists before this call returns.
+    // Otherwise the extension's first connectNative misses and backs off for
+    // seconds before retrying.
     HANDLE first = createPipeInstance(true);
     if (first == INVALID_HANDLE_VALUE)
     {
@@ -690,8 +694,8 @@ void BrowserBridge::Impl::handleMessage(DWORD browserPid,
     entry.m_ExpiresAt = now + kEntryLifetime;
     entry.m_UrlHost =
         QString::fromUtf8(parsed.m_UrlHost.data(), static_cast<int>(parsed.m_UrlHost.size()));
-    // Per-document token (may be empty on an older extension). The fill gate
-    // requires it to match the current document; empty falls back to host-only.
+    // Per-document token; empty when the report carried none. The fill gate
+    // requires a match with the current document; empty falls back to host-only.
     entry.m_Visit = parsed.m_Visit;
 
     BridgeKey key;
@@ -705,10 +709,11 @@ void BrowserBridge::Impl::handleMessage(DWORD browserPid,
         m_Map.insert_or_assign(key, std::move(entry));
     }
 
-    // One info line per accepted report: verdict + raw/quantised coords are safe to log;
-    // URL host stays off it (privacy). Cast the verdict literal through string_view so kv()
-    // picks the string overload - a bare const char* matches the bool overload via
-    // standard-conversion rank and would print "verdict=true".
+    // One info line per accepted report. The verdict and the raw/quantised
+    // coordinates are safe to log; the URL host stays off it for privacy. Cast
+    // the verdict literal through string_view so kv() picks the string overload
+    // - a bare const char* matches the bool overload by standard-conversion rank
+    // and would print "verdict=true".
     qCInfo(logBridge).noquote() << QString::fromStdString(seal::diag::joinFields(
         {"event=fill.bridge.msg",
          seal::diag::kv("browser_pid", static_cast<unsigned int>(browserPid)),
@@ -738,8 +743,8 @@ void BrowserBridge::Impl::notePendingNavigation(DWORD browserPid, const ParsedBr
         // gate can detect a navigation between the reported click and the fill.
         m_CurrentVisitByPid[browserPid] = parsed.m_Visit;
     }
-    // One info line per accepted nav. The host stays off the line (privacy);
-    // the fingerprint is enough to correlate with a later fill.decide.
+    // One info line per accepted nav. The host stays off the line for privacy;
+    // its length and the browser PID correlate it with a later fill.decide.
     qCInfo(logBridge).noquote() << QString::fromStdString(seal::diag::joinFields(
         {"event=fill.bridge.nav",
          "result=ok",
@@ -756,10 +761,11 @@ bool BrowserBridge::Impl::readFramedMessage(HANDLE pipe,
                                             const seal::signer::PinnedProcess& peer,
                                             const seal::signer::PinnedProcess& browser)
 {
-    // Two phases. (1) Length prefix: idle is legit (no clicks for hours), so wait
-    // indefinitely, polling stop/running/disabled every kStopPollMs; broken pipes still
-    // surface via WaitForSingleObject/GetOverlappedResult, tearing the loop down. (2) Payload:
-    // once committed to a length, kMessageReadTimeoutMs caps a peer that prefix-then-stalls.
+    // Two phases. (1) Length prefix: an idle connection is normal, so wait
+    // without a deadline, polling stop/running/disabled every kStopPollMs; a
+    // broken pipe still surfaces through WaitForSingleObject and
+    // GetOverlappedResult. (2) Payload: once committed to a length,
+    // kMessageReadTimeoutMs caps a peer that sends the prefix and then stalls.
     constexpr DWORD kStopPollMs = 1000;
 
     auto isStopping = [&]() noexcept
@@ -780,7 +786,7 @@ bool BrowserBridge::Impl::readFramedMessage(HANDLE pipe,
             return false;
         }
     }
-    // Length prefix: idle is legit (no clicks for hours), so wait indefinitely.
+    // Phase 1: no deadline.
     if (!waitOverlappedOrStop(pipe, overlapped, kStopPollMs, 0, isStopping))
     {
         return false;
@@ -805,8 +811,7 @@ bool BrowserBridge::Impl::readFramedMessage(HANDLE pipe,
             return false;
         }
     }
-    // Payload phase: stricter timeout. A peer that prefix-then-stalls is
-    // suspicious; tear the connection down after kMessageReadTimeoutMs.
+    // Phase 2: tear the connection down after kMessageReadTimeoutMs.
     if (!waitOverlappedOrStop(pipe, overlapped, kStopPollMs, kMessageReadTimeoutMs, isStopping))
     {
         return false;
@@ -1048,10 +1053,10 @@ void BrowserBridge::Impl::acceptorLoop(std::stop_token stopToken)
 
 void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken)
 {
-    // Runs on a per-connection worker thread, so it owns its own event +
-    // OVERLAPPED. It does NOT close `pipe` - the acceptor does that after
-    // joining this thread. All the accept-time gates that used to live inline
-    // in the single accept loop run here, unchanged, per connection.
+    // Runs on a per-connection worker thread, so it owns its own event and
+    // OVERLAPPED. It does not close `pipe` - the acceptor does that after
+    // joining this thread. Every accept-time gate runs here, once per
+    // connection.
     HandleGuard event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
     if (event.get() == nullptr)
     {
@@ -1080,10 +1085,10 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
         return;
     }
 
-    // The pin closes the recycling window only for events AFTER OpenProcess
-    // returned. Re-read the pipe's client PID and require it still equals the
-    // pinned PID, rejecting a recycle in the GetNamedPipeClientProcessId ->
-    // OpenProcess gap.
+    // The pin closes the recycling window only for what happens once OpenProcess
+    // has returned. Re-read the pipe's client PID and require it to still equal
+    // the pinned PID, which rejects a recycle inside the
+    // GetNamedPipeClientProcessId -> OpenProcess gap.
     DWORD peerPidCheck = 0;
     if (!GetNamedPipeClientProcessId(pipe, &peerPidCheck) || peerPidCheck != peer.pid())
     {
@@ -1114,9 +1119,9 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
         return;
     }
 
-    // Walk up the ancestry from peerPid until we find a signed-browser ancestor.
-    // Each hop is pinned; a parent created strictly after its child indicates a
-    // recycled (stale) parent-PID link and is rejected fail-closed.
+    // Walk up the ancestry from peerPid looking for a signed-browser ancestor.
+    // Each hop is pinned. A parent created strictly after its child indicates a
+    // recycled parent-PID link and is rejected fail-closed.
     constexpr int kMaxAncestorDepth = 6;
     seal::signer::PinnedProcess browser;  // retained for the connection if found
     std::wstring browserPath;
@@ -1141,9 +1146,9 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
             break;
         }
 
-        // Append basename to the chain BEFORE the per-hop reject checks, so a
-        // hop rejected for stale_parent_link / creation_time_unavailable still
-        // appears in parent_chain / failed_image (original always-append order).
+        // Append the basename to the chain ahead of the per-hop reject checks,
+        // so a hop rejected for stale_parent_link or creation_time_unavailable
+        // still appears in parent_chain and failed_image.
         {
             const auto sep = curPath.find_last_of(L"\\/");
             const std::wstring basename =
@@ -1162,8 +1167,8 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
             failedImage = base;
         }
 
-        // G2 narrowing, FAIL-CLOSED. Strict '>' lets a parent+child sharing one
-        // FILETIME tick pass; a missing creation time rejects rather than skips.
+        // G2 narrowing, fail-closed. Strict '>' lets a parent and child sharing
+        // one FILETIME tick pass; a missing creation time rejects the hop.
         const std::optional<std::uint64_t> curCreation = cur.creationTime();
         if (!curCreation || !childCreation)
         {
@@ -1228,10 +1233,10 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
     // ancestor - that PID owns the user's window click, hence map key.
     const DWORD parentPid = browser.pid();
 
-    // Per-connection nonce - NOT the HMAC key (that one only derives the pipe-name
-    // suffix and never leaves the process). Fresh per accept so a captured handshake
-    // cannot be replayed. The echo is a framing sanity check; authentication is the
-    // signer-identity match plus the parent-process gate above.
+    // Per-connection nonce, not the pipe-name key (that one derives the pipe
+    // suffix and never leaves the process). Fresh per accept, so a captured
+    // handshake cannot be replayed. The echo is a framing sanity check;
+    // authentication is the signer-identity match plus the ancestor gate above.
     std::array<unsigned char, 32> connectionNonce{};
     if (!generateRandom(connectionNonce.data(), connectionNonce.size()))
     {
@@ -1300,8 +1305,8 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
         handleMessage(parentPid, std::string_view(message.data(), message.size()), navThrottle);
     }
 
-    // A liveness trip emits the specific token; otherwise the existing
-    // disconnect info line. Teardown latency on browser exit is <= 1 s.
+    // A liveness trip emits its own reason token; every other exit path leaves
+    // just the disconnect line below. Teardown on browser exit takes <= 1 s.
     if (!peer.alive())
     {
         qCWarning(logBridge).noquote() << QString::fromStdString(seal::diag::joinFields(
@@ -1317,10 +1322,10 @@ void BrowserBridge::Impl::serveConnection(HANDLE pipe, std::stop_token stopToken
              seal::diag::kv("browser_pid", static_cast<unsigned int>(parentPid))}));
     }
 
-    // Deregister from the reverse-channel map. Set alive=false UNDER the write mutex
-    // first, so an in-flight sendFillUsername either finished its write or now sees the
-    // dead flag and skips - before the acceptor (which joins this thread next) closes the
-    // pipe handle. This is what makes a cross-thread reverse write safe against that close.
+    // Deregister from the reverse-channel map. Set alive=false while holding the
+    // write mutex, so an in-flight sendFillUsername has either finished or now
+    // sees the dead flag and skips, before the acceptor joins this thread and
+    // closes the pipe handle. That ordering makes the reverse write safe.
     {
         std::lock_guard<std::mutex> writeLock(conn->m_WriteMutex);
         conn->m_Alive.store(false);
@@ -1394,9 +1399,9 @@ void BrowserBridge::disable()
     {
         std::unique_lock<std::shared_mutex> lock(m_Impl->m_MapMutex);
         m_Impl->m_Map.clear();
-        // Symmetry with m_Map: workers already drained their own counts on join
-        // above, so this is a no-op today, but it future-proofs the panic path
-        // against any change to the join-before-clear ordering.
+        // Symmetry with m_Map. The join above already drained each worker's own
+        // count, so this clear is redundant while stopImpl joins before it runs;
+        // it keeps the panic path correct if that ordering ever changes.
         m_Impl->m_BrowserConnCounts.clear();
     }
     {
@@ -1459,9 +1464,9 @@ std::optional<BridgeEntry> BrowserBridge::lookup(DWORD browserPid, POINT screenP
     std::shared_lock<std::shared_mutex> lock(m_Impl->m_MapMutex);
 
     // Lookup tolerance in raw screen px (Chebyshev distance). 48 px covers the
-    // variance between the focus-click and the Ctrl+Click on one ~40 px-tall input
-    // (a tighter radius caused silent "browser_extension=unknown" misses). Nearby
-    // fields may collide, but we take the FRESHEST entry and (M5) require a second probe.
+    // variance between the focus-click and the Ctrl+Click on one ~40 px input; a
+    // tighter radius produces silent "browser_extension=unknown" misses. Nearby
+    // fields can collide, so the freshest entry wins and M5 needs a second probe.
     constexpr int kLookupToleranceRawPx = 48;
     constexpr int kBucketCenterOffset = 1 << (kQuantShift - 1);
 
@@ -1512,7 +1517,7 @@ std::optional<NavSnapshot> BrowserBridge::takeNavSince(std::uint64_t& lastSeenSe
     }
     if (now - m_Impl->m_PendingNav.m_At > kNavLifetime)
     {
-        // Stale: advance the cursor so we don't re-examine it, and report none.
+        // Stale: advance the cursor so it is not examined again, and report none.
         lastSeenSeq = m_Impl->m_NavSeq;
         return std::nullopt;
     }
@@ -1602,8 +1607,8 @@ bool BrowserBridge::sendFillUsername(DWORD browserPid,
         return false;
     }
 
-    // Find the live connection for this browser PID; hold a shared_ptr so the
-    // worker can't free it out from under us mid-write.
+    // Find the live connection for this browser PID and hold a shared_ptr, so
+    // the worker cannot free it mid-write.
     std::shared_ptr<Impl::PeerConn> conn;
     {
         std::lock_guard<std::mutex> lock(m_Impl->m_PeerConnMutex);
@@ -1615,10 +1620,10 @@ bool BrowserBridge::sendFillUsername(DWORD browserPid,
         conn = it->second;
     }
 
-    // Build the framed directive in ONE pre-reserved buffer - never chained
-    // operator+ - so no intermediate temporary holding the plaintext username
-    // is ever freed unwiped. `json` and the escaped username are both zeroed
-    // below; the host is not a secret.
+    // Build the framed directive in one pre-reserved buffer, never a chained
+    // operator+, so no intermediate temporary holding the plaintext username is
+    // freed unwiped. `json` and the escaped username are both zeroed below; the
+    // host is not a secret.
     std::string escapedUser = jsonEscape(usernameUtf8);
     const std::string escapedHost = jsonEscape(host);
     const std::string escapedVisit = jsonEscape(visit);
@@ -1654,9 +1659,9 @@ bool BrowserBridge::sendFillUsername(DWORD browserPid,
         }
     }
 
-    // Wipe the wire buffer that held the plaintext username. (The bytes already
-    // in the OS pipe / browser are inherent to the opted-in DOM-fill; only our
-    // in-process copies are our responsibility.)
+    // Wipe the wire buffer that held the plaintext username. The bytes already
+    // in the OS pipe or the browser are inherent to the opted-in DOM fill; only
+    // seal's in-process copies are in scope here.
     if (!json.empty())
     {
         SecureZeroMemory(json.data(), json.size());
