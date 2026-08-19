@@ -1,52 +1,29 @@
 /* global chrome */
-/*  ============================================================================================  *
- *                                                            ⠀⣠⡤⠀⢀⣀⣀⡀⠀⠀⠀⠀⣦⡀⠀⠀⠀⠀⠀⠀
- *                                                            ⠀⠘⠃⠈⢿⡏⠉⠉⠀⢀⣀⣰⣿⣿⡄⠀⠀⠀⠀⢀
- *           ::::::::  ::::::::::     :::     :::             ⠀⠀⠀⠀⠀⢹⠀⠀⠀⣸⣿⡿⠉⠿⣿⡆⠀⠰⠿⣿
- *          :+:    :+: :+:          :+: :+:   :+:             ⠀⠀⠀⠀⠀⢀⣠⠾⠿⠿⠿⠀⢰⣄⠘⢿⠀⠀⠀⠞
- *          +:+        +:+         +:+   +:+  +:+             ⢲⣶⣶⡂⠐⢉⣀⣤⣶⣶⡦⠀⠈⣿⣦⠈⠀⣾⡆⠀
- *          +#++:++#++ +#++:++#   +#++:++#++: +#+             ⠀⠀⠿⣿⡇⠀⠀⠀⠙⢿⣧⠀⠳⣿⣿⡀⠸⣿⣿⠀
- *                 +#+ +#+        +#+     +#+ +#+             ⠀⠀⠐⡟⠁⠀⠀⢀⣴⣿⠛⠓⠀⣉⣿⣿⢠⡈⢻⡇
- *          #+#    #+# #+#        #+#     #+# #+#             ⠀⠀⠀⠀⠀⠀⠀⣾⣿⣿⣆⠀⢹⣿⣿⣷⡀⠁⢸⡇
- *           ########  ########## ###     ### ##########      ⠀⠀⠀⠀⠀⠀⠘⠛⠛⠉⠀⠀⠈⠙⠛⠿⢿⣶⣼⠃
- *                                                            ⠀⠀⠀⢰⣧⣤⠤⠖⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
- *
- *                                  << P A S S   M A N A G E R >>
- *
- *  ============================================================================================  *
- *
- *      A Windows AES-256-GCM encryption utility with Qt6/QML GUI and CLI
- *      providing on-demand credential management, directory encryption,
- *      webcam QR authentication, and global auto-fill.
- *
- *    ----------------------------------------------------------------------
- *
- *      Repository:   https://github.com/lextpf/seal
- *      License:      MIT
- */
 
 /**
  * seal companion - content script.
  *
- * Classifies the clicked field and reports login navigations to the SW.
- * Security invariants (don't relax without re-running the threat model):
- *   M2  only chrome.runtime.sendMessage - no postMessage/'message' (page can't forge)
- *   M3  trusted events only (synthetic events ignored)
+ * Classifies the clicked field and reports login navigations to the service worker.
+ * Security invariants (do not relax one without re-running the threat model):
+ *   M2  chrome.runtime.sendMessage only - no postMessage or 'message' (a page
+ *       cannot forge a report)
+ *   M3  trusted events only (synthetic events are ignored)
  *   M4  top frame only
- *   M9  user-visible targets only (visibility gate defeats hidden overlays)
+ *   M9  user-visible targets only (the visibility gate defeats hidden overlays)
  */
 
 (() => {
     "use strict";
 
-    // M4 -- top frame only. Manifest already pins all_frames:false; this
-    // is defence in depth against an accidental manifest regression.
+    // M4 - top frame only. The manifest already pins all_frames:false. This is
+    // defence in depth against a manifest regression.
     if (window !== window.top) {
         return;
     }
 
-    // Per-click breakdown. Logs land in the PAGE's DevTools console
-    // (F12 -> Console), not the SW console.
+    // Per-click decision traces. Logs land in the page's DevTools console
+    // (F12 -> Console), not the service worker console. background.js carries its
+    // own separate DEBUG_LOGS.
     const DEBUG_LOGS = false;
     function dbg(...args) {
         if (DEBUG_LOGS) {
@@ -54,7 +31,7 @@
         }
     }
 
-    // Short, parseable summary of an Element for debug output.
+    // Short, readable summary of an Element for debug output.
     function describeElement(el) {
         if (!el) {
             return "<null>";
@@ -85,12 +62,12 @@
     const TAG_EMAIL = "email";
     const TAG_OTHER = "other";
 
-    // Opacity floor. Legit fade-ins sit at 0.3-0.5 mid-animation; 0.1 is
-    // well below that and well above the ~0.0-0.01 a phishing overlay uses.
+    // Opacity floor. Legitimate fade-ins sit at 0.3-0.5 mid-animation; 0.1 is well
+    // below that and well above the 0.0-0.01 a hidden overlay uses.
     const MIN_OPACITY = 0.1;
 
-    // Pixel-dimension floor. Zero-size elements are common as a11y anchors
-    // or hidden hot-spots; either way they aren't the field the user thinks
+    // Pixel-dimension floor. Zero-size elements are common as accessibility anchors
+    // or hidden hot-spots; either way they are not the field the user believes
     // they clicked.
     const MIN_DIMENSION_PX = 2;
 
@@ -140,6 +117,7 @@
         return { left: 0, top: 0, right: width, bottom: height, width, height };
     }
 
+    // Whether this element's overflow settings clip its children.
     function clipsOverflow(style) {
         const clipping = new Set(["hidden", "clip", "auto", "scroll", "overlay"]);
         return clipping.has(style.overflowX) || clipping.has(style.overflowY);
@@ -157,10 +135,14 @@
         };
     }
 
+    // A hit counts as `el` itself or one of its own descendants. A click on an
+    // <input>'s internal node lands on a different node per engine.
     function relatedHitElement(hit, el) {
         return hit === el || el.contains(hit);
     }
 
+    // Does `el` actually receive the click at `point` (or at the centre of its
+    // visible rect)? Rejects an element covered by an overlay. Returns { ok, reason }.
     function hitTestVisibleElement(el, point, visibleRect) {
         const probe = point || centerPoint(visibleRect);
         if (!Number.isFinite(probe.x) || !Number.isFinite(probe.y)) {
@@ -183,6 +165,9 @@
         return { ok: true, reason: "" };
     }
 
+    // The part of `rect` that is really on screen: clipped to the viewport, then to
+    // every clipping ancestor. Returns { ok, reason, rect }; not ok when what is left
+    // is empty or smaller than MIN_DIMENSION_PX.
     function visibleViewportRect(el, rect) {
         const viewport = viewportRect();
         let visible = intersectRects(rectFromDomRect(rect), viewport);
@@ -222,13 +207,12 @@
         return { ok: true, reason: "", rect: visible };
     }
 
-    // Product of every `opacity(...)` function in a computed `filter` value, or
-    // 1 when there are none. `filter: opacity(0)` renders an element fully
-    // transparent while leaving style.opacity at 1, so without this an
-    // opacity-filtered field would slip through the M9 opacity gate below. Only
-    // opacity() is folded in (it maps exactly onto the CSS opacity semantics);
-    // other filter functions (blur/brightness/drop-shadow) are common on legit
-    // inputs and don't reliably hide a field, so they're left untouched.
+    // Product of every `opacity(...)` function in a computed `filter` value, or 1
+    // when there are none. `filter: opacity(0)` hides an element while style.opacity
+    // stays 1, so the M9 opacity gate below would otherwise miss it. Only opacity()
+    // folds in: it maps exactly onto CSS opacity semantics, while blur, brightness
+    // and drop-shadow are common on legitimate inputs and do not reliably hide a
+    // field.
     function filterOpacityFactor(filter) {
         if (!filter || filter === "none") {
             return 1;
@@ -249,7 +233,12 @@
         return factor;
     }
 
-    // M9 visibility gate vs hidden-overlay attacks. Returns { ok, reason }.
+    // M9 visibility gate against hidden-overlay attacks: `el` counts only if the user
+    // can see it and reach it. Checks size, display, visibility, pointer-events,
+    // effective opacity through ancestors, clipping, and a hit test at `point`, or at
+    // the centre of the clipped visible rect when `point` is omitted. The nav-report
+    // scans and findUsernameField call it without a point, because they have no click
+    // coordinates. Returns { ok, reason }; the reason names the first failing check.
     function isUserVisible(el, point) {
         if (!el || !el.isConnected) {
             return { ok: false, reason: "not_connected" };
@@ -277,7 +266,7 @@
             return { ok: false, reason: "visibility:" + style.visibility };
         }
         if (style.pointerEvents === "none") {
-            // Clicks fall through, so the user can't think they clicked this.
+            // Clicks fall through, so the user cannot have believed they clicked it.
             return { ok: false, reason: "pointer-events:none" };
         }
 
@@ -301,8 +290,8 @@
             if (Number.isFinite(opacity)) {
                 effectiveOpacity *= opacity;
             }
-            // Fold `filter: opacity(...)` in too - it hides without touching
-            // the opacity property (see filterOpacityFactor).
+            // Fold `filter: opacity(...)` in as well: it hides an element without
+            // touching the opacity property (see filterOpacityFactor).
             effectiveOpacity *= filterOpacityFactor(ps.filter);
             if (effectiveOpacity < MIN_OPACITY) {
                 return {
@@ -326,9 +315,9 @@
         return { ok: true, reason: "" };
     }
 
-    // Resolved <label> + aria-labelledby text for an input. Many modern forms
-    // label a generic type=text field only via an external <label>, so without
-    // this the username heuristic misses an obviously-labeled field.
+    // Resolved <label> and aria-labelledby text for an input. Many forms label a
+    // generic type=text field only through an external <label>, and without this
+    // text the username heuristic misses an obviously labelled field.
     function labelText(el) {
         let s = "";
         try {
@@ -347,19 +336,20 @@
                 }
             }
         } catch (e) {
-            // labels/getElementById can throw on detached nodes; ignore.
+            // labels and getElementById can throw on detached nodes; ignore.
         }
-        return s.slice(0, 200);  // length-cap so a huge label can't bloat work
+        return s.slice(0, 200);  // length cap, so a huge label cannot bloat the work
     }
 
-    // Returns { tag, reason } so debug logs can show WHICH branch fired.
+    // Field kind of an element. Returns { tag, reason }; the reason names the branch
+    // that fired, for debug output.
     function classify(el) {
         if (!el) {
             return { tag: TAG_OTHER, reason: "no_element" };
         }
 
-        // <input type=password> is the only high-confidence Password signal;
-        // nothing else ever yields TAG_PASSWORD.
+        // <input type=password> is the only high-confidence password signal;
+        // no other branch yields TAG_PASSWORD.
         if (el instanceof HTMLInputElement) {
             const type = (el.type || "").toLowerCase();
             if (type === "password") {
@@ -369,9 +359,9 @@
                 return { tag: TAG_EMAIL, reason: "input type=email" };
             }
 
-            // Username heuristics across name/id/autocomplete/aria/placeholder,
-            // plus resolved <label> / aria-labelledby text. Weighted low;
-            // FusionDecider requires another probe to agree.
+            // Username heuristics over name, id, autocomplete, aria-label and
+            // placeholder, plus resolved <label> and aria-labelledby text. seal
+            // weights this low: FusionDecider needs another probe to agree.
             const hay = [
                 el.name || "",
                 el.id || "",
@@ -396,7 +386,7 @@
             return { tag: TAG_OTHER, reason: "input type=" + type + " (unclassified)" };
         }
 
-        // contenteditable (rich-text editors, web shells) is common but
+        // contenteditable (rich-text editors, web shells) is common but is
         // rarely a username field.
         if (el.isContentEditable) {
             return { tag: TAG_TEXT, reason: "contenteditable" };
@@ -405,22 +395,22 @@
         return { tag: TAG_OTHER, reason: "non-input " + el.tagName };
     }
 
-    // One random token per DOCUMENT lifetime; seal keys its once-per-visit
-    // latches on it (username injects once, password fills once, then inert)
-    // and binds each click report to the document it came from. Reload/reopen
-    // = fresh token (re-enables staging); SPA churn keeps it. 16 bytes -> 32
-    // hex, within the bridge's [A-Za-z0-9-]{1,64} cap.
+    // One random token per document lifetime. seal keys its once-per-visit latches
+    // on it (the username injects once, the password fills once, then both go inert)
+    // and binds each click report to the document it came from. A reload or reopen
+    // mints a fresh token and re-enables staging; SPA route churn keeps the same one.
+    // 16 bytes -> 32 hex characters, within the bridge's [A-Za-z0-9-]{1,64} cap.
     const VISIT_TOKEN = (() => {
         const bytes = new Uint8Array(16);
         crypto.getRandomValues(bytes);
         return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
     })();
 
-    // One bridge report per mousedown. Silent on failure (SW asleep / host
-    // down); FusionDecider needs probe agreement anyway, so a missed report
-    // just falls through to other probes.
+    // One bridge report per mousedown. Silent on failure (service worker asleep or
+    // host down); FusionDecider needs probe agreement anyway, so a missed report
+    // leaves the decision to the other probes.
     function reportClick(e) {
-        // Collapsible decision-trace group per click.
+        // Collapsible decision trace, one group per click.
         const grouped = DEBUG_LOGS && typeof console.groupCollapsed === "function";
         if (grouped) {
             console.groupCollapsed(
@@ -450,9 +440,9 @@
                 return;
             }
 
-            // Cross-check: elementFromPoint should agree with e.target.
-            // Allow ancestor<->descendant relationships - a click on an
-            // <input>'s internal node varies by engine.
+            // Cross-check: elementFromPoint has to agree with e.target. An ancestor
+            // or descendant relation is allowed, because a click on an <input>'s
+            // internal node lands on a different node per engine.
             const topAtPoint = document.elementFromPoint(e.clientX, e.clientY);
             const topRelation = !topAtPoint ? "<null>"
                 : topAtPoint === e.target ? "same"
@@ -477,8 +467,12 @@
                 return;
             }
 
-            // screenX/Y already match seal's WH_MOUSE_LL coord space (Qt6 marks
-            // seal DPI-aware, so its hook gets logical-pixel coords).
+            // The point is what seal matches a later Ctrl+Click against. Send
+            // screenX/Y unscaled: seal compares them against the raw screen pixels
+            // that its WH_MOUSE_LL hook reports, and neither side converts DPI, so
+            // never scale by devicePixelRatio here. The 48 px Chebyshev tolerance
+            // (kLookupToleranceRawPx in BrowserBridge::lookup) absorbs the offset
+            // between the focus-click and the Ctrl+Click on one input.
             const payload = {
                 v: 1,
                 x: Math.round(e.screenX),
@@ -486,9 +480,9 @@
                 tag: c.tag,
                 url_host: location.host,
                 secure: 1,
-                // Per-document token: binds this cached click authorization to
-                // the document it came from, so seal can reject a stale entry
-                // that survived a navigation/tab-switch at the same location.
+                // Per-document token: it binds this cached click authorization to
+                // the document it came from, so seal can reject a stale entry that
+                // survived a navigation or tab switch at the same location.
                 visit: VISIT_TOKEN,
                 url_path: location.pathname
             };
@@ -497,10 +491,10 @@
                 "path_len", location.pathname.length,
                 "(devicePixelRatio=" + window.devicePixelRatio + ")");
 
-            // M2 -- only chrome.runtime.sendMessage. .catch swallows the
-            // "Could not establish connection" rejection when the SW is
-            // asleep; it wakes on the next sendMessage and we lose at
-            // most one click.
+            // M2 - chrome.runtime.sendMessage only. The .catch swallows the
+            // "Could not establish connection" rejection raised while the service
+            // worker sleeps; it wakes on the next sendMessage, so at most one
+            // click is lost.
             chrome.runtime.sendMessage(payload).catch((err) => {
                 dbg("sendMessage rejected:", err && err.message);
             });
@@ -511,23 +505,27 @@
         }
     }
 
-    // Registered in the capture phase on `document`. This beats a page handler
-    // in the bubble phase or on a descendant node, but it is NOT unsuppressable:
-    // a page capture-phase listener on `window` (an ancestor in the propagation
-    // path) runs first and can stopPropagation/stopImmediatePropagation before
-    // the event reaches `document`; so can a `document` capture-phase page
-    // listener registered before us that stops immediate propagation. That only
-    // DENIES this click's bridge probe vote, which fails safe: with no bridge
-    // entry the staged auto-fill is a silent no-op (M5 needs an on-disk probe to
-    // agree) and the manual path falls through to the on-disk probes. Suppression
-    // cannot forge a classification or redirect a fill.
+    // Registered in the capture phase on `document`, which beats a page handler in
+    // the bubble phase or on a descendant node. It is still suppressible: a page
+    // capture-phase listener on `window` (an ancestor in the propagation path) runs
+    // first and can call stopPropagation or stopImmediatePropagation before the event
+    // reaches `document`, and so can a `document` capture-phase page listener
+    // registered before this one that stops immediate propagation.
+    //
+    // Suppression denies this click its bridge entry, and both fill paths then fail
+    // closed. The staged auto-fill stops at its first gate and is a silent no-op
+    // (reason=no_bridge_entry). The manual Ctrl+Click path refuses the fill for any
+    // known browser image and asks the user to check the extension
+    // (reason=no_bridge_entry_manual); it does not fall back to the on-disk probes.
+    // Suppression can stop a fill, but it cannot forge a classification or redirect
+    // one.
     document.addEventListener("mousedown", reportClick, true);
 
     // ---- Navigation reports (zero-gesture staged auto-fill) ----
-    // On secure nav to a page with a visible login field, tell seal the host so
-    // it can pre-arm a uniquely-matching record. Carries NO secret and NO click
-    // point (the fill still needs a real click seal validates OS-side). Not
-    // gesture-gated, so: https-only, debounced, coalesced.
+    // On a secure navigation to a page with a visible login field, tell seal the host
+    // so it can pre-arm a uniquely matching record. A nav report carries no secret and
+    // no click point: the fill still needs a real click that seal validates OS-side.
+    // No user gesture triggers it, so it is https-only, debounced and coalesced.
 
     // Whether any visible <input type=password> exists (reuses the M9 gate).
     function hasVisiblePasswordField() {
@@ -540,10 +538,10 @@
         return false;
     }
 
-    // Visible login IDENTIFIER field (email-first / multi-step screen with no
-    // password yet). Keys on autocomplete="username" (not type=email, which
-    // newsletter/contact boxes use) to stay off non-login fields; sites that
-    // omit the token just wait for a password field.
+    // Whether a visible login identifier field exists (an email-first or multi-step
+    // screen with no password field yet). Keys on autocomplete="username" rather than
+    // type=email, which newsletter and contact boxes also use, so it stays off
+    // non-login fields. A site that omits the token waits for a password field.
     function hasVisibleIdentifierField() {
         const fields = document.querySelectorAll('input[autocomplete~="username"]');
         for (const el of fields) {
@@ -558,24 +556,24 @@
     let navDebounceTimer = null;
 
     function reportNavigate() {
-        // Secure-context / https gate: never drive an auto-fill on a page whose
-        // host is network-spoofable. (An attacker's own origin can be https;
-        // this buys resistance to downgrade/MITM, not to phishing.)
+        // Secure-context and https gate: never drive an auto-fill on a page whose
+        // host is network-spoofable. An attacker's own origin can be https, so this
+        // resists downgrade and man-in-the-middle attacks, not phishing.
         if (!window.isSecureContext || location.protocol !== "https:") {
             return;
         }
         const pw = hasVisiblePasswordField();
         const user = hasVisibleIdentifierField();
-        // Coalesce on the FULL field composition so an email-first step 1
-        // (user=1,pw=0) and its password step 2 (pw=1) each fire exactly once,
-        // while SPA route churn and the polling fallback don't spam the bridge.
+        // Coalesce on the full field composition, so an email-first step 1
+        // (user=1, pw=0) and its password step 2 (pw=1) each fire exactly once,
+        // while SPA route churn and the polling fallback do not spam the bridge.
         const key = location.host + "|" + (pw ? "1" : "0") + "|" + (user ? "1" : "0");
         if (key === lastNavKey) {
             return;
         }
         lastNavKey = key;
         if (!pw && !user) {
-            return;  // Not a login page - nothing to stage.
+            return;  // Not a login page, so there is nothing to stage.
         }
         const payload = {
             v: 1,
@@ -604,14 +602,14 @@
         }, 250);
     }
 
-    // History-driven navigations. pushState/replaceState from the page's own
-    // world can't be hooked from this isolated world, so a coarse href poll
-    // (below) is the reliable catch-all; popstate/hashchange give immediacy.
+    // History-driven navigations. pushState and replaceState run in the page's own
+    // world and cannot be hooked from this isolated world, so the coarse href poll
+    // below is the catch-all; popstate and hashchange only make the common case fast.
     window.addEventListener("popstate", scheduleNavReport);
     window.addEventListener("hashchange", scheduleNavReport);
 
     // Coarse polling fallback: detect href changes (SPA route swaps) without a
-    // page-world hook. The coalesce key means this only sends on a real change.
+    // page-world hook. The coalesce key keeps this to one send per real change.
     let lastHref = location.href;
     setInterval(() => {
         if (location.href !== lastHref) {
@@ -620,24 +618,24 @@
         }
     }, 1000);
 
-    // Initial report(s): fire at document_end, then a couple of delayed retries
-    // to catch login forms that render lazily (SPA) after first paint. Each is
-    // coalesced, so at most one report is actually sent per host/form change.
+    // Initial reports: one at document_end, then two delayed retries to catch login
+    // forms that an SPA renders lazily after first paint. All three are coalesced, so
+    // at most one report is sent per change of host or field composition.
     scheduleNavReport();
     setTimeout(scheduleNavReport, 1500);
     setTimeout(scheduleNavReport, 3500);
 
-    // MutationObserver: catch login fields that appear/toggle WITHOUT a URL
-    // change (in-place reveals, modal logins, lazy SPA forms). Cheap: bail
-    // unless a mutation plausibly touched a login field, then the 250ms debounce
-    // + coalesce key throttle sends. Loop-safe: injecting sets a property (not
-    // an attribute), so it never re-triggers this.
+    // Catch login fields that appear or toggle without a URL change: in-place
+    // reveals, modal logins, lazy SPA forms. Cheap, because it bails unless a
+    // mutation plausibly touched a login field; the 250 ms debounce and the coalesce
+    // key then throttle the sends. Loop-safe: username injection sets a property,
+    // not an attribute, so it never re-triggers this observer.
     const navObserver = new MutationObserver((mutations) => {
         for (const m of mutations) {
             if (m.type === "attributes") {
-                // React only to an <input>'s own attribute toggling (a hidden/
-                // disabled/type/style reveal of the field itself) - cheap, and
-                // ignores the style/class churn of unrelated elements.
+                // React only to an <input>'s own attribute toggling: a hidden,
+                // disabled, type or style reveal of the field itself. This is cheap
+                // and ignores the style and class churn of unrelated elements.
                 const t = m.target;
                 if (t && t.nodeType === 1 && t.tagName === "INPUT") {
                     scheduleNavReport();
@@ -668,14 +666,14 @@
     }
 
     // ---- Username injection (seal -> extension reverse channel) ----
-    // seal pushes a username back ONLY for records that STRICTLY match this
-    // exact registered domain (gated seal-side). Written into the visible
-    // username/email field. This is the one place a credential value crosses
-    // into the page - the user's opted-in, strict-domain tradeoff. The password
-    // is never sent this way; it is still typed locally on a real click.
+    // seal pushes a username back only for a record that strictly matches this exact
+    // registered domain; that gate lives in seal. The value goes into the visible
+    // username or email field. This is the one place a credential value crosses into
+    // the page, and it is the opt-in, strict-domain tradeoff. The password never
+    // travels this channel; it is typed locally on a real click.
 
-    // Replace the value of a field and notify JS frameworks (React/Vue read
-    // via the native setter + input/change events, not the .value assignment).
+    // Replace the value of a field and notify JS frameworks. React and Vue observe
+    // the native setter plus the input and change events, not a .value assignment.
     function replaceFieldValue(el, value) {
         try {
             const proto = el instanceof HTMLInputElement ? HTMLInputElement.prototype : null;
@@ -695,9 +693,10 @@
         }
     }
 
-    // Best visible username/email field, or null. Only a CONFIDENTLY classified
-    // username/email field is eligible (no generic text fallback), so nothing
-    // gets written into an unrelated input like a search box.
+    // First visible username or email field in document order, or null. Only a field
+    // that classify() tags as TAG_EMAIL or TAG_USERNAME is eligible, with no generic
+    // text fallback, so nothing is written into an unrelated input such as a search
+    // box.
     function findUsernameField() {
         const inputs = document.querySelectorAll(
             'input[type="email"], input[type="text"], input[type="tel"], input:not([type])');
@@ -712,14 +711,14 @@
         return null;
     }
 
-    // Defence in depth for seal's once-per-visit guarantee: even if the app
-    // side re-sends (e.g. seal restarted mid-visit and lost its latches), this
-    // document accepts exactly ONE injection into a found field. Deliberately
-    // NOT set when no field is found yet - a lazily rendered form may retry.
+    // Defence in depth for seal's once-per-visit guarantee: even if seal re-sends,
+    // for example after a restart mid-visit that lost its latches, this document
+    // accepts one injection into a found field. Deliberately not set when no field
+    // is found yet, because a lazily rendered form still has to be filled.
     let usernameInjected = false;
 
     function injectUsername(username) {
-        // Same secure-context gate as the nav report: never write a credential
+        // Same secure-context gate as the nav report: never write a credential value
         // into a non-secure page.
         if (!window.isSecureContext || location.protocol !== "https:") {
             return;
@@ -738,17 +737,17 @@
         dbg("injectUsername: filled username field", describeElement(field));
     }
 
-    // Receive directives from OUR background service worker only (a page cannot
-    // reach this listener; it fires for chrome.tabs.sendMessage from the SW).
+    // Directives from this extension's own service worker only. A page cannot reach
+    // this listener; it fires for chrome.tabs.sendMessage sent by the worker.
     chrome.runtime.onMessage.addListener((msg, sender) => {
         if (!sender || sender.id !== chrome.runtime.id) {
-            return;  // not from our extension
+            return;  // not from this extension
         }
         if (!msg || msg.v !== 1 || msg.kind !== "fill_username") {
             return;
         }
-        // Re-verify this tab is actually on the host seal matched, so a stale
-        // route or a since-navigated tab can't receive another site's username.
+        // Re-verify that this tab is on the host seal matched, so a stale route or a
+        // tab that has since navigated cannot receive another site's username.
         if (msg.url_host !== location.host) {
             dbg("injectUsername: host mismatch (tab is", location.host,
                 "msg is", msg.url_host, ")");
