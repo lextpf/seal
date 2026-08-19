@@ -68,13 +68,13 @@ std::vector<std::string> extractHexTokens(const std::string& raw)
     if (!cur.empty())
         tokens.push_back(cur);
 
-    // Minimum hex length: salt + IV + GCM tag (each *2 for hex). Shorter
-    // tokens cannot be real ciphertext; filter to avoid false matches.
+    // Minimum hex length: salt + IV + GCM tag (each *2 for hex). A shorter
+    // token cannot be real ciphertext, so filtering avoids false matches.
     constexpr size_t min_hex_chars = (cfg::SALT_LEN + cfg::IV_LEN + cfg::TAG_LEN) * 2;
     std::vector<std::string> good;
     for (auto& t : tokens)
     {
-        // Even length, >= header minimum, all xdigit.
+        // Even length, >= framing minimum, all xdigit.
         if ((t.size() % 2) == 0 && t.size() >= min_hex_chars)
         {
             bool allhex = std::all_of(
@@ -139,8 +139,8 @@ seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> utf8ToSecure
     return result;
 }
 
-// Inverse of utf8ToSecureWide; output is NOT locked memory - caller
-// must cleanse promptly after use.
+// Inverse of utf8ToSecureWide. The output is not locked memory, so the caller
+// cleanses it promptly after use.
 std::string secureWideToUtf8(
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& wide)
 {
@@ -200,9 +200,10 @@ bool isBase64(const std::string& s)
     {
         return false;
     }
-    // Require >=1 character that distinguishes Base64 from hex (G-Z, g-z,
-    // '+', '/', '='). Otherwise pure hex would pass the alphabet check and
-    // get misrouted through Base64 decode in handleStringMode.
+    // Require at least one character that distinguishes Base64 from hex (G-Z,
+    // g-z, '+', '/', '='). Without it pure hex passes the alphabet check and
+    // the string-mode dispatchers (HandleStringMode,
+    // CliPanelViewModel::executeCliCommand) misroute it through Base64 decode.
     bool hasNonHex = false;
     for (char c : s)
     {

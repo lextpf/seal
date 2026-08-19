@@ -77,7 +77,7 @@ bool FileOperations::encryptFileTo(const std::string& srcPath,
                                    const std::string& dstPath,
                                    const SecurePwd& pwd)
 {
-    // Stream large files (> FILE_CHUNK) so we don't slurp them into memory.
+    // Stream large files (> FILE_CHUNK) instead of reading them whole.
     {
         std::error_code ec;
         auto fileSize = std::filesystem::file_size(srcPath, ec);
@@ -117,7 +117,7 @@ bool FileOperations::encryptFileTo(const std::string& srcPath,
     }
     out.close();
 
-    // Durable flush before rename so a crash can't lose the destination.
+    // Durable flush before the rename so a crash cannot lose the destination.
     flushFileToDisk(tmpPath);
 
     if (!MoveFileExA(tmpPath.c_str(), dstPath.c_str(), MOVEFILE_REPLACE_EXISTING))
@@ -134,7 +134,7 @@ bool FileOperations::decryptFileTo(const std::string& srcPath,
                                    const std::string& dstPath,
                                    const SecurePwd& pwd)
 {
-    // Stream large files (> FILE_CHUNK + framing) so we don't slurp.
+    // Stream large files (> FILE_CHUNK + framing) instead of reading them whole.
     {
         // Minimum packet framing; the floor for the streaming-vs-in-memory
         // threshold decision below.
@@ -209,8 +209,9 @@ std::string FileOperations::encryptLine(const std::string& s, const SecurePwd& p
     return seal::utils::to_hex(packet);
 }
 
-// Inverse of encryptLine. Spaces are stripped so pasted hex can include
-// whitespace formatting.
+// Inverse of encryptLine. Every whitespace character is stripped first, so
+// pasted hex may carry spaces, tabs or line breaks. Hex case is not
+// significant. The returned string holds raw bytes and may contain NULs.
 template <secure_password SecurePwd>
 seal::secure_string<seal::locked_allocator<char>> FileOperations::decryptLine(
     const std::string& rawHex, const SecurePwd& pwd)
@@ -228,9 +229,12 @@ seal::secure_string<seal::locked_allocator<char>> FileOperations::decryptLine(
     return out;
 }
 
-// Parse colon-delimited triples separated by ',' or '\n'.
-// Format: "svc1:user1:pass1,svc2:user2:pass2\n..."; each token must
-// have EXACTLY 2 colons (3 fields).
+// Parse colon-delimited triples separated by ',', '\n' or '\r'.
+// Format: "svc1:user1:pass1,svc2:user2:pass2\n..."; each token must hold
+// two colons (three fields). Empty tokens are ignored; a malformed token
+// clears `out` and fails the whole parse. Service and user are trimmed
+// individually, the password is not, so leading and interior spaces stay
+// part of the password.
 template <class A>
 bool FileOperations::parseTriples(std::string_view plain,
                                   std::vector<seal::secure_triplet16<A>>& out)
@@ -314,9 +318,9 @@ bool FileOperations::parseTriples(std::string_view plain,
 namespace
 {
 
-// Fixed-size worker pool for processDirectory. Replaced an
-// async+semaphore pattern that spawned an unbounded number of OS
-// threads on deep trees. Bounded queue: Submit() blocks when full.
+// Fixed-size worker pool for processDirectory: a bounded thread count
+// keeps a deep tree from spawning an unbounded number of OS threads.
+// The task queue is bounded too, so Submit() blocks when it is full.
 class WorkPool
 {
 public:
@@ -401,8 +405,9 @@ WorkPool& GetPool()
 }  // namespace
 
 // Walk a directory; each file is en-/de-crypted per its .seal extension
-// (see processFilePath). Subdirectories recurse inline on the calling thread;
-// only leaf-file tasks are submitted to the pool (fixes H1 same-pool deadlock).
+// (see processFilePath). Subdirectories recurse inline on the calling thread
+// and only leaf-file tasks go to the pool, so no pool worker can block
+// waiting on another pool task.
 template <secure_password SecurePwd>
 bool FileOperations::processDirectory(const std::string& dir,
                                       const SecurePwd& password,
@@ -417,15 +422,17 @@ bool FileOperations::processDirectory(const std::string& dir,
         return false;
     }
 
+    // Future-batch size. Independent of the pool's 32-slot queue: it bounds
+    // how many futures this frame holds before joining them.
     static constexpr size_t MAX_CONCURRENT = 8;
 
     uint64_t total = 0, ok = 0, fail = 0;
     std::vector<std::future<bool>> futures;
 
-    // Join every submitted FILE task. Pool tasks capture `password` by
-    // reference, so they must be joined before this function returns on ANY
-    // path. Tasks themselves never throw (see the catch-all below), so get()
-    // never rethrows; this also drains the MAX_CONCURRENT batches.
+    // Join every submitted file task. Pool tasks capture `password` by
+    // reference, so every return path must join them first. Tasks never throw
+    // (see the catch-all below), so get() never rethrows. This also drains the
+    // MAX_CONCURRENT batches.
     auto drainAll = [&]()
     {
         for (auto& f : futures)
@@ -442,8 +449,8 @@ bool FileOperations::processDirectory(const std::string& dir,
         futures.clear();
     };
 
-    // Belt-and-suspenders: guarantee drain + handle close even if an
-    // unexpected exception (e.g. bad_alloc in joinPath) unwinds the loop.
+    // Guarantees the drain and the FindClose even when an unexpected
+    // exception (for example bad_alloc in joinPath) unwinds the loop.
     struct ScopeExit
     {
         std::function<void()> fn;
@@ -478,9 +485,9 @@ bool FileOperations::processDirectory(const std::string& dir,
 
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
         {
-            // Recurse INLINE on this thread. The worker pool only ever runs
-            // leaf-file tasks, which never submit or block, so no pool worker
-            // can park waiting on another pool task (the H1 deadlock).
+            // Recurse inline on this thread. The pool only ever runs leaf-file
+            // tasks, which never submit or block, so no pool worker can park
+            // waiting on another pool task.
             if (recurse)
             {
                 if (processDirectory(full, password, true))
@@ -499,8 +506,8 @@ bool FileOperations::processDirectory(const std::string& dir,
             [full, &password]() -> bool
             {
                 // A file task must never throw past drainAll()/get(); a
-                // genuine file failure is reported as false, matching the
-                // existing ok/fail accounting.
+                // genuine file failure is reported as false, which matches
+                // the ok/fail accounting.
                 try
                 {
                     return FileOperations::processFilePath(full, password);
@@ -529,7 +536,9 @@ bool FileOperations::processDirectory(const std::string& dir,
 }
 
 // Single-path dispatch by extension: ".seal" -> decrypt (strip), else
-// encrypt (append).
+// encrypt (append). The source is removed with DeleteFileA (not shredded)
+// only after the destination is committed. Skipped names and directories
+// report true so processBatch does not fall through to text encryption.
 template <secure_password SecurePwd>
 bool FileOperations::processFilePath(const std::string& raw, const SecurePwd& password)
 {
@@ -793,14 +802,16 @@ void FileOperations::processBatch(const std::vector<std::string>& lines,
         std::cout << hex << "\n";
 }
 
-// Read all stdin (binary), encrypt, write raw ciphertext to stdout.
-// For shell pipes, e.g. `cat secret | seal --encrypt | ...`.
+// Read all stdin, encrypt, write the raw packet to stdout. Intended for
+// shell pipes, but no CLI mode routes here (-e / --text-encrypt is the
+// hex/Base64 text mode). The caller must put stdin and stdout in binary
+// mode first; seal never calls _setmode.
 template <secure_password SecurePwd>
 bool FileOperations::streamEncrypt(const SecurePwd& password)
 {
     try
     {
-        // Slurp stdin (binary, no line buffering).
+        // Read all of stdin (binary, no line buffering).
         std::vector<unsigned char> plaintext((std::istreambuf_iterator<char>(std::cin)),
                                              std::istreambuf_iterator<char>());
 
@@ -833,14 +844,14 @@ bool FileOperations::streamEncrypt(const SecurePwd& password)
     }
 }
 
-// Inverse of streamEncrypt. For shell pipes, e.g.
-// `cat secret.seal | seal --decrypt > secret.txt`.
+// Inverse of streamEncrypt; same binary-mode requirement and same lack of
+// a CLI route. Nothing is written until the GCM tag verifies.
 template <secure_password SecurePwd>
 bool FileOperations::streamDecrypt(const SecurePwd& password)
 {
     try
     {
-        // Slurp stdin (raw ciphertext).
+        // Read all of stdin (raw ciphertext).
         std::vector<unsigned char> packet((std::istreambuf_iterator<char>(std::cin)),
                                           std::istreambuf_iterator<char>());
 
@@ -875,8 +886,11 @@ bool FileOperations::streamDecrypt(const SecurePwd& password)
 
 bool FileOperations::shredFile(const std::string& path)
 {
-    // FILE_FLAG_WRITE_THROUGH bypasses the FS write cache so the overwrite
-    // passes land on the same physical sectors as the original data.
+    // FILE_FLAG_WRITE_THROUGH bypasses the FS write cache so each pass
+    // reaches the device instead of being coalesced away. It cannot promise
+    // the same physical sectors: SSD wear levelling, copy-on-write
+    // filesystems and shadow copies can all retain the old contents.
+    // Share mode 0 takes the file exclusively for the duration.
     HANDLE hFile = CreateFileA(path.c_str(),
                                GENERIC_READ | GENERIC_WRITE,
                                0,
@@ -1125,16 +1139,19 @@ bool FileOperations::encryptFileStreaming(const std::string& srcPath,
     return false;
 }
 
-// Two-pass streaming decrypt; the extra read+decrypt guarantees tampered input never
-// yields recoverable plaintext on disk. Pass 1 streams all ciphertext through GCM into
-// a wiped scratch buffer to verify the tag (nothing on disk; tag fail -> false, no file).
-// Pass 2 re-reads/decrypts to a temp file once authenticated, then flush/rename/wipe key.
+// Two-pass streaming decrypt: the extra read guarantees tampered input never
+// yields recoverable plaintext on disk. Pass 1 streams the ciphertext through
+// GCM into a wiped scratch buffer to check the tag; nothing reaches disk and a
+// bad tag returns false with no output file. Pass 2 re-reads and decrypts to a
+// temp file, wipes the key, then flushes and renames. A last-write-time and
+// size re-stat between the passes rejects a source that changed, because pass 1
+// authenticated only the bytes it saw.
 template <secure_password SecurePwd>
 bool FileOperations::decryptFileStreaming(const std::string& srcPath,
                                           const std::string& dstPath,
                                           const SecurePwd& pwd)
 {
-    // Snapshot last-write time so we can detect TOCTOU between passes.
+    // Snapshot the last-write time to detect a change between the two passes.
     WIN32_FILE_ATTRIBUTE_DATA fileAttrBefore{};
     if (!GetFileAttributesExA(srcPath.c_str(), GetFileExInfoStandard, &fileAttrBefore))
     {
@@ -1347,7 +1364,9 @@ bool FileOperations::decryptFileStreaming(const std::string& srcPath,
             return false;
         }
 
-        // Finalize write context (tag is verified; flushes block padding).
+        // Finalize the write context. GCM is a stream mode, so Final emits no
+        // padding; the call exists to complete the context. Its result is
+        // ignored because pass 1 already verified this exact byte range.
         seal::Cryptography::opensslCheck(
             EVP_CIPHER_CTX_ctrl(
                 writeCtx.p, EVP_CTRL_GCM_SET_TAG, (int)seal::cfg::TAG_LEN, tag.data()),

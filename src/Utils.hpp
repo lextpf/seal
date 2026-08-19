@@ -11,12 +11,31 @@ namespace seal::utils
 {
 
 /**
+ * @brief Small string, hex, Base64, path and file helpers shared by CLI and GUI.
+ * @author Alex (https://github.com/lextpf)
+ * @ingroup Utilities
+ *
+ * Header-only where the operation is a template (hex, `read_bin`), out-of-line
+ * where it needs OpenSSL or Win32. Three conventions hold across the file:
+ *
+ * - **ASCII-only case folding.** `A`-`Z` folds by setting bit 0x20; bytes above
+ *   127 compare as-is, so no locale or code page is consulted. trim() and
+ *   stripSpaces() classify with `std::isspace`, and the process never changes
+ *   the locale, so they act on the C-locale ASCII set too.
+ * - **ANSI path APIs.** fileExistsA() and isDirectoryA() read through the ANSI
+ *   Win32 API: a path is interpreted in the process code page, and one the code
+ *   page cannot represent reads as missing. basenameA() and joinPath() only
+ *   manipulate the string and call no API, despite the naming.
+ * - **No secure storage.** Only utf8ToSecureWide() returns locked memory; every
+ *   other return value is a pageable `std::string` or vector.
+ *
+ * @see seal::Cryptography, seal::basic_secure_string
+ */
+
+/**
  * @brief Case-insensitive suffix check (ASCII fold).
  * @ingroup Utilities
- * @tparam CharT Character type.
- * @param s   String to test.
- * @param suf Suffix to look for.
- * @return `true` if @p s ends with @p suf (case-insensitive).
+ * @return `true` when @p s ends with @p suf, ignoring case.
  */
 template <class CharT>
 [[nodiscard]] constexpr bool ends_with_ci(std::basic_string_view<CharT> s,
@@ -42,13 +61,12 @@ template <class CharT>
 /**
  * @brief Trim leading and trailing whitespace from a string.
  * @ingroup Utilities
- * @param s Input string.
- * @return A copy of @p s with leading/trailing whitespace removed.
+ * @return A copy of @p s with leading and trailing whitespace removed.
  */
 [[nodiscard]] std::string trim(const std::string& s);
 
 /**
- * @brief Remove surrounding quotes (single or double) from a string.
+ * @brief Remove surrounding single or double quotes from a string.
  * @ingroup Utilities
  * @param s Input string (e.g. `"\"hello\""` or `"'hello'"`).
  * @return A copy with the outermost matching quotes stripped, or @p s unchanged.
@@ -58,26 +76,29 @@ template <class CharT>
 /**
  * @brief Get the basename of a file path (filename without directory).
  * @ingroup Utilities
- * @param p File path.
- * @return The trailing filename component.
+ *
+ * Splits on the last `\` or `/`, so both separator styles work in one string.
+ * Nothing is normalised: a trailing separator yields an empty result.
+ *
+ * @return The trailing filename component, or @p p unchanged when it holds
+ *         no separator.
  */
 [[nodiscard]] std::string basenameA(const std::string& p);
 
 /**
  * @brief Case-insensitive suffix check wrapper for narrow strings.
  * @ingroup Utilities
- * @param s   String to test.
- * @param suf Null-terminated suffix to look for.
- * @return `true` if @p s ends with @p suf (case-insensitive).
+ * @return `true` when @p s ends with @p suf, ignoring case.
+ *
+ * @pre @p suf is not null; it is wrapped in a `std::string_view` without a
+ *      null check.
  */
 [[nodiscard]] bool endsWithCi(const std::string& s, const char* suf);
 
 /**
  * @brief Encode a byte range as lowercase hex.
  * @ingroup Utilities
- * @tparam R Input range of byte-like elements.
- * @param range Bytes to encode.
- * @return Lowercase hex string (two characters per byte).
+ * @return Lowercase hex string, two characters per byte.
  */
 template <std::ranges::input_range R>
     requires byte_like<std::ranges::range_value_t<R>>
@@ -97,7 +118,12 @@ template <std::ranges::input_range R>
 /**
  * @brief Decode a hex string_view into an output iterator.
  * @ingroup Utilities
- * @param hex Hex-encoded input (must be non-empty and even length).
+ *
+ * Accepts both cases (`a`-`f` and `A`-`F`). Decoding stops at the first invalid
+ * pair, and the bytes written before that point stay written, so the caller
+ * discards whatever it collected on failure.
+ *
+ * @param hex Hex-encoded input; must be non-empty and of even length.
  * @param out Output iterator receiving decoded bytes.
  * @return `true` on success, `false` on empty, odd-length, or invalid hex input.
  */
@@ -131,9 +157,9 @@ template <std::ranges::input_range R>
  * @ingroup Utilities
  * @tparam Cont Contiguous byte-like container (e.g. `std::vector<unsigned char>`).
  * @param hex Hex-encoded input.
- * @param out Destination container. Cleared on entry, then filled with the
- *            decoded bytes; on failure it may retain a partial prefix (the
- *            bytes decoded before an invalid character was reached).
+ * @param out Cleared on entry, then filled with the decoded bytes. On failure it
+ *            can hold a partial prefix: the bytes decoded before the invalid
+ *            character.
  * @return `true` on success, `false` on invalid hex.
  */
 template <std::ranges::contiguous_range Cont>
@@ -146,9 +172,8 @@ template <std::ranges::contiguous_range Cont>
 }
 
 /**
- * @brief Remove all whitespace characters from a string.
+ * @brief Remove every whitespace character from a string.
  * @ingroup Utilities
- * @param s Input string.
  * @return A copy with all whitespace removed.
  */
 [[nodiscard]] std::string stripSpaces(const std::string& s);
@@ -156,17 +181,19 @@ template <std::ranges::contiguous_range Cont>
 /**
  * @brief Extract candidate hex tokens from free text.
  * @ingroup Utilities
- * @param raw Input text potentially containing hex-encoded data.
- * @return Vector of hex token strings. Tokens shorter than the minimum
- *         AES-256-GCM framing overhead (salt + IV + tag = 88 hex chars)
- *         are discarded. Actual packets also contain an 8-byte AAD header
- *         (`cfg::HDR_LEN`), so the true minimum packet length is 104 hex
- *         chars; this threshold is intentionally lenient to avoid rejecting
- *         candidate tokens.
+ *
+ * Splits @p raw on whitespace and keeps a token when its length is even, reaches
+ * the framing minimum below, and every character is a hex digit. Case is
+ * preserved and tokens come back in input order.
+ *
+ * @param raw Input text that may contain hex-encoded data.
+ * @return Hex token strings. The 88-char discard threshold is deliberately below
+ *         the 104-char true minimum packet length, so the length test never
+ *         discards a real packet.
  *
  * @par Framing overhead
- * Byte sizes are the @c cfg constants (`SALT_LEN` 16, `IV_LEN` 12, `TAG_LEN` 16,
- * `HDR_LEN` 8); hex encodes two chars per byte:
+ * Byte sizes are the @c cfg constants `SALT_LEN`, `IV_LEN`, `TAG_LEN` and
+ * `HDR_LEN`; hex encodes two chars per byte:
  * | Component         | Bytes | Hex chars |
  * |-------------------|-------|-----------|
  * | Salt              | 16    | 32        |
@@ -181,12 +208,21 @@ template <std::ranges::contiguous_range Cont>
 /**
  * @brief Read an entire file into a contiguous container.
  * @ingroup Utilities
+ *
+ * Opens the file in binary mode and sizes @p out by seeking to the end, so the
+ * whole file is held in memory at once with no text translation. The
+ * destination is pageable memory and cannot hold a secret that must stay
+ * unpageable.
+ *
  * @tparam PathLike Path-like type convertible to `std::filesystem::path`.
  * @tparam Cont     Contiguous container of byte-like or char elements.
- * @param p   File path.
- * @param out Destination container (resized to exact file size in bytes).
- * @return `true` on success, `false` if the file cannot be opened, read,
- *         or if the reported size is negative.
+ * @param out Resized to the exact file size in bytes. It keeps that size even
+ *            when the read fails, so its tail can hold value-initialised bytes;
+ *            discard it unless `true` is returned.
+ * @return `true` on success. `false` when the file cannot be opened or read,
+ *         when the reported size is negative, or when no
+ *         `std::filesystem::path` can be built from @p p - in that last case
+ *         @p out is left untouched.
  */
 template <std::ranges::range PathLike, std::ranges::contiguous_range Cont>
     requires(byte_like<std::ranges::range_value_t<Cont>> ||
@@ -217,8 +253,10 @@ template <std::ranges::range PathLike, std::ranges::contiguous_range Cont>
 /**
  * @brief Append a suffix/extension to a path string.
  * @ingroup Utilities
- * @param s   Base path.
- * @param ext Extension to append (e.g. `".seal"`).
+ *
+ * Plain concatenation: no dot is inserted and no existing extension is replaced.
+ *
+ * @param ext Extension to append. It carries its own leading dot (e.g. `".seal"`).
  * @return Concatenated path string.
  */
 [[nodiscard]] std::string add_ext(const std::string& s, std::string_view ext);
@@ -226,42 +264,64 @@ template <std::ranges::range PathLike, std::ranges::contiguous_range Cont>
 /**
  * @brief Remove a trailing extension case-insensitively.
  * @ingroup Utilities
- * @param s   Path string.
  * @param ext Extension to strip (e.g. `".seal"`).
- * @return Path with @p ext removed, or @p s unchanged if it doesn't end with @p ext.
+ * @return Path with @p ext removed, or @p s unchanged when it does not end with
+ *         @p ext.
  */
 [[nodiscard]] std::string strip_ext_ci(const std::string& s, std::string_view ext);
 
 /**
- * @brief Check whether a path refers to an existing file.
+ * @brief Check whether a path refers to an existing non-directory entry.
  * @ingroup Utilities
- * @param path File path to test.
- * @return `true` if the path exists and is a regular file.
+ *
+ * Reads `GetFileAttributesA`, with the ANSI constraint above. The test excludes
+ * directories only: every other entry whose attributes can be read, a reparse
+ * point included, reports `true`.
+ *
+ * @return `true` when the attributes could be read and the entry is not a
+ *         directory.
  */
 [[nodiscard]] bool fileExistsA(const std::string& path);
 
 /**
  * @brief Test whether a path refers to a directory.
  * @ingroup Utilities
- * @param path Path to test.
- * @return `true` if the path exists and is a directory.
+ *
+ * Same ANSI-API constraint as fileExistsA().
+ *
+ * @return `true` when the path exists and is a directory.
  */
 [[nodiscard]] bool isDirectoryA(const std::string& path);
 
 /**
  * @brief Join a directory and a leaf name with a backslash.
  * @ingroup Utilities
- * @param dir  Directory path.
+ *
+ * The separator is inserted only when needed: an empty @p dir, or one already
+ * ending in `\` or `/`, is concatenated as-is. @p name is appended verbatim, so
+ * a leading separator on it produces a doubled separator.
+ *
  * @param name Leaf filename.
  * @return `dir\name`.
+ *
+ * @pre @p name is not null; it is appended without a null check.
  */
 [[nodiscard]] std::string joinPath(const std::string& dir, const char* name);
 
 /**
  * @brief Convert a UTF-8 string to a secure wide string.
  * @ingroup Utilities
- * @param utf8 Input UTF-8 string.
- * @return Wide string in locked, guard-paged memory.
+ *
+ * The result holds exactly the converted UTF-16 code units and no trailing null,
+ * so a caller that needs a C string appends one. A character outside the BMP
+ * becomes a surrogate pair, so the unit count can exceed the character count.
+ * The conversion does not pass `MB_ERR_INVALID_CHARS`: an ill-formed byte
+ * sequence becomes U+FFFD instead of failing.
+ *
+ * @param utf8 Input UTF-8 string. It stays in pageable memory and the caller
+ *             wipes it.
+ * @return Wide string in locked, guard-paged memory. Empty when @p utf8 is empty
+ *         or the conversion fails; failure is not reported separately.
  */
 [[nodiscard]] seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> utf8ToSecureWide(
     const std::string& utf8);
@@ -269,10 +329,15 @@ template <std::ranges::range PathLike, std::ranges::contiguous_range Cont>
 /**
  * @brief Convert a secure wide string to a UTF-8 std::string.
  * @ingroup Utilities
- * @param wide Input secure wide string.
- * @return UTF-8 string in regular heap memory.
- * @warning The returned std::string is **not** in locked memory and may be
- *          swapped to disk. Use only when an insecure copy is acceptable.
+ *
+ * Inverse of utf8ToSecureWide(). Converts exactly `wide.size()` code units and
+ * adds no trailing null, so an embedded null is preserved rather than ending the
+ * string.
+ *
+ * @return UTF-8 string in regular heap memory. Empty when @p wide is empty or
+ *         the conversion fails; failure is not reported separately.
+ * @warning The returned std::string is not locked memory and can be swapped to
+ *          disk. Use it only when an insecure copy is acceptable.
  */
 [[nodiscard]] std::string secureWideToUtf8(
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& wide);
@@ -280,36 +345,45 @@ template <std::ranges::range PathLike, std::ranges::contiguous_range Cont>
 /**
  * @brief Encode binary data as a Base64 string.
  * @ingroup Utilities
- * @param data Raw bytes to encode.
- * @return Base64-encoded string.
+ *
+ * Standard alphabet with `=` padding and no line breaks (OpenSSL
+ * `EVP_EncodeBlock`). The result is not locked memory, so it must not hold a
+ * secret that has to stay unpageable.
+ *
+ * @return Base64-encoded string, empty when @p data is empty.
  */
 [[nodiscard]] std::string toBase64(std::span<const unsigned char> data);
 
 /**
  * @brief Decode a Base64 string to raw bytes.
  * @ingroup Utilities
- * @param b64 Base64-encoded input.
- * @return Decoded bytes, or empty vector on invalid input.
+ *
+ * Wraps `EVP_DecodeBlock`, which needs a length that is a multiple of 4 and
+ * rejects embedded whitespace or newlines, so strip those first. The padding
+ * bytes `EVP_DecodeBlock` leaves behind are trimmed here by counting the
+ * trailing `=` characters of the input.
+ *
+ * @param b64 Base64-encoded input. The alphabet is not validated: pair this with
+ *            isBase64() when the input is untrusted.
+ * @return Decoded bytes, or an empty vector on empty or invalid input.
  */
 [[nodiscard]] std::vector<unsigned char> fromBase64(const std::string& b64);
 
 /**
  * @brief Check whether a string looks like valid Base64.
  * @ingroup Utilities
- * @param s String to test.
- * @return `true` only when @p s is non-empty, its length is a multiple of 4,
- *         every character is in the Base64 alphabet, and at least one character
- *         lies outside the hex alphabet (`G`-`Z`, `g`-`z`, `+`, `/`, `=`). That
- *         last condition makes pure-hex input return `false` so it is not
- *         misrouted through Base64 decoding.
+ *
+ * The hex-ambiguity check below is what stops a pure-hex string from being
+ * misrouted through Base64 decoding by the string-mode dispatchers.
+ *
+ * @return `true` only when all three checks in the table hold.
  *
  * @par Classification predicate
- * All three checks must hold for a `true` result:
- * | Check         | Requirement                                               |
- * |---------------|-----------------------------------------------------------|
- * | Length        | at least 4 and a multiple of 4                            |
- * | Alphabet      | every char in `A`-`Z` `a`-`z` `0`-`9` `+` `/` `=`         |
- * | Hex-ambiguity | at least one char in `G`-`Z` `g`-`z` `+` `/` `=` (non-hex)|
+ * | Check         | Requirement                                                |
+ * |---------------|------------------------------------------------------------|
+ * | Length        | at least 4 and a multiple of 4                             |
+ * | Alphabet      | every char in `A`-`Z` `a`-`z` `0`-`9` `+` `/` `=`          |
+ * | Hex-ambiguity | at least one char in `G`-`Z` `g`-`z` `+` `/` `=` (non-hex) |
  */
 [[nodiscard]] bool isBase64(const std::string& s);
 
