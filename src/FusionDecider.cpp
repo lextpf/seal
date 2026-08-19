@@ -55,10 +55,12 @@ FusionOutcome FusionDecider::decideDetailed(std::span<const ProbeResult> results
 {
     FusionOutcome outcome;
 
-    // Pass 1: collect Tier-1 short-circuit candidates.
+    // Pass 1: collect Tier-1 short-circuit candidates. tier1Verdict latches on
+    // the first qualifying hit and every later hit is compared against it, so
+    // "no conflict" means all Tier-1 hits carry the same verdict.
     Verdict tier1Verdict = Verdict::Unknown;
     int tier1HitCount = 0;
-    int tier1BridgeOnlyCount = 0;  // M5: bridge must agree with another Tier-1 probe.
+    int tier1BridgeOnlyCount = 0;  // Tier-1 hits from browser_extension (M5 input).
     bool tier1Conflict = false;
 
     for (const auto& result : results)
@@ -96,8 +98,8 @@ FusionOutcome FusionDecider::decideDetailed(std::span<const ProbeResult> results
     const bool bridgeOnlyHit = (tier1HitCount > 0) && (tier1HitCount == tier1BridgeOnlyCount);
     const bool shortCircuit = tier1HitCount > 0 && !tier1Conflict && !bridgeOnlyHit;
     outcome.m_Tier1ShortCircuit = shortCircuit;
-    // Corroborated only when a bridge Tier-1 hit was part of an agreeing,
-    // non-bridge-only short-circuit - i.e. an on-disk Tier-1 probe agreed.
+    // Corroborated means a bridge Tier-1 hit was part of an accepted
+    // short-circuit, so an on-disk Tier-1 probe agreed with it.
     outcome.m_BridgeCorroborated = shortCircuit && (tier1BridgeOnlyCount > 0);
 
     if (shortCircuit)
@@ -106,7 +108,10 @@ FusionOutcome FusionDecider::decideDetailed(std::span<const ProbeResult> results
         return outcome;
     }
 
-    // Pass 2: Tier-2 weighted vote across every probe with a known profile.
+    // Pass 2: Tier-2 weighted vote across every probe with a known profile,
+    // Tier-1 probes included - a conflicting or bridge-only Tier-1 hit still
+    // votes here with its full weight. Unknown was filtered above, so the
+    // else-branch below can only be Username.
     float scorePassword = 0.0F;
     float scoreUsername = 0.0F;
     for (const auto& result : results)

@@ -22,6 +22,8 @@ namespace seal
 AutoLockController::AutoLockController(QObject* parent)
     : QObject(parent)
 {
+    // Both settings are read once, here. Nothing re-reads them, so a later
+    // change takes effect on the next start.
     QSettings settings;
     m_TimeoutSecs = settings.value(QStringLiteral("security/autoLockSecs"), 300).toInt();
     m_LockOnSessionLock =
@@ -30,6 +32,9 @@ AutoLockController::AutoLockController(QObject* parent)
     m_Clock.start();
     m_LastActivityMs = m_Clock.elapsed();
 
+    // Application-level filters: the event filter sees every event delivered to
+    // any object, the native filter every Windows message of this thread. Both
+    // are installed unconditionally; the settings only gate what they do.
     QCoreApplication::instance()->installEventFilter(this);
     QCoreApplication::instance()->installNativeEventFilter(this);
 
@@ -59,6 +64,9 @@ AutoLockController::~AutoLockController()
 
 bool AutoLockController::eventFilter(QObject* watched, QEvent* event)
 {
+    // Runs for every event of every object, so the body stays a type switch and
+    // one timestamp write. FocusIn is not distinguished from a click, so a
+    // programmatic focus change also counts as activity.
     switch (event->type())
     {
         case QEvent::KeyPress:
@@ -84,6 +92,8 @@ bool AutoLockController::nativeEventFilter(const QByteArray& eventType,
     {
         return false;
     }
+    // Only the lock transition emits. Unlock, logon, logoff and remote-session
+    // transitions are ignored, and the message is never consumed.
     MSG* msg = static_cast<MSG*>(message);
     if (msg != nullptr && msg->message == WM_WTSSESSION_CHANGE && msg->wParam == WTS_SESSION_LOCK)
     {
@@ -100,7 +110,7 @@ void AutoLockController::onPollTick()
 
     if (seal::ShouldAutoLock(m_LastActivityMs, m_Clock.elapsed(), m_TimeoutSecs))
     {
-        // Re-stamp so a no-op lock (already locked) doesn't re-fire each tick.
+        // Re-stamp so a no-op lock (already locked) does not re-fire each tick.
         m_LastActivityMs = m_Clock.elapsed();
         qCInfo(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
             {"event=security.autolock.trigger", "result=ok", "reason=idle_timeout"}));
@@ -114,6 +124,9 @@ void AutoLockController::tryRegisterSessionNotification()
     {
         return;
     }
+    // Registration needs a window handle, and no window exists during
+    // construction, so this is retried on every tick until the first top-level
+    // window appears. winId() realises the native window.
     const auto windows = QGuiApplication::topLevelWindows();
     if (windows.isEmpty())
     {

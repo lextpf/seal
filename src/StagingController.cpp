@@ -36,18 +36,19 @@ StagingController::StagingController(CredentialWorkspace& workspace,
       m_Engine(engine),
       m_Ui(ui)
 {
-    // Initial enabled state from the persisted master switch (default OFF).
-    // BridgeViewModel owns the key; we only read it here for the initial poll.
+    // Initial state from the persisted master switch (default false).
+    // BridgeViewModel owns the key; this constructor only reads it.
     const QSettings settings;
     m_Enabled = settings.value(QString::fromLatin1(kKeyAutoStage), false).toBool();
 
     m_NavPoll.setInterval(kNavPollIntervalMs);
     connect(&m_NavPoll, &QTimer::timeout, this, &StagingController::onNavPollTick);
 
-    // When the engine leaves an armed state (fill done / cancelled / error), drop
-    // our ownership flag so a later manual arm isn't mistaken for ours. A COMPLETED
-    // auto fill is by construction the password, so it latches the visit inert (no
-    // injection, no re-arm) until a fresh page load mints a new token.
+    // Leaving an armed state (fill done / cancelled / error) drops the ownership
+    // flag, so a later manual arm is not mistaken for this one. A completed fill
+    // that this controller armed is by construction the password, so it latches the
+    // visit inert. A manual Ctrl+Click fill also completes here and must not spend
+    // the visit.
     connect(&m_Engine,
             &FillController::fillCompleted,
             this,
@@ -100,7 +101,7 @@ void StagingController::setEnabled(bool enabled)
 
 void StagingController::cancelActive()
 {
-    // Only cancel an arm WE placed; never disturb a manual Ctrl+Click arm.
+    // Only cancel an arm this controller placed; never disturb a manual arm.
     if (m_AutoArmed && m_Engine.state() == FillController::State::AutoArmed)
     {
         m_Engine.cancel();
@@ -139,8 +140,7 @@ void StagingController::onNavPollTick()
         return;
     }
     // Never trigger a master-password prompt from a background poll: a locked
-    // vault simply does not stage. Auto-lock therefore naturally bounds the
-    // exposure window.
+    // vault does not stage. Auto-lock therefore bounds the exposure window.
     if (!m_Workspace.isPasswordSet())
     {
         return;
@@ -155,7 +155,7 @@ void StagingController::onNavPollTick()
         cancelActive();
         return;
     }
-    // Never override a manual Ctrl+Click arm; only ever re-stage over our own.
+    // Never override a manual Ctrl+Click arm; only re-stage over an own auto-arm.
     if (m_Engine.isArmed() && !m_AutoArmed)
     {
         return;
@@ -167,9 +167,9 @@ void StagingController::onNavPollTick()
         return;  // Nothing new since last poll.
     }
 
-    // A login page has a visible password field OR a login identifier field
+    // A login page has a visible password field or a login identifier field
     // (the email-first / multi-step first screen). A navigation to a non-login
-    // or insecure page drops any auto-arm we were holding.
+    // or insecure page drops any auto-arm this controller holds.
     if (!nav->m_Secure || (!nav->m_HasPasswordForm && !nav->m_HasUsernameField))
     {
         cancelActive();
@@ -186,10 +186,10 @@ void StagingController::onNavPollTick()
 
     const StageResolution res = resolveStageRecord(m_Workspace.records(), nav->m_Host);
 
-    // One diagnostic line per consumed navigation so "why didn't it arm" is never a
-    // silent mystery. host stays off the line (length only, per the bridge's privacy
-    // convention); result=none with records>0 is the tell that no record's platform
-    // is a domain matching this host (bare "PayPal" won't strict-match "paypal.com").
+    // One diagnostic line per consumed navigation, so a page that does not arm
+    // stays explainable. The host is logged as a length only, per the bridge's
+    // privacy convention. result=none with records>0 means no record platform is a
+    // domain matching this host ("PayPal" does not match "paypal.com").
     const char* outcome = res.m_Kind == StageResolution::Kind::Single     ? "single"
                           : res.m_Kind == StageResolution::Kind::Multiple ? "multiple"
                                                                           : "none";
@@ -212,10 +212,9 @@ void StagingController::onNavPollTick()
         case StageResolution::Kind::Single:
         {
             const int idx = res.m_Index;
-            // Once-per-visit gate. The visit token identifies one document lifetime
-            // (reload/reopen = new token; SPA churn and MutationObserver re-reports
-            // keep the same one). A visit whose password was click-filled is INERT -
-            // nothing stages again. An empty token (stale extension) fails closed.
+            // Once-per-visit gate: a visit whose password was click-filled is inert
+            // and an empty token fails closed. StageVisitTracker defines what counts
+            // as one visit.
             if (m_Tracker.passwordDone(nav->m_Visit))
             {
                 qCInfo(logFill).noquote() << QString::fromStdString(seal::diag::joinFields(
@@ -228,9 +227,9 @@ void StagingController::onNavPollTick()
                 break;
             }
             // Arm the password click-fill path only when a password field is present
-            // (password screen or combined form). An email-first FIRST screen has
-            // nothing to click-fill yet, so we install no hooks - only the username
-            // is injected. A re-report of the visit/record we already staged is a no-op.
+            // (password screen or combined form). An email-first first screen has
+            // nothing to click-fill yet: no hooks are installed, only the username is
+            // injected. A re-report of the already staged visit and record is a no-op.
             if (nav->m_HasPasswordForm)
             {
                 const bool alreadyStaged = m_AutoArmed &&
@@ -252,10 +251,10 @@ void StagingController::onNavPollTick()
                     }
                 }
             }
-            // Zero-click username fill on a confirmed login page (email-first
-            // autocomplete="username", OR any page with a password field incl. combined
-            // forms omitting the token, e.g. Duolingo; content.js no-ops if none present).
-            // FillController JIT-decrypts (this stays decrypt-free); once per visit.
+            // Zero-click username fill, once per visit, on any page that
+            // navShouldInjectUsername accepts. content.js fills nothing when it finds
+            // no username field. FillController decrypts just-in-time, so this path
+            // stays decrypt-free.
             if (navShouldInjectUsername(nav->m_HasUsernameField, nav->m_HasPasswordForm) &&
                 !m_Tracker.usernameDone(nav->m_Visit))
             {
