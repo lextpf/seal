@@ -55,6 +55,10 @@ void initialize(StreamState& state)
         (void)SetConsoleMode(state.handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
     }
 
+    // Colour is enabled when the handle is still a console after the attempt.
+    // The VT bit in verifyMode is not tested, so a console host that refuses
+    // ENABLE_VIRTUAL_TERMINAL_PROCESSING still receives escape sequences;
+    // redirected output fails GetConsoleMode and falls back to plain text.
     DWORD verifyMode = 0;
     state.colorEnabled = GetConsoleMode(state.handle, &verifyMode) != 0;
 }
@@ -86,9 +90,9 @@ const char* codeFor(seal::console::Tone tone)
     }
 }
 
-// Per-category ANSI foreground colour so 9 subsystems are distinguishable
-// at a glance in a tail. Unknown categories fall back to bright magenta
-// (the pre-change default), preserving behaviour for non-seal callers.
+// Per-category ANSI foreground colour so the 9 subsystems are distinguishable
+// at a glance in a tail. An unknown category, including one from a non-seal
+// caller, falls back to bright magenta.
 const char* categoryColor(std::string_view cat)
 {
     if (cat == "backend")

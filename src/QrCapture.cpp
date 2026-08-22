@@ -37,31 +37,31 @@ void writeQrDiag(seal::console::Tone tone, std::initializer_list<std::string> fi
 // Maximum time the QR detection loop can run before auto-cancelling.
 constexpr int kDefaultCaptureTimeoutSec = 60;
 
-// Reject oversized frames that could trigger buffer overflows in imgproc.
+// Reject an oversized frame that could overflow an imgproc buffer.
 constexpr int kMaxFrameDimension = 3840;
 
 // QR v40 max is ~4296 bytes; anything larger is anomalous.
 constexpr size_t kMaxQrDataBytes = 4096;
 
-// 1 GiB process memory cap to block heap-spray / decompression bombs.
+// 1 GiB process memory cap that blocks a heap spray or a decompression bomb.
 constexpr SIZE_T kCaptureMemoryLimitBytes = 1ULL << 30;
 
-// At most one CaptureJobGuard active process-wide; otherwise a second
-// destructor would clear the cap mid-capture and disable the sandbox.
+// At most one CaptureJobGuard is active process-wide; a second destructor would
+// clear the cap mid-capture and disable the sandbox.
 std::atomic<bool> g_CaptureJobActive{false};
 
-// RAII Job Object that caps process memory while OpenCV decodes frames.
-// A malicious virtual-camera driver or decompression bomb could trigger
-// unbounded allocation; the 1 GiB ceiling fail-fasts. Destructor clears
+// RAII Job Object that caps process memory while OpenCV decodes frames. A
+// malicious virtual-camera driver or a decompression bomb can trigger unbounded
+// allocation, and the 1 GiB ceiling fails fast instead. The destructor clears
 // the limit so the rest of seal runs unconstrained.
 struct CaptureJobGuard
 {
     HANDLE hJob = nullptr;
-    bool m_Owns = false;  // true only if this instance acquired the exclusive flag
+    bool m_Owns = false;  // true only when this instance took the exclusive flag
 
     explicit CaptureJobGuard(SIZE_T memoryLimitBytes)
     {
-        // Single-instance: skip setup if another guard is active.
+        // Single-instance: skip setup when another guard is active.
         bool expected = false;
         if (!g_CaptureJobActive.compare_exchange_strong(expected, true))
             return;
@@ -84,7 +84,7 @@ struct CaptureJobGuard
 
         if (!AssignProcessToJobObject(hJob, GetCurrentProcess()))
         {
-            // Non-fatal: pre-Win10 non-nestable Job or access denied.
+            // Non-fatal: a non-nestable Job on older Windows, or access denied.
             CloseHandle(hJob);
             hJob = nullptr;
         }
@@ -167,7 +167,7 @@ seal::secure_string<> seal::captureQrFromWebcam(seal::CancellationToken token)
 
     while (true)
     {
-        // Poll cooperative cancellation token first.
+        // Poll the cancellation token before any camera work.
         if (token.cancelled())
         {
             writeQrDiag(seal::console::Tone::Warning,

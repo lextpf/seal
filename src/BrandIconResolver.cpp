@@ -21,6 +21,9 @@ namespace brand
 namespace
 {
 
+// Curated brand aliases. Keys are normalized slugs (lower-case alphanumeric);
+// values are asset base names, which may contain hyphens and are re-normalized
+// before the index probe, so "x-twitter" is looked up as "xtwitter".
 const std::unordered_map<std::string, std::string>& aliasTable()
 {
     static const std::unordered_map<std::string, std::string> s_Table = {
@@ -47,9 +50,17 @@ const std::unordered_map<std::string, std::string>& aliasTable()
     return s_Table;
 }
 
+// Suffixes retried after a direct miss. The slug has already lost its dots, so
+// this is a plain trailing-substring strip, not hostname parsing: "githubcom"
+// retries as "github", and a brand slug that merely ends in one of these groups
+// ("cashapp") is stripped as well. A wrong strip is harmless: the retry returns
+// only when it hits a real asset.
 constexpr std::array<const char*, 8> kTrailingTlds = {
     "com", "io", "net", "org", "app", "tld", "tv", "ai"};
 
+// One lookup step: probe the index for the candidate, then for its alias
+// target. Writes outRealSlug and returns true only on a hit, so a caller can
+// chain candidates without clearing the output.
 bool tryDirectOrAlias(const std::string& candidate,
                       const std::function<std::string(const std::string&)>& lookupAsset,
                       std::string& outRealSlug)
@@ -101,9 +112,9 @@ std::string normalizeSlug(const std::string& platformName)
 std::string resolveBrandIconSlug(const std::string& platformName,
                                  const std::function<std::string(const std::string&)>& lookupAsset)
 {
-    // Tokenize on non-alphanumeric boundaries, lower-cased. The joined
-    // form matches normalizeSlug(); keeping tokens lets us retry word-by-
-    // word for inputs like "Twitter, Inc." or "Google LLC".
+    // Tokenize on non-alphanumeric boundaries, lower-cased. The joined form
+    // matches normalizeSlug(); keeping the tokens allows a word-by-word retry
+    // for an input like "Twitter, Inc." or "Google LLC".
     std::vector<std::string> tokens;
     std::string current;
     for (char c : platformName)
@@ -154,8 +165,9 @@ std::string resolveBrandIconSlug(const std::string& platformName,
         }
     }
 
-    // Per-token fallback: "Twitter, Inc." -> ["twitter","inc"]; "twitter"
-    // aliases to "x-twitter".
+    // Per-token fallback: "Twitter, Inc." -> ["twitter","inc"], and "twitter"
+    // aliases to "x-twitter". A single-token label is skipped here: its only
+    // token is the joined slug, already tried above.
     for (const auto& token : tokens)
     {
         if (token == joined)
@@ -176,6 +188,10 @@ std::string resolveBrandIconSlug(const std::string& platformName,
 namespace
 {
 
+// Normalized-key -> asset base name, built once from the qrc tree. QChar's
+// isLetterOrNumber is Unicode-aware while normalizeSlug is ASCII-only, so an
+// asset filename with non-ASCII letters would index under a key no platform
+// label can produce. Keep brand filenames ASCII.
 const QHash<QString, QString>& brandAssetIndex()
 {
     static QHash<QString, QString> s_Index;

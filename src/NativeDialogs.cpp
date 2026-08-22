@@ -49,6 +49,8 @@ QString OpenFileDialog(const QString& title, const QString& filter)
 
 QString SaveFileDialog(const QString& title, const QString& filter)
 {
+    // lpstrFile doubles as the initial file-name field, so seeding it with
+    // ".seal" opens the dialog with the extension already typed.
     wchar_t fileName[MAX_PATH] = L".seal";
     std::wstring wTitle = title.toStdWString();
     std::wstring wFilter = filter.toStdWString();
@@ -79,6 +81,8 @@ QString SaveFileDialog(const QString& title, const QString& filter)
 
 QString OpenFolderDialog(const QString& title)
 {
+    // Needs COM on this thread; Qt initializes it for the GUI thread, which is
+    // the only thread that may call here.
     IFileDialog* pfd = nullptr;
     HRESULT hr =
         CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pfd));
@@ -87,6 +91,8 @@ QString OpenFolderDialog(const QString& title)
         return {};
     }
 
+    // FOS_FORCEFILESYSTEM keeps virtual shell locations out of the picker, so
+    // SIGDN_FILESYSPATH below always yields a real path.
     DWORD opts = 0;
     pfd->GetOptions(&opts);
     pfd->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR);
