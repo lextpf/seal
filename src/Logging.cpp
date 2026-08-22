@@ -13,8 +13,7 @@
 
 #include <iostream>
 
-// Bare category strings (no "seal." prefix). Filters previously written
-// as "seal.bridge.*" must drop the prefix.
+// Bare category strings: a log filter matches "bridge.*", not "seal.bridge.*".
 Q_LOGGING_CATEGORY(logBackend, "backend")
 Q_LOGGING_CATEGORY(logVault, "vault")
 Q_LOGGING_CATEGORY(logCrypto, "crypto")

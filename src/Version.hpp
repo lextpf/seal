@@ -1,5 +1,17 @@
 #pragma once
 
+/**
+ * @brief Compile-time version numbers and the printable version string.
+ * @author Alex (https://github.com/lextpf)
+ * @ingroup Utilities
+ *
+ * The four numeric macros are the single source of the version that
+ * `seal -v` / `seal --version` prints and that opens the `seal --help` banner.
+ *
+ * @warning Keep the first three in step with `project(seal VERSION ...)` in
+ * CMakeLists.txt by hand; nothing checks the two against each other.
+ */
+
 /// Major version number.
 #define SEAL_VERSION_MAJOR 1
 /// Minor version number.
@@ -12,19 +24,16 @@
 /**
  * @brief Stringify version components into a `"major.minor.patch.release"` literal.
  *
- * Uses the preprocessor stringification operator (`#`) to convert
- * numeric macro arguments into a dot-separated version string at
- * compile time. Not intended to be called directly; use SEAL_VERSION instead.
- *
- * @param major Major version.
- * @param minor Minor version.
- * @param patch Patch version.
- * @param release Release version.
+ * `#` stops further expansion of its operand, so reach this inner macro only
+ * through SEAL_VERSION_STRINGIFY. Calling it with a macro name stringifies the
+ * name itself.
  *
  * @see SEAL_VERSION
  */
 #define SEAL_VERSION_STRINGIFY_IMPL(major, minor, patch, release) \
     #major "." #minor "." #patch "." #release
+/// Expands its arguments once, then stringifies them via
+/// SEAL_VERSION_STRINGIFY_IMPL.
 #define SEAL_VERSION_STRINGIFY(major, minor, patch, release) \
     SEAL_VERSION_STRINGIFY_IMPL(major, minor, patch, release)
 

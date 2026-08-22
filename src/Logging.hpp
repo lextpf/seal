@@ -14,15 +14,19 @@
  * @author Alex (https://github.com/lextpf)
  * @ingroup Logging
  *
- * Provides per-subsystem logging categories so messages can be filtered
- * by component (e.g. `backend`, `vault`, `bridge`). All categories use
- * Qt's `qCDebug` / `qCWarning` / `qCCritical` macros. Category strings
- * are bare (no `seal.` prefix) since every log line in this process is
- * by definition from seal.
+ * Per-subsystem logging categories let a filter select one component
+ * (e.g. `backend`, `vault`, `bridge`). Category strings are bare, without a
+ * `seal.` prefix, because every log line in this process comes from seal. Emit
+ * through Qt's `qCDebug` / `qCWarning` / `qCCritical` macros with the category
+ * variable below.
  *
- * Call installSealMessageHandler() once at startup to redirect all
- * `qDebug` / `qWarning` / `qCritical` / `qFatal` output through a
- * unified format written to `stderr`.
+ * Call installSealMessageHandler() once at startup to route all
+ * `qDebug` / `qWarning` / `qCritical` / `qFatal` output through one format
+ * written to `stderr`.
+ *
+ * @warning The whole header is gated on `USE_QT_UI`, so the Qt-free test
+ * binary neither declares the categories nor links the handler. Code that
+ * must compile in both configurations cannot call into this file.
  *
  * @par Categories
  * | Variable     | String    | Subsystem                                |
@@ -38,23 +42,36 @@
  * | `logBridge`  | `bridge`  | BrowserBridge pipe + message validation  |
  */
 
-Q_DECLARE_LOGGING_CATEGORY(logBackend)  // App ViewModel / QML bridge operations.
-Q_DECLARE_LOGGING_CATEGORY(logVault)    // Vault load, save, and record mutations.
-Q_DECLARE_LOGGING_CATEGORY(logCrypto)   // Encryption, decryption, and key derivation.
-Q_DECLARE_LOGGING_CATEGORY(logFill)     // Auto-fill hook and keystroke injection.
-Q_DECLARE_LOGGING_CATEGORY(logFile)     // File and directory I/O operations.
-Q_DECLARE_LOGGING_CATEGORY(logApp)      // Application lifecycle and general events.
-Q_DECLARE_LOGGING_CATEGORY(logCamera)   // Camera enumeration, probing, and selection.
-Q_DECLARE_LOGGING_CATEGORY(logQr)       // QR capture loop and frame decoding.
-Q_DECLARE_LOGGING_CATEGORY(logBridge)   // BrowserBridge named-pipe server and message validation.
+Q_DECLARE_LOGGING_CATEGORY(logBackend)
+Q_DECLARE_LOGGING_CATEGORY(logVault)
+Q_DECLARE_LOGGING_CATEGORY(logCrypto)
+Q_DECLARE_LOGGING_CATEGORY(logFill)
+Q_DECLARE_LOGGING_CATEGORY(logFile)
+Q_DECLARE_LOGGING_CATEGORY(logApp)
+Q_DECLARE_LOGGING_CATEGORY(logCamera)
+Q_DECLARE_LOGGING_CATEGORY(logQr)
+Q_DECLARE_LOGGING_CATEGORY(logBridge)
 
 /**
  * @brief Install the seal-specific Qt message handler.
+ * @ingroup Logging
  *
- * Replaces the default Qt message handler with one that writes
- * timestamped, categorised log lines to `stderr` in the format:
- * `[HH:mm:ss.zzz] [level] [category] [tid=threadId] message`. Thread-safe;
- * may be called before or after QApplication construction.
+ * Replaces the default Qt message handler with one that writes timestamped,
+ * categorised lines to `stderr`. The timestamp is local wall-clock time, so it
+ * is not monotonic across a clock change. Call it before or after QApplication
+ * construction. A second call replaces the handler; the previous one is
+ * discarded and cannot be restored.
+ *
+ * @par Message shaping
+ * The body passes through seal::diag::sanitizeAscii() with a 4096-byte cap, so
+ * non-ASCII text becomes `?`, a long line ends in `...`, and an empty body
+ * prints as `none`. A message with no category is logged as `default`.
+ *
+ * @par Threading
+ * The handler runs on the thread that emitted the message, renders the line
+ * through `seal::console::writeLogLine` (per-segment colour) and flushes
+ * `stderr` afterwards. Segments are written with several stream operations, so
+ * lines emitted concurrently from different threads can interleave.
  *
  * @par Emitted line
  * @code
@@ -71,22 +88,28 @@ Q_DECLARE_LOGGING_CATEGORY(logBridge)   // BrowserBridge named-pipe server and m
  * | `QtCriticalMsg`  | `ERR` |                         |
  * | `QtFatalMsg`     | `FTL` | aborts after printing   |
  *
- * @post All subsequent `qCDebug` / `qCWarning` / `qCCritical` / `qFatal`
- *       calls are routed through the seal message handler.
- *
- * @see logBackend, logVault, logCrypto, logFill, logFile, logApp, logCamera,
- *      logQr, logBridge
+ * @post Every later `qCDebug` / `qCWarning` / `qCCritical` / `qFatal` call is
+ *       routed through the seal message handler.
  */
 void installSealMessageHandler();
 
 /**
  * @brief Emit a pre-joined diagnostic line to @p category at the Qt level that
- *        matches @p tone. Shared Tone-to-qC dispatcher for the camera/QR sinks.
+ *        matches @p tone.
  * @ingroup Logging
+ *
+ * Shared Tone-to-qC dispatcher for the camera and QR sinks.
+ *
  * @param category Target logging category (e.g. logCamera(), logQr()).
- * @param tone     Severity selector: Debug/Plain to qCDebug, Warning to
- *                 qCWarning, Error to qCCritical, otherwise qCInfo.
- * @param fields   logfmt fields, joined via seal::diag::joinFields().
+ * @param tone     Severity selector: Debug and Plain map to qCDebug, Warning to
+ *                 qCWarning, Error to qCCritical, everything else to qCInfo.
+ * @param fields   logfmt fields, joined via seal::diag::joinFields(). Empty
+ *                 fields are dropped, so a conditional token can be passed
+ *                 unconditionally.
+ *
+ * @note The line is emitted with `noquote()`, so no quotes are added. The
+ *       QMessageLogger is built here, so the file, line and function in the
+ *       message context name Logging.cpp rather than the caller.
  */
 void writeToneLine(const QLoggingCategory& category,
                    seal::console::Tone tone,

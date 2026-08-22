@@ -9,25 +9,27 @@ namespace seal
 /**
  * @namespace seal::diag
  * @brief Structured diagnostic field builders for logfmt-style telemetry.
- * @author Alex (https://github.com/lextpf)
+ * @author Fable 5 (https://github.com/claude)
  * @ingroup Logging
  *
- * Produces canonical `key=value` tokens assembled into single-line log
- * messages (`event=foo result=ok duration_ms=12`). All values are
- * ASCII-sanitised, length-bounded, and free of whitespace so downstream
- * log parsers can tokenise the output unambiguously.
+ * Builds canonical `key=value` tokens for single-line log messages
+ * (`event=foo result=ok duration_ms=12`). Values are ASCII-sanitised,
+ * length-bounded and whitespace-free, so a log parser can tokenise a line
+ * by splitting on spaces.
  *
  * ## Design goals
  *
- * - **Parseable:** values never contain unescaped spaces, so `joinFields`
- *   output round-trips through a simple whitespace split.
- * - **Safe by default:** paths and free-form strings are collapsed to
- *   metadata summaries (length, kind, extension) rather than echoed
- *   verbatim, keeping sensitive filesystem layout out of logs.
- * - **Zero-allocation hot paths:** integer/bool overloads avoid stream
- *   formatting where possible.
+ * - **Parseable** - a value never contains an unescaped space, so
+ *   joinFields() output round-trips through a whitespace split.
+ * - **Safe by default for paths** - pathSummary() collapses a path to kind, length and
+ *   extension and never echoes it. Every other value is echoed after normalisation
+ *   (192-byte cap in kv(), 96 in errorFields()), so the caller decides what is safe to
+ *   pass: fingerprint or summarise a hostname or a file name before you log it.
+ * - **Cheap on the integer path** - integer kv() overloads use `std::to_string`,
+ *   the bool overload a literal; only the `double` overload and nextOpId() build
+ *   a `std::ostringstream`. Every builder allocates its returned string.
  *
- * Typical usage pairs these helpers with Qt's logging macros:
+ * Typical use with Qt's logging macros:
  * ```cpp
  * const auto op = seal::diag::nextOpId("vault_load");
  * const auto started = std::chrono::steady_clock::now();
@@ -40,14 +42,19 @@ namespace seal
  *
  * @par Canonical log line
  * @code
- * event=<dotted.scope.phase> result=<start|ok|fail> [reason=<token>] [key=value ...]
+ * event=<dotted.scope.phase> result=<start|ok|fail|...> [reason=<token>]
+ *     [sub_reason=<token>] [key=value ...]
  *
  * event=vault.load.ok   result=ok   op=vault_load-000042 duration_ms=12
  * event=vault.load.fail result=fail reason=wrong_password op=vault_load-000043
  * @endcode
  *
- * `event=` and `result=` are literal caller-written tokens; every dynamic
- * value passes through kv() so the whole line round-trips a whitespace split.
+ * `event=` and `result=` are literal caller-written tokens; every dynamic value passes
+ * through kv(), so the whole line survives a whitespace split. `start`, `ok` and `fail`
+ * are the common outcomes, but the set is open: a subsystem adds its own terminal token,
+ * for example `result=blocked` (a gate refused), `result=skip`, `result=partial` and
+ * `result=warn`. A parser must treat `result=` as an open token set. `sub_reason=` is
+ * optional and refines `reason=` where one gate has several distinct failure causes.
  *
  * @par Field builders at a glance
  * | Helper                 | Emits                                          |
@@ -58,7 +65,12 @@ namespace seal
  * | `pathSummary(path)`    | `kind= path_len= base_len= ext=` (no raw path) |
  * | `sanitizeAscii(text)`  | printable-ASCII, length-capped value           |
  * | `reasonFromMessage(m)` | stable `reason=` token from error text         |
+ * | `errorFields(what)`    | the pair `reason=<token> detail=<text>`        |
  * | `elapsedMs(start)`     | milliseconds since `start`                     |
+ *
+ * @par Threading
+ * Every builder is a pure function of its arguments and is safe on any thread.
+ * nextOpId() is the one exception to purity: it advances a process-global counter.
  */
 namespace diag
 {
@@ -67,16 +79,16 @@ namespace diag
  * @brief Generate a monotonically increasing operation identifier.
  * @ingroup Logging
  *
- * Produces a stable, log-safe token of the form `<scope>-<seq>` where
- * `seq` is a zero-padded 6-digit counter shared across all scopes. The
- * scope is lowercased and stripped to `[a-z0-9_-]`; if nothing remains
- * it falls back to `op`.
+ * Produces a log-safe token `<scope>-<seq>`, where `seq` is a zero-padded
+ * 6-digit counter shared by every scope. The scope is lowercased and
+ * stripped to `[a-z0-9_-]`; an empty result falls back to `op`.
  *
- * @param scope Short label identifying the operation class (e.g. `"vault_load"`).
+ * @param scope Short label for the operation class (e.g. `"vault_load"`).
  * @return Unique identifier (e.g. `"vault_load-000042"`).
  *
- * @note The counter is process-global and wraps around at
- *       `2^64 - 1`; collisions are effectively impossible.
+ * @note The counter is process-global, starts at 1, and increments with
+ *       relaxed atomics: ids are unique but not ordered between threads.
+ *       Six digits is a minimum width; past 999999 the field grows.
  */
 std::string nextOpId(std::string_view scope);
 
@@ -84,14 +96,18 @@ std::string nextOpId(std::string_view scope);
  * @brief ASCII-sanitise and length-bound a string for log output.
  * @ingroup Logging
  *
- * Non-printable and non-ASCII bytes are replaced with `?`. When the
- * input exceeds @p maxLen, the result is truncated and suffixed with
- * `...` (counting toward the limit). An empty result collapses to
- * the literal `"none"`.
+ * Bytes outside printable ASCII (32..126) become `?`, so length is
+ * preserved until the cap applies. An input longer than @p maxLen is
+ * truncated to exactly @p maxLen bytes, the last three replaced by `...`.
+ * Spaces survive here; only kv() turns them into `_`.
  *
- * @param text   Input string (any encoding; treated as bytes).
- * @param maxLen Maximum length of the returned string (default 96).
- * @return Sanitised, length-capped string suitable for logfmt values.
+ * @param text   Input string, treated as bytes whatever its encoding.
+ * @param maxLen Maximum length of the returned string.
+ * @return Sanitised, capped string. Empty @p text, or @p maxLen of 0,
+ *         returns the literal `none`.
+ *
+ * @note With @p maxLen of 1 or 2 the ellipsis does not fit, so an over-long
+ *       input is truncated without a `...` marker.
  */
 std::string sanitizeAscii(std::string_view text, size_t maxLen = 96);
 
@@ -99,10 +115,11 @@ std::string sanitizeAscii(std::string_view text, size_t maxLen = 96);
  * @brief Summarise a filesystem path without echoing its contents.
  * @ingroup Logging
  *
- * Returns four `key=value` fields joined by spaces:
+ * Returns four space-joined fields:
  * `kind=<classification> path_len=<bytes> base_len=<bytes> ext=<token>`.
- * The `kind` is one of `empty`, `stdin` (for `-`), `dir_hint` (trailing
- * separator), `file_hint` (has an extension), or `opaque`.
+ * `path_len` counts the whole path, `base_len` its final component. `ext`
+ * keeps its leading dot and is capped at 16 bytes; it reads `none` without
+ * an extension and `unknown` when the path cannot be parsed.
  *
  * @par kind classification (checked top-to-bottom, first match wins)
  * | `kind`      | Condition                       |
@@ -110,10 +127,10 @@ std::string sanitizeAscii(std::string_view text, size_t maxLen = 96);
  * | `empty`     | path is empty                   |
  * | `stdin`     | path is `-`                     |
  * | `dir_hint`  | last char is `\` or `/`         |
- * | `file_hint` | has a file extension            |
+ * | `file_hint` | `ext` is not `none`             |
  * | `opaque`    | none of the above               |
  *
- * @param path Path to summarise. Not included verbatim in the output.
+ * @param path Path to summarise. It never appears verbatim in the output.
  * @return Space-separated fields describing the path metadata.
  *
  * @see pathSummary(std::string_view, std::string_view) for a prefixed variant.
@@ -124,13 +141,14 @@ std::string pathSummary(std::string_view path);
  * @brief Summarise a path with a caller-supplied key prefix.
  * @ingroup Logging
  *
- * Same structure as the single-argument overload, but field names are
- * prefixed so multiple paths can coexist on one log line without
- * collision (e.g. `src_kind=file_hint dst_kind=dir_hint ...`).
+ * Same four fields as the single-argument overload, each key prefixed, so two
+ * paths share one log line without colliding (e.g. `src_kind=file_hint dst_kind=dir_hint ...`).
  *
- * @param path   Path to summarise.
- * @param prefix Key prefix; normalised to `[A-Za-z0-9_.\-/:+]`.
- * @return Space-separated `<prefix>_<field>=<value>` tokens.
+ * @param path   Path to summarise. It never appears verbatim in the output.
+ * @param prefix Normalised like a kv() value: spaces become `_`, bytes outside
+ *               `[A-Za-z0-9_.\-/:+]` become `?`, and an empty prefix becomes
+ *               the literal `none`.
+ * @return The four `<prefix>_*` tokens joined by single spaces.
  */
 std::string pathSummary(std::string_view path, std::string_view prefix);
 
@@ -138,30 +156,29 @@ std::string pathSummary(std::string_view path, std::string_view prefix);
  * @brief Map a human-readable error message to a stable reason token.
  * @ingroup Logging
  *
- * Pattern-matches case-insensitive substrings of @p message against a
- * table of canonical reasons - for example `"wrong password"` ->
- * `wrong_password`, `"bad magic"` -> `corrupt_data`. Messages that
- * match nothing fall through to `exception`.
+ * Matches case-insensitive substrings of @p message against a table of
+ * canonical reasons: `"wrong password"` -> `wrong_password`, `"bad magic"`
+ * -> `corrupt_data`. A message that matches nothing yields `exception`.
+ * Bytes above 127 are dropped before matching, so a non-ASCII separator can
+ * join two words into one.
  *
  * @par Substring -> reason (checked top-to-bottom, first hit wins)
- * | Matched substring (lowercased)                            | Reason token         |
- * |-----------------------------------------------------------|----------------------|
- * | `wrong password`                                          | `wrong_password`     |
- * | `authentication`, `auth failed`                           | `auth_failed`        |
- * | `timeout`                                                 | `timeout`            |
- * | `cannot open`, `failed to open`                           | `open_failed`        |
- * | `rename`                                                  | `rename_failed`      |
- * | `invalid`                                                 | `invalid_input`      |
- * | `unsupported`                                             | `unsupported_format` |
- * | `truncated`, `corrupt`, `malformed`, `bad magic`, ...     | `corrupt_data`       |
- * | `no data`, `empty`                                        | `empty_input`        |
- * | (no match)                                                | `exception`          |
+ * | Matched substring (lowercased)                                | Reason token         |
+ * |---------------------------------------------------------------|----------------------|
+ * | `wrong password`                                              | `wrong_password`     |
+ * | `authentication`, `auth failed`                               | `auth_failed`        |
+ * | `timeout`                                                     | `timeout`            |
+ * | `cannot open`, `failed to open`                               | `open_failed`        |
+ * | `rename`                                                      | `rename_failed`      |
+ * | `invalid`                                                     | `invalid_input`      |
+ * | `unsupported`                                                 | `unsupported_format` |
+ * | `truncated`, `corrupt`, `malformed`, `bad magic`              | `corrupt_data`       |
+ * | `payload too short`                                           | `corrupt_data`       |
+ * | `no data`, `empty`                                            | `empty_input`        |
+ * | (no match)                                                    | `exception`          |
  *
- * @param message Free-form error text (typically from `std::exception::what()`).
- * @return One of: `wrong_password`, `auth_failed`, `timeout`,
- *         `open_failed`, `rename_failed`, `invalid_input`,
- *         `unsupported_format`, `corrupt_data`, `empty_input`,
- *         `exception`.
+ * @param message Free-form error text, typically `std::exception::what()`.
+ * @return One of the reason tokens in the table above.
  */
 std::string reasonFromMessage(std::string_view message);
 
@@ -170,13 +187,14 @@ std::string reasonFromMessage(std::string_view message);
  *        exception message.
  * @ingroup Logging
  *
- * Combines reasonFromMessage() and sanitizeAscii() into the two whitespace-free
- * tokens that every `result=fail` catch block appends. Returned pre-joined by a
- * single space so it drops into a joinFields()/writeCliDiag() field list as one
- * element and expands to two fields on output.
+ * Combines reasonFromMessage() and sanitizeAscii() into the two tokens every
+ * `result=fail` catch block appends. They come back pre-joined, so the pair drops
+ * into a joinFields() list as one element and expands to two fields on output.
  *
- * @param what Free-form error text (typically `std::exception::what()`).
- * @return The tokens `reason=<stable> detail=<sanitised>` joined by one space.
+ * @param what Free-form error text, typically `std::exception::what()`.
+ * @return `reason=<stable> detail=<sanitised>`, one space between them. The
+ *         detail is capped at the sanitizeAscii() default of 96 bytes and then
+ *         kv()-normalised, so its spaces become `_`.
  */
 std::string errorFields(std::string_view what);
 
@@ -184,12 +202,13 @@ std::string errorFields(std::string_view what);
  * @brief Format a `key=value` token from a string value.
  * @ingroup Logging
  *
- * The value is ASCII-sanitised via sanitizeAscii() and further
- * restricted to `[A-Za-z0-9_.\-/:+]`; spaces become `_` and any other
- * disallowed byte becomes `?`. Empty values collapse to `none`.
+ * The value is ASCII-sanitised via sanitizeAscii() with a 192-byte cap, then
+ * restricted to `[A-Za-z0-9_.\-/:+]`: spaces become `_`, any other disallowed
+ * byte becomes `?`, and an empty value collapses to `none`.
  *
- * @param key   Field name (emitted verbatim - caller must supply a safe key).
- * @param value Field value to normalise.
+ * @param key   Field name, emitted verbatim. The caller supplies a safe key.
+ * @param value Field value to normalise. Past 192 bytes it is truncated with a
+ *              trailing `...`.
  * @return The token `key=normalised_value`.
  */
 std::string kv(std::string_view key, std::string_view value);
@@ -201,9 +220,9 @@ std::string kv(std::string_view key, const std::string& value);
  * @brief Format a `key=value` token from a C string.
  * @ingroup Logging
  *
- * Required overload: without it a `const char*` (or string-literal) value binds
- * to the `bool` overload via pointer-to-bool conversion and silently logs
- * `true`. A null pointer normalises to `none`.
+ * Required: without it a `const char*` or string-literal value binds to the
+ * `bool` overload through pointer-to-bool conversion and silently logs `true`.
+ * A null pointer normalises to `none`.
  */
 std::string kv(std::string_view key, const char* value);
 
@@ -240,8 +259,8 @@ std::string kv(std::string_view key, unsigned long long value);
 /**
  * @brief Format a floating-point `key=value` token with fixed precision.
  * @ingroup Logging
- * @param key       Field name.
- * @param value     Field value.
+ * @param key       Field name, emitted verbatim.
+ * @param value     Value rendered with `std::fixed`.
  * @param precision Digits after the decimal point (default 2).
  * @return The token `key=<fixed-point value>`.
  */
@@ -251,10 +270,10 @@ std::string kv(std::string_view key, double value, int precision = 2);
  * @brief Join pre-built fields into a single space-separated log line.
  * @ingroup Logging
  *
- * Empty fields are skipped silently, so conditionally-included tokens
- * can be passed unconditionally (e.g. from a ternary expression).
+ * Empty fields are skipped, so a conditional token can be passed
+ * unconditionally (e.g. from a ternary expression).
  *
- * @param fields Fields to join (typically the output of kv() calls).
+ * @param fields Fields to join, typically the output of kv() calls.
  * @return All non-empty fields joined by single spaces.
  */
 std::string joinFields(std::initializer_list<std::string> fields);
@@ -263,8 +282,9 @@ std::string joinFields(std::initializer_list<std::string> fields);
  * @brief Milliseconds elapsed since @p start on @p Clock.
  * @ingroup Logging
  * @tparam Clock Any clock satisfying `TrivialClock` (e.g. `std::chrono::steady_clock`).
- * @param  start Time point captured at the start of the measured operation.
- * @return Elapsed duration in milliseconds.
+ * @param  start Captured at the start of the measured operation.
+ * @return Elapsed whole milliseconds, truncated toward zero. Use a monotonic
+ *         clock: on a wall clock a backward time step yields a negative value.
  */
 template <class Clock>
 long long elapsedMs(const std::chrono::time_point<Clock>& start)
