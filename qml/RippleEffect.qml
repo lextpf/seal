@@ -1,16 +1,19 @@
 import QtQuick
 import QtQuick.Effects
 
+// Press feedback: a circle that grows from the press point and fades out. Put
+// one inside a control's background item and call trigger(x, y) on press.
 Item {
     id: ripple
     anchors.fill: parent
-    clip: !ripple._useRoundedMask
+    clip: !ripple._useRoundedMask   // Square hosts clip; rounded ones mask instead.
 
     property color baseColor: Theme.rippleColor
     property real cx: 0
     property real cy: 0
-    property real cornerRadius: 0
+    property real cornerRadius: 0   // > 0 rounds the ripple to match the host's corners.
     readonly property bool _useRoundedMask: cornerRadius > 0
+    // Diagonal, so the circle covers the whole item from any press point.
     property real maxRadius: Math.sqrt(width * width + height * height)
 
     // Resets and restarts animation from the press point.
@@ -45,6 +48,7 @@ Item {
         }
     }
 
+    // Mask source for the MultiEffect above. Never drawn itself.
     Rectangle {
         id: roundedMask
         anchors.fill: parent

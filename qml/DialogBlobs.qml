@@ -26,10 +26,10 @@ Item {
         property real swayAmp: Theme.px(6)   // horizontal drift (subtle)
         property real bobAmp: Theme.px(8)    // vertical drift (subtle)
         property real breatheAmp: 0.05       // scale swell, +/-5%
-        property int freqX: 1                 // integer multipliers keep the loop seamless
+        property int freqX: 1                // integer multipliers keep the loop seamless
         property int freqY: 1
         property int freqS: 1
-        property real phaseX: 0               // offsets spread the field out of sync
+        property real phaseX: 0              // offsets spread the field out of sync
         property real phaseY: 0
         property real phaseS: 0
 
