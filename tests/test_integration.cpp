@@ -118,7 +118,7 @@ class FileOperationsTest : public ::testing::Test
 protected:
     void SetUp() override
     {
-        m_TestDir = std::filesystem::temp_directory_path() / "lockr_tests";
+        m_TestDir = std::filesystem::temp_directory_path() / "seal_tests";
         std::filesystem::create_directories(m_TestDir);
     }
 
