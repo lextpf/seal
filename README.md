@@ -30,12 +30,13 @@
 > seal is designed to protect sensitive information, but it is provided **as is** and used entirely at **your own risk**.<br>
 > the author and contributors are **not liable for security incidents or other damages** arising from its use.
 
-<div align="center">
 <br>
+<div align="center">
 
 <img src="PREVIEW.png" alt="Preview" width="100%"/>
 
 </div>
+<br>
 
 > [!IMPORTANT]
 > **Windows 10/11 Only** - seal enforces Windows-specific security mitigations and will not build on other platforms.
