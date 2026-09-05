@@ -21,7 +21,7 @@
  *    ----------------------------------------------------------------------
  *
  *      Repository:   https://github.com/lextpf/seal
- *      License:      MIT
+ *      License:      GPL
  */
 import QtQuick
 import QtQuick.Controls
