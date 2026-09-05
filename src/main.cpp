@@ -21,7 +21,7 @@
  *    ----------------------------------------------------------------------
  *
  *      Repository:   https://github.com/lextpf/seal
- *      License:      MIT
+ *      License:      GPL
  */
 #include "CliModes.hpp"
 #include "Clipboard.hpp"
