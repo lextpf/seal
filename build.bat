@@ -21,21 +21,13 @@ REM   VCPKG_MAX_CONCURRENCY   default 1 (raise at your own risk; see the ICE not
 REM   VCVARS_VER              default 14.43 when that toolset is installed
 REM   VCPKG_BUILDTREES_ROOT   default C:\b\seal-vcpkg
 REM
-REM MSVC_ROOT (near the top of this file) has no override and assumes the
-REM Community edition. Edit it for Professional, Enterprise or Build Tools,
-REM otherwise the run stops at "vcvars64.bat not found".
-REM
-REM Step 2 deletes build/CMakeCache.txt first, so every run is a full
-REM reconfigure. Step 3 aborts the whole pipeline on the first clang-tidy
-REM finding; use --skip-tidy to build past it.
-REM
-REM   MSVC has Internal Compiler Errors (ICEs) when building Qt6 via vcpkg.
-REM   This forces us to pin the compiler to 14.43 (14.44 crashes), disable
-REM   precompiled headers, limit parallelism to 1, and redirect vcpkg
-REM   buildtrees to a short path (C:\b\) to dodge the 260-char MAX_PATH
-REM   limit that Qt's deep build tree hits. The rest is defensive cache
-REM   management so stale CMake state doesn't silently pick the wrong
-REM   (crashing) compiler.
+REM MSVC has Internal Compiler Errors (ICEs) when building Qt6 via vcpkg.
+REM This forces us to pin the compiler to 14.43 (14.44 crashes), disable
+REM precompiled headers, limit parallelism to 1, and redirect vcpkg
+REM buildtrees to a short path (C:\b\) to dodge the 260-char MAX_PATH
+REM limit that Qt's deep build tree hits. The rest is defensive cache
+REM management so stale CMake state doesn't silently pick the wrong
+REM (crashing) compiler.
 REM ===========================================================================================
 
 setlocal enabledelayedexpansion
