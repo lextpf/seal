@@ -1,19 +1,8 @@
-"""Pre-pass to clean doxide-generated markdown before mkdocs build.
+"""
+@brief prepare generated Markdown for MkDocs.
 
-Cleans doxide-generated markdown for MkDocs Material compatibility:
-- Removes @author lines
-- Strips @brief tags
-- Fixes admonition indentation (1-space to 4-space)
-- Adds Material icons to page titles and section headers
-- Trims function summary tables to first-sentence briefs
-- Flattens namespace definition lists into single-line bullets
-- Injects version from CMakeLists.txt into home page subtitle
-
-Only touches files with 'generator: doxide' frontmatter.
-
-Usage:
-    python scripts/_clean_docs.py          # defaults to docs/
-    python scripts/_clean_docs.py path/    # custom docs directory
+edit only pages with doxide frontmatter. run after _promote_subgroups.py;
+the optional argument selects the docs directory (default: docs).
 """
 
 import re
@@ -26,7 +15,9 @@ def is_doxide_generated(text: str) -> bool:
 
 
 def fix_admonition_indent(text: str) -> str:
-    """Fix doxide's 1-space admonition indent to 4-space for MkDocs Material."""
+    """
+    @brief expand doxide admonition bodies to the four-space indent required by MkDocs.
+    """
     lines = text.split("\n")
     result = []
     in_admonition = False
@@ -38,16 +29,16 @@ def fix_admonition_indent(text: str) -> str:
             continue
 
         if in_admonition:
-            # Body line with 1-space indent
+
             m = re.match(r"^ (\S.*)", line)
             if m:
                 result.append("    " + m.group(1))
                 continue
-            # Continuation with deeper indent
+
             if line.startswith("  "):
                 result.append("    " + line.lstrip())
                 continue
-            # Blank or unindented line ends the admonition
+
             in_admonition = False
 
         result.append(line)
@@ -83,25 +74,28 @@ SECTION_ICONS = {
 
 
 def add_page_title_icons(text: str) -> str:
-    """Prepend Material icons to doxide-generated H1 page titles."""
+    """
+    @brief prefix generated page titles with Material icons.
+    """
     for title, icon in PAGE_TITLE_ICONS.items():
         text = re.sub(rf"^# {re.escape(title)}$", f"# {icon} {title}", text, count=1, flags=re.MULTILINE)
     return text
 
 
 def add_section_icons(text: str) -> str:
-    """Prepend Material icons to doxide-generated section headers."""
+    """
+    @brief prefix generated section headings with Material icons.
+    """
     for title, icon in SECTION_ICONS.items():
         text = text.replace(f"## {title}", f"## {icon} {title}")
     return text
 
 
 def trim_function_table_descriptions(text: str) -> str:
-    """Keep only a concise brief sentence in doxide function summary tables.
+    """
+    @brief keep only the first sentence in function summary rows.
 
-    Doxide occasionally emits full function details into the `Functions` table
-    description column. This pass trims each function row to the first sentence
-    so detailed content remains only under `Function Details`.
+    full descriptions remain in the detail section.
     """
     lines = text.split("\n")
     out = []
@@ -115,7 +109,7 @@ def trim_function_table_descriptions(text: str) -> str:
             out.append(line)
             continue
 
-        # End table context on next section header.
+
         if in_functions_table and stripped.startswith("## "):
             in_functions_table = False
             out.append(line)
@@ -126,7 +120,7 @@ def trim_function_table_descriptions(text: str) -> str:
             if len(parts) == 2:
                 name_col, desc_col = parts
                 desc_col = re.sub(r"\s+", " ", desc_col).strip()
-                # Keep only first sentence in summary table.
+
                 m = re.match(r"^(.*?\.)\s+.*$", desc_col)
                 brief = m.group(1) if m else desc_col
                 out.append(f"| {name_col} | {brief} |")
@@ -138,13 +132,8 @@ def trim_function_table_descriptions(text: str) -> str:
 
 
 def flatten_namespace_lists(text: str) -> str:
-    """Flatten doxide namespace definition lists into single-line bullets.
-
-    Home page namespace entries are emitted as definition lists:
-        :material-package: [Name](...)
-        :    Description
-    which renders description on the next line. Convert these to:
-        - :material-package: [Name](...) - Description
+    """
+    @brief render namespace descriptions on the same bullet as the namespace link.
     """
     lines = text.split("\n")
     out = []
@@ -178,10 +167,10 @@ def flatten_namespace_lists(text: str) -> str:
 
 
 def collect_members(index_path: Path, prefix: str) -> list[tuple[str, str, str]]:
-    """Extract types and functions from a group/subgroup index.md.
+    """
+    @brief read type and function rows from a group index.
 
-    Returns list of (name, relative_path, description) tuples.
-    Paths are prefixed so they're relative to the docs root.
+    @return name, docs-root-relative path and description triples; empty if the index is absent.
     """
     if not index_path.exists():
         return []
@@ -196,9 +185,9 @@ def collect_members(index_path: Path, prefix: str) -> list[tuple[str, str, str]]
         name = m.group(1)
         rel_path = m.group(2).strip()
         desc = m.group(3).strip()
-        # Strip leftover @brief tag
+
         desc = re.sub(r"^@brief\s+", "", desc)
-        # Anchor links (#func) need the index.md path prepended
+        # fragment links need the index path before the anchor.
         if rel_path.startswith("#"):
             full_path = f"{prefix}index.md{rel_path}"
         else:
@@ -209,19 +198,17 @@ def collect_members(index_path: Path, prefix: str) -> list[tuple[str, str, str]]
 
 
 def collect_group_members(docs_dir: Path, group_dir: str) -> list[tuple[str, str, str]]:
-    """Collect all types from a group and its subgroups.
-
-    Reads the group's index.md for direct types, then reads each
-    subgroup's index.md for their types.
+    """
+    @brief read members from the group and its direct subgroups.
     """
     group_index = docs_dir / group_dir / "index.md"
     prefix = f"{group_dir}/"
     members = []
 
-    # Direct members in the group (types + functions)
+
     members.extend(collect_members(group_index, prefix))
 
-    # Find subgroup links: :material-format-section: [Name](SubDir/index.md)
+
     if group_index.exists():
         text = group_index.read_text(encoding="utf-8")
         for m in re.finditer(
@@ -229,15 +216,13 @@ def collect_group_members(docs_dir: Path, group_dir: str) -> list[tuple[str, str
             text,
         ):
             sub_dir = m.group(2)
-            # Class-based subgroups have content at the nested path; try there first.
+
             sub_index = docs_dir / group_dir / sub_dir / "index.md"
             sub_members = collect_members(sub_index, f"{group_dir}/{sub_dir}/")
             if sub_members:
                 members.extend(sub_members)
                 continue
-            # Namespace-based subgroups: doxide refuses @ingroup on namespaces
-            # and emits only a stub at the nested path, with the real content
-            # at the top-level dir that _promote_subgroups.py also targets.
+            # namespace subgroup content is top-level; nested pages are stubs.
             top_index = docs_dir / sub_dir / "index.md"
             members.extend(collect_members(top_index, f"{sub_dir}/"))
 
@@ -245,15 +230,13 @@ def collect_group_members(docs_dir: Path, group_dir: str) -> list[tuple[str, str
 
 
 def inject_group_members(text: str, docs_dir: Path) -> str:
-    """Append a flat class/function listing after the group list on the home page.
+    """
+    @brief append a flat member list after the final home-page group.
 
-    Collects all types and functions from every group's index.md (and
-    subgroup index pages), then appends them as a single bullet list
-    after the last group entry.  Idempotent: strips previously-injected
-    member lines before re-injecting.
+    replace existing injected entries so repeated runs do not duplicate them.
     """
     lines = text.split("\n")
-    # Strip previously-injected member lines (top-level and indented)
+
     lines = [l for l in lines if not re.match(r"^-?\s*- :material-package:", l)]
 
     out = []
@@ -288,7 +271,9 @@ def inject_group_members(text: str, docs_dir: Path) -> str:
 
 
 def parse_version(repo_root: Path) -> str:
-    """Read project VERSION from CMakeLists.txt and return 'MAJOR.MINOR.PATCH'."""
+    """
+    @brief read the three-part project version; return empty if absent.
+    """
     cmakelists = repo_root / "CMakeLists.txt"
     if not cmakelists.exists():
         return ""
@@ -298,7 +283,9 @@ def parse_version(repo_root: Path) -> str:
 
 
 def inject_version(text: str, version: str) -> str:
-    """Add version to the home page subtitle line.  Idempotent."""
+    """
+    @brief add the version to the home subtitle unless already present.
+    """
     if not version or f"**v{version}**" in text:
         return text
     return re.sub(
@@ -312,26 +299,26 @@ def inject_version(text: str, version: str) -> str:
 
 
 def clean(text: str) -> str:
-    # Remove standalone @author lines
+
     text = re.sub(r"^\s*@author\b.*\n?", "", text, flags=re.MULTILINE)
 
-    # Strip @brief and @details tags but keep the description text
+
     text = re.sub(r"@brief\s+", "", text)
     text = re.sub(r"@details\s*\n?", "", text)
 
-    # Fix admonition indentation (doxide outputs 1-space, MkDocs needs 4)
+
     text = fix_admonition_indent(text)
 
-    # Add icons to page titles
+
     text = add_page_title_icons(text)
 
-    # Add icons to section headers
+
     text = add_section_icons(text)
 
-    # Trim over-detailed function summary table entries.
+
     text = trim_function_table_descriptions(text)
 
-    # Keep namespace descriptions inline on Home/namespace listings.
+
     text = flatten_namespace_lists(text)
 
     return text
@@ -359,15 +346,13 @@ def main():
 
         is_home = md.name == "index.md" and md.parent == docs_dir
 
-        # Home page: inject version and group member listings
+
         if is_home:
             cleaned = inject_group_members(cleaned, docs_dir)
             if version:
                 cleaned = inject_version(cleaned, version)
         else:
-            # Group index pages: use package icon for subgroup bullets
-            # and fix relative links to point to top-level content pages
-            # (only in the header area, before the first ## section)
+            # rewrite only the header area before the first generated section.
             parts = cleaned.split("\n## ", 1)
             parts[0] = re.sub(
                 r"^- :material-format-section:",
@@ -375,11 +360,7 @@ def main():
                 parts[0],
                 flags=re.MULTILINE,
             )
-            # Doxide generates subgroup links as relative paths (e.g.,
-            # Renderer/index.md) inside group index pages (e.g.,
-            # Rendering/index.md).  These resolve to stubs at
-            # Rendering/Renderer/index.md instead of the actual content
-            # at the top-level Renderer/index.md.  Prepend ../ to fix.
+            # subgroup links must resolve to top-level content rather than nested stubs.
             parts[0] = re.sub(
                 r"\]\((\w+/index\.md)\)",
                 r"](../\1)",
