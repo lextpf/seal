@@ -1,4 +1,9 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
+
+# Validate the shared installation before the vcpkg toolchain can run.
+if(SEAL_COMPILE_DB)
+    include(cmake/compile-db-preflight.cmake)
+endif()
 
 project(seal
     VERSION 1.0.0
@@ -10,13 +15,10 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Always emit compile_commands.json when the generator supports it (Ninja /
-# Makefiles). The Visual Studio generator silently ignores this, so build.bat
-# users still need the compile-db preset for clangd / clang-tidy.
+# Visual Studio ignores compile_commands.json; use compile-db for clangd and clang-tidy.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Static CRT when using a static vcpkg triplet (/MT instead of /MD).
-# This eliminates the runtime dependency on vcruntime140.dll / msvcp140.dll.
+# static triplets use /MT to avoid runtime CRT DLL dependencies.
 if(VCPKG_TARGET_TRIPLET MATCHES "static")
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
@@ -28,11 +30,8 @@ endif()
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 option(ENABLE_TESTS "Enable test builds" ON)
 
-# When ON, a build whose own binary is unsigned (empty Authenticode signer
-# identity) fails CLOSED - the browser bridge refuses to start and the host
-# refuses to connect - instead of degrading to accept-all-peers. Leave OFF for
-# local/dev builds (unsigned, still usable); release packaging turns it ON so an
-# unsigned production binary can never silently run with peer authentication off.
+# signed releases must reject unsigned binaries instead of accepting unauthenticated peers.
+# leave disabled only for unsigned development builds.
 option(SEAL_REQUIRE_SIGNED_PEER "Fail closed when the binary is unsigned (production)" OFF)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -45,8 +44,6 @@ if(MSVC)
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /DNDEBUG")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Od /Zi /RTC1")
 
-    # --- Security hardening flags ---
-    # Control Flow Guard - prevents ROP/JOP attacks
     add_compile_options(/guard:cf)
     add_link_options(/guard:cf)
 
@@ -56,28 +53,23 @@ if(MSVC)
         add_compile_options(/Qspectre)
     endif()
 
-    # CET Shadow Stack (Intel CET hardware enforcement)
+    # CET shadow stack
     add_link_options(/CETCOMPAT)
 
-    # High-entropy ASLR (64-bit)
+    # high-entropy ASLR (64-bit)
     add_link_options(/HIGHENTROPYVA)
 
-    # Explicit DEP and ASLR (usually default, but be explicit)
+    # DEP and ASLR
     add_link_options(/NXCOMPAT /DYNAMICBASE)
 else()
     add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter)
 endif()
 
-# vcpkg's static Qt6 ships CMake targets for some QML style plugins
-# (FluentWinUI3, NativeStyle) but omits the compiled .obj resource files
-# they reference. Qt6QmlPlugins.cmake unconditionally includes every
-# QmlPlugin Config file, so broken targets must be removed before
-# find_package sees them. We only use the Basic style - remove all
-# unused style configs to avoid present and future breakage.
+# static Qt ships unused style configs that reference missing resource objects.
+# remove those configs before find_package; the application uses Basic only.
 if(VCPKG_TARGET_TRIPLET MATCHES "static")
     set(_vcpkg_installed "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}")
 
-    # Remove share-level style packages we don't use (all except Basic).
     file(GLOB _unused_style_dirs
         "${_vcpkg_installed}/share/Qt6QuickControls2FluentWinUI3*"
         "${_vcpkg_installed}/share/Qt6QuickControls2NativeStyle*"
@@ -94,7 +86,6 @@ if(VCPKG_TARGET_TRIPLET MATCHES "static")
         endif()
     endforeach()
 
-    # Remove QML plugin configs for all unused styles (keeps only Basic).
     file(GLOB _broken_qml_plugins
         "${_vcpkg_installed}/share/Qt6Qml/QmlPlugins/*fluentwinui3*"
         "${_vcpkg_installed}/share/Qt6Qml/QmlPlugins/*nativestyle*"
@@ -143,7 +134,7 @@ set(WINDOWS_LIBS
     Wtsapi32
 )
 
-# Static OpenCV videoio (MSMF backend) requires these.
+# static OpenCV videoio (MSMF backend) requires these.
 if(VCPKG_TARGET_TRIPLET MATCHES "static")
     list(APPEND WINDOWS_LIBS mf mfplat mfreadwrite mfuuid shlwapi)
 endif()
@@ -253,12 +244,8 @@ endif()
 file(GLOB SEAL_DUOTONE_SVGS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} assets/duotone/*.svg)
 file(GLOB SEAL_BRAND_SVGS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} assets/brands/*.svg)
 
-# Bundled UI text font: a licensed asset that is intentionally untracked
-# (.gitignore: assets/). CI and any fresh checkout build *without* it, so the
-# resource must be optional - embed it only when the file is present on disk.
-# At runtime Theme.qml's FontLoader falls back to a system font when the qrc
-# entry is missing, so the GUI still loads. (The SVG globs above degrade the
-# same way: an empty assets/ tree yields empty lists, not a configure error.)
+# licensed assets are untracked. embed only existing files so an empty assets tree builds;
+# Theme.qml falls back to a system font.
 set(SEAL_FONT_RESOURCES "")
 set(_seal_bundled_font "assets/fonts/b0a4eabe-5fe5-41e3-8dc3-2df2b82ec4eb.ttf")
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_seal_bundled_font}")
@@ -301,19 +288,16 @@ qt_add_qml_module(seal
         ${SEAL_BRAND_SVGS}
 )
 
-# Static Qt6: register QML plugins at link time (qmlimportscanner runs
-# automatically to determine which QML modules the app actually imports).
+# register static QML plugins selected by qmlimportscanner.
 if(VCPKG_TARGET_TRIPLET MATCHES "static")
     qt_import_qml_plugins(seal)
 endif()
 
-# Dead-code elimination for static builds.
 if(MSVC AND VCPKG_TARGET_TRIPLET MATCHES "static")
     target_link_options(seal PRIVATE /OPT:REF /OPT:ICF)
 endif()
 
-# windeployqt + qt.conf are only needed for shared (dynamic) Qt builds.
-# Static Qt links everything into the exe; there are no DLLs to deploy.
+# only dynamic Qt requires deployed DLLs and qt.conf.
 if(WIN32 AND NOT VCPKG_TARGET_TRIPLET MATCHES "static")
     if(TARGET Qt6::windeployqt)
         get_target_property(WINDEPLOYQT_EXECUTABLE Qt6::windeployqt IMPORTED_LOCATION)
@@ -355,10 +339,7 @@ if(NOT VCPKG_TARGET_TRIPLET MATCHES "static")
     )
 endif()
 
-# Native-messaging host: a tiny standalone exe the browser spawns to relay
-# length-prefixed JSON between Chrome's native-messaging stdio and the seal
-# named pipe. Its own target - Qt-free, console subsystem - so it can be signed
-# and packaged independently; it inherits this file's hardening flags.
+# build the Qt-free relay separately so the native host can be signed and packaged independently.
 option(ENABLE_BROWSER_HOST "Build seal-browser.exe alongside seal" ON)
 if(ENABLE_BROWSER_HOST)
     add_executable(seal_browser
@@ -380,8 +361,7 @@ if(ENABLE_BROWSER_HOST)
         target_compile_definitions(seal_browser PRIVATE SEAL_REQUIRE_SIGNED_PEER)
     endif()
 
-    # Console subsystem: the browser pipes stdin/stdout, so we need a console
-    # entry point (wmain), not WinMain.
+    # browser pipes require the wmain console entry point.
     if(MSVC)
         set_target_properties(seal_browser PROPERTIES
             LINK_FLAGS "/SUBSYSTEM:CONSOLE /ENTRY:wmainCRTStartup"
@@ -391,11 +371,7 @@ if(ENABLE_BROWSER_HOST)
     install(TARGETS seal_browser RUNTIME DESTINATION bin)
 endif()
 
-# Bundle the Chromium WebExtension folder into the install layout so the user
-# can load it unpacked after running `seal --install-browser-extension`.
-# The legacy Firefox manifest is intentionally excluded: seal does not yet
-# generate Gecko's `allowed_extensions` native-host manifest, so packaging it
-# would advertise a setup path that cannot connect.
+# bundle Chromium only; no Gecko native-host manifest is generated.
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/extensions/browser"
     DESTINATION extensions
     FILES_MATCHING
