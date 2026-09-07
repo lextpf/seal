@@ -1,27 +1,9 @@
-"""Promote nested subgroup docs to top-level directories.
+"""
+@brief copy nested subgroup pages to the paths used by _clean_docs.py.
 
-Doxide generates top-level directories for C++ namespaces but not for
-classes.  When a project uses classes instead of namespaces, subgroup
-pages only exist nested under their parent group (e.g.,
-Core/ArchiveService/).  _clean_docs.py rewrites subgroup links with ../
-to point to top-level directories.  This script bridges the gap by
-copying nested subgroup directories to the top level so the links
-resolve correctly.
-
-When a subgroup directory contains a class page matching the subgroup
-name (e.g., ArchiveService/ArchiveService.md), the class content
-replaces the stub index.md so users land directly on the full
-documentation instead of an intermediate page.
-
-Reads doxide.yml to discover the group hierarchy, then for each
-subgroup copies ParentGroup/SubGroup/ -> SubGroup/ if the top-level
-directory does not already exist.
-
-No external dependencies - uses only the Python standard library.
-
-Usage:
-    python scripts/_promote_subgroups.py          # defaults to docs/
-    python scripts/_promote_subgroups.py path/    # custom docs directory
+read the hierarchy from doxide.yml. copy only missing top-level directories;
+a matching class page replaces the copied index. run before _clean_docs.py.
+the optional argument selects the docs directory (default: docs).
 """
 
 import re
@@ -31,10 +13,10 @@ from pathlib import Path
 
 
 def parse_group_hierarchy(config_path: Path) -> list[tuple[str, str]]:
-    """Parse doxide.yml and return (parent, child) name pairs.
+    """
+    @brief read parent/child group pairs using the config indentation.
 
-    Uses a simple indent-aware line parser instead of PyYAML so the
-    script has zero external dependencies.
+    this parser supports the doxide.yml layout without a YAML dependency.
     """
     text = config_path.read_text(encoding="utf-8")
     pairs = []
@@ -45,26 +27,26 @@ def parse_group_hierarchy(config_path: Path) -> list[tuple[str, str]]:
         stripped = line.rstrip()
         indent = len(line) - len(line.lstrip())
 
-        # Top-level group: "  - name: Core" (indent 2-4)
+
         m = re.match(r"^  - name:\s+(.+)", stripped)
         if m:
             parent_name = m.group(1).strip()
             in_child_groups = False
             continue
 
-        # Child groups key: "    groups:" (indent 4-6)
+
         if re.match(r"^\s{4,6}groups:\s*$", stripped):
             in_child_groups = True
             continue
 
-        # Child group entry: "      - name: Logger" (indent 6+)
+
         if in_child_groups and indent >= 6:
             m = re.match(r"^\s+- name:\s+(.+)", stripped)
             if m:
                 pairs.append((parent_name, m.group(1).strip()))
                 continue
 
-        # Any non-indented or top-level key resets child context
+
         if indent < 4 and stripped and not stripped.startswith("#"):
             in_child_groups = False
 
@@ -72,11 +54,10 @@ def parse_group_hierarchy(config_path: Path) -> list[tuple[str, str]]:
 
 
 def promote_class_to_index(top_level: Path, child_name: str) -> None:
-    """Replace stub index.md with the class page content if it exists.
+    """
+    @brief replace the index with a matching class page and delete that page.
 
-    Doxide generates a stub index.md (just title + Types table) and a
-    separate ClassName.md with the full documentation.  This merges
-    the class content into index.md and removes the redundant file.
+    leave the index unchanged if no class page exists.
     """
     class_page = top_level / f"{child_name}.md"
     index_page = top_level / "index.md"
