@@ -22,6 +22,7 @@
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "VCPKG_MANIFEST_MODE": "ON",
         "VCPKG_MANIFEST_INSTALL": "ON",
+        "SEAL_COMPILE_DB": "OFF",
         "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/cmake",
         "ENABLE_TESTS": "ON"
       },
@@ -77,11 +78,15 @@
     {
       "name": "compile-db",
       "displayName": "compile_commands.json (Ninja sidecar)",
-      "description": "Ninja-based configure whose only purpose is to emit a real compile_commands.json for clang-tidy/clangd. Shares vcpkg_installed/ AND triplet with the default preset so vcpkg sees its packages already installed and skips the build phase (a different triplet would force a full Qt6 rebuild). Never built directly; only configured.",
+      "description": "Generate compile_commands.json for clang-tidy/clangd. Consume the main dynamic installation with manifest installation disabled. Configure after the main dynamic build; never build this sidecar.",
       "binaryDir": "${sourceDir}/build-cdb",
       "generator": "Ninja",
       "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
       "cacheVariables": {
+        "SEAL_COMPILE_DB": "ON",
+        "VCPKG_MANIFEST_MODE": "ON",
+        "VCPKG_MANIFEST_INSTALL": "OFF",
+        "VCPKG_MANIFEST_FEATURES": "",
         "VCPKG_TARGET_TRIPLET": "x64-windows-release-msvc143",
         "VCPKG_HOST_TRIPLET": "x64-windows-release-msvc143",
         "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/cmake",
