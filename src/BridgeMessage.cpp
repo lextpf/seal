@@ -22,7 +22,6 @@ constexpr std::size_t kMaxVisitLen = 64;
 constexpr std::int32_t kCoordMin = -50000;
 constexpr std::int32_t kCoordMax = 50000;
 
-// Bit flags - duplicate-key detection becomes one test per slot.
 constexpr std::uint32_t kKeyV = 1U << 0;
 constexpr std::uint32_t kKeyX = 1U << 1;
 constexpr std::uint32_t kKeyY = 1U << 2;
@@ -35,29 +34,14 @@ constexpr std::uint32_t kKeyForm = 1U << 8;
 constexpr std::uint32_t kKeyUser = 1U << 9;
 constexpr std::uint32_t kKeyVisit = 1U << 10;
 
-// Click report: the field-click shape. `kind` is optional and absent means
-// click. `secure` is required so http and https stay distinguishable
-// downstream. `visit` is optional: it is the per-document page-load token that
-// binds a cached click authorization to the document it came from, and a report
-// without one falls back to host-only binding. `form` and `user` are forbidden
-// on the click shape.
 constexpr std::uint32_t kClickRequired =
     kKeyV | kKeyX | kKeyY | kKeyTag | kKeyUrlHost | kKeyUrlPathHash | kKeySecure;
 constexpr std::uint32_t kClickAllowed = kClickRequired | kKeyKind | kKeyVisit;
 
-// Nav report: host plus the secure/form flags, no click coordinates. Both
-// `user` (a login-identifier field for email-first or multi-step logins) and
-// `visit` (the per-document page-load token behind the once-per-visit staging
-// latches) are optional, so a report that omits them still parses. An absent
-// visit makes staging fail closed downstream.
 constexpr std::uint32_t kNavRequired = kKeyV | kKeyKind | kKeyUrlHost | kKeySecure | kKeyForm;
 constexpr std::uint32_t kNavAllowed = kNavRequired | kKeyUser | kKeyVisit;
 
-// Hand-rolled bounded JSON parser. It supports only the schema subset: one flat
-// object, ASCII-printable strings, signed decimal ints, structural punctuation.
-// No floats, scientific notation, leading zeros, Unicode escapes, or escapes
-// other than \\ and \". No schema key accepts an object or array value, so the
-// parser never recurses and the depth budget is a guard the grammar cannot trip.
+// Schema parsing is flat and bounded; no accepted value recurses.
 class Parser
 {
 public:
@@ -68,8 +52,6 @@ public:
     {
     }
 
-    // Top-level: parses an object containing exactly the schema keys;
-    // Malformed for anything else.
     BridgeParseError parseObject(ParsedBridgeMessage* out, int depth)
     {
         if (depth >= kMaxDepth)
@@ -135,10 +117,7 @@ public:
             }
             skipWhitespace();
         }
-        // Kind-selected required/allowed masks. m_Kind was set while parsing
-        // the `kind` value (default Click when the key is absent). A key legal
-        // only in the other shape is reported as an unknown key; a missing
-        // required key as a missing key.
+        // Select required and allowed keys only after kind has been parsed.
         const std::uint32_t required =
             (out->m_Kind == BridgeKind::Nav) ? kNavRequired : kClickRequired;
         const std::uint32_t allowed =
@@ -156,8 +135,7 @@ public:
 
     bool atEnd() const noexcept { return m_Cursor == m_End; }
 
-    // Reject trailing tokens after the top-level object so an attacker
-    // cannot smuggle data past the parser.
+    // Reject trailing data after the root object.
     BridgeParseError ensureClean()
     {
         skipWhitespace();
@@ -204,9 +182,7 @@ private:
         }
     }
 
-    // ASCII string literal, up to bufSize chars. Body must be printable
-    // ASCII (0x20..0x7E); only \\ and \" escapes are accepted (no \uXXXX,
-    // controls, or bytes >= 0x80).
+    // Accept printable ASCII with quote and backslash escapes only.
     BridgeParseError parseAsciiString(char* buf, std::size_t bufSize, std::size_t* outLen) noexcept
     {
         if (!consume('"'))
@@ -243,7 +219,6 @@ private:
                 }
                 else
                 {
-                    // Keys/values are pure ASCII - reject \n, \t, \uXXXX, etc.
                     return BridgeParseError::BadValue;
                 }
                 if (n >= bufSize)
@@ -267,8 +242,7 @@ private:
         return BridgeParseError::Malformed;
     }
 
-    // Signed decimal int64. Rejects leading zeros (except "0"), spaces,
-    // plus signs, non-digit bytes. Out-of-range -> BadValue.
+    // Parse decimal int64; overflow produces BadValue.
     BridgeParseError parseInt64(std::int64_t* out) noexcept
     {
         const char* start = m_Cursor;
@@ -292,12 +266,12 @@ private:
         {
             return BridgeParseError::Malformed;
         }
-        // Only "0" / "-0" allowed - reject other leading zeros.
+
         if (digitCount > 1 && *digitStart == '0')
         {
             return BridgeParseError::BadValue;
         }
-        // No '.', 'e', '+', '-' here - cursor must be at structural punctuation.
+
         if (m_Cursor < m_End)
         {
             const char trailing = *m_Cursor;
@@ -314,21 +288,17 @@ private:
         {
             return BridgeParseError::BadValue;
         }
-        (void)negative;  // Already encoded in the parsed value.
+        (void)negative;  // already encoded in the parsed value.
         *out = value;
         return BridgeParseError::None;
     }
 
-    // True for a token byte: alnum or '-', plus '.' for host labels and ':'
-    // for a numeric host port. The visit token allows neither dot nor colon.
     static bool isTokenChar(char c, bool allowDot, bool allowColon) noexcept
     {
         return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
                c == '-' || (allowDot && c == '.') || (allowColon && c == ':');
     }
 
-    // Non-empty, length-bounded token whose bytes are all isTokenChar().
-    // BadValue on empty, over-length, or an illegal byte; None otherwise.
     static BridgeParseError validateToken(const char* buf,
                                           std::size_t len,
                                           std::size_t maxLen,
@@ -353,8 +323,7 @@ private:
                                               std::size_t len,
                                               std::size_t maxLen) noexcept
     {
-        const BridgeParseError tokenErr =
-            validateToken(buf, len, maxLen, /*allowDot=*/true, /*allowColon=*/true);
+        const BridgeParseError tokenErr = validateToken(buf, len, maxLen, true, true);
         if (tokenErr != BridgeParseError::None)
         {
             return tokenErr;
@@ -384,9 +353,7 @@ private:
         return BridgeParseError::None;
     }
 
-    // Parse a string value, validate it as a bounded token, and store it in
-    // `dest`. The +1 buffer slack turns an in-cap overrun into a BadValue
-    // length rejection rather than TooLarge. Shared by url_host and visit.
+    // One extra buffer byte lets an in-cap length overrun report BadValue, not TooLarge.
     template <std::size_t MaxLen>
     BridgeParseError parseTokenInto(std::string* dest, bool allowDot, bool allowColon) noexcept
     {
@@ -397,12 +364,9 @@ private:
         {
             return err;
         }
-        const BridgeParseError valErr = allowColon ? validateHostToken(buf.data(), len, MaxLen)
-                                                   : validateToken(buf.data(),
-                                                                   len,
-                                                                   MaxLen,
-                                                                   allowDot,
-                                                                   /*allowColon=*/false);
+        const BridgeParseError valErr =
+            allowColon ? validateHostToken(buf.data(), len, MaxLen)
+                       : validateToken(buf.data(), len, MaxLen, allowDot, false);
         if (valErr != BridgeParseError::None)
         {
             return valErr;
@@ -411,10 +375,8 @@ private:
         return BridgeParseError::None;
     }
 
-    // Parse a short (<=16 char) string value and map it against `table` by exact
-    // match, writing the matched enumerator to `out`. Longer than the buffer is
-    // TooLarge; in-buffer but unmatched is BadValue. Shared by the tag and kind
-    // keys (their whitelists are the tables).
+    // Read at most 16 characters and match exactly. Excess length is TooLarge;
+    // an in-buffer value absent from the table is BadValue.
     template <typename Enum, std::size_t N>
     BridgeParseError parseEnumValue(const std::array<std::pair<std::string_view, Enum>, N>& table,
                                     Enum* out) noexcept
@@ -438,7 +400,6 @@ private:
         return BridgeParseError::BadValue;
     }
 
-    // Key -> kKey* bit; 0 for any unrecognised key.
     static std::uint32_t keyBit(std::string_view key) noexcept
     {
         if (key == std::string_view("v"))
@@ -488,13 +449,9 @@ private:
         return 0;
     }
 
-    // Per-key dispatch with strict type/range checks.
     BridgeParseError parseValueForKey(std::uint32_t keyBit, ParsedBridgeMessage* out, int depth)
     {
-        // No schema key holds an object or array, so every such value is
-        // refused as BadType. The depth test in front of it only matters if a
-        // future schema ever descends here; today `depth` is always 0 and the
-        // DepthExceeded branch is unreachable.
+        // Flat schema rejects nested values as BadType; depth remains zero.
         if (peek() == '{' || peek() == '[')
         {
             if (depth + 1 >= kMaxDepth)
@@ -556,11 +513,8 @@ private:
                 return parseEnumValue(kTagTable, &out->m_Tag);
             }
             case kKeyUrlHost:
-                // Hosts cap at 253 bytes (dotted labels allow '.', optional
-                // numeric port allows ':'); parsed into a stack buffer, no secure_string.
-                return parseTokenInto<kMaxHostLen>(&out->m_UrlHost,
-                                                   /*allowDot=*/true,
-                                                   /*allowColon=*/true);
+
+                return parseTokenInto<kMaxHostLen>(&out->m_UrlHost, true, true);
             case kKeyUrlPathHash:
             {
                 std::array<char, kHashLen + 1> buf{};
@@ -595,13 +549,8 @@ private:
                 return parseEnumValue(kKindTable, &out->m_Kind);
             }
             case kKeyVisit:
-                // Per-document page-load token: random alnum+dash (a UUID is 36
-                // chars), no dots. Anything else is fail-closed rejected. The +1
-                // buffer slack turns an in-cap overrun into a BadValue length
-                // rejection rather than TooLarge, matching url_host.
-                return parseTokenInto<kMaxVisitLen>(&out->m_Visit,
-                                                    /*allowDot=*/false,
-                                                    /*allowColon=*/false);
+
+                return parseTokenInto<kMaxVisitLen>(&out->m_Visit, false, false);
             case kKeySecure:
             case kKeyForm:
             case kKeyUser:
