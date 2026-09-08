@@ -14,13 +14,7 @@
 namespace seal::browser_host
 {
 
-// Append a timestamped exit line to %LOCALAPPDATA%\seal\bridge-host-last-exit.log.
-// Chrome captures the host's stderr but does not show it in the service-worker
-// console, where the extension only sees "Native host has exited.", so this file is
-// the only way to diagnose a launch-origin, parent-PID, or pipe-enumeration failure.
-//
-// Best effort, and never fail loud: a logging error must not mask the real exit
-// cause. Every failure path here returns without writing.
+// Best-effort diagnostics must not replace the real exit cause.
 void writeExitLog(int code, const char* reason)
 {
     wchar_t envBuf[MAX_PATH] = {};
@@ -70,9 +64,6 @@ void writeExitLog(int code, const char* reason)
     CloseHandle(file);
 }
 
-// One diagnostic line to stderr and to the exit log before the process exits.
-// Stderr goes to the browser but never reaches the service-worker console, so the
-// file is the copy an operator can read.
 void emitExitDiag(int code, const char* reason)
 {
     std::fprintf(stderr, "[seal-browser] exit=%d reason=%s\n", code, reason);
