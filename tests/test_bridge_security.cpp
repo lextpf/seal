@@ -27,9 +27,7 @@ class BridgeSecurityTest : public ::testing::Test
 {
 };
 
-// M5: parser must fail closed on any schema-violating message so a
-// malformed peer cannot inject a state-changing payload. The "bridge
-// alone short-circuit" gate itself lives in FusionDecider.
+// schema violations must fail closed; FusionDecider separately enforces M5.
 TEST_F(BridgeSecurityTest, ValidMessageAccepted)
 {
     const std::string body = buildValid();
@@ -47,16 +45,10 @@ TEST_F(BridgeSecurityTest, ClickMissingSecureRejected)
     EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::MissingKey);
 }
 
-// M6: WinVerifyTrust runs against real signed binaries elsewhere; the
-// actual call lives in BrowserBridge.cpp (USE_QT_UI-gated, not in
-// seal_tests) and host/browser/main.cpp via SignerUtils.hpp. Here we
-// only assert the parser's structural invariants - a malformed peer
-// cannot bypass the schema.
+// this checks schema boundaries; signed-peer verification is exercised separately.
 TEST_F(BridgeSecurityTest, ParserRejectsControlCharactersInHost)
 {
-    // A signed-but-poisoned peer could embed control bytes in url_host to
-    // confuse log parsers; the parser must reject anything outside
-    // [A-Za-z0-9.-].
+    // even a trusted peer must not introduce log control bytes through url_host.
     const std::string body =
         std::string(
             "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"password\",\"url_host\":\"a\\b\","
@@ -66,9 +58,7 @@ TEST_F(BridgeSecurityTest, ParserRejectsControlCharactersInHost)
     EXPECT_NE(parseBridgeMessage(body, &parsed), BridgeParseError::None);
 }
 
-// M7: per-start fresh HMAC key. BrowserBridge is USE_QT_UI-gated, so we
-// just verify the parser rejects extra keys - including "token" - so
-// nothing can smuggle past the schema into the application layer.
+// the schema rejects authentication-token fields; peer identity is out-of-band.
 TEST_F(BridgeSecurityTest, TokenKeyInMessageRejected)
 {
     const std::string body = std::string(
@@ -79,9 +69,7 @@ TEST_F(BridgeSecurityTest, TokenKeyInMessageRejected)
     EXPECT_EQ(parseBridgeMessage(body, &parsed), BridgeParseError::UnknownKey);
 }
 
-// M8: disable() panic mode. The parser is unaffected by disable() (which
-// lives in BrowserBridge.cpp); ParsedBridgeMessage is a value type, so
-// nothing can leak across the disable boundary.
+// parser results contain no shared state across messages.
 TEST_F(BridgeSecurityTest, ParsedMessageIsCopyable)
 {
     ParsedBridgeMessage a;
@@ -93,8 +81,7 @@ TEST_F(BridgeSecurityTest, ParsedMessageIsCopyable)
 
 TEST_F(BridgeSecurityTest, EmptyAndOversizedAreDistinctErrors)
 {
-    // Defence in depth: downstream log parsers pivot on reason= tokens,
-    // so empty and oversized must surface as distinct categories.
+    // reason tokens distinguish empty and oversized payloads for diagnostics.
     ParsedBridgeMessage parsed;
     EXPECT_EQ(parseBridgeMessage("", &parsed), BridgeParseError::Empty);
 
