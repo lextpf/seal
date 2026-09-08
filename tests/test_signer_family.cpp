@@ -21,9 +21,7 @@ using seal::signer::ShellKind;
 namespace
 {
 
-// Real System32 path for `leaf`, resolved through GetWindowsDirectoryW rather
-// than hardcoded: the shell allow-list builds its expectations the same way,
-// so a hardcoded C:\Windows would test a different thing on a non-C: install.
+// resolve System32 through GetWindowsDirectoryW so tests also cover non-C: installations.
 std::wstring system32Path(const wchar_t* leaf)
 {
     wchar_t buf[MAX_PATH * 2]{};
@@ -42,9 +40,7 @@ std::wstring system32Path(const wchar_t* leaf)
     return path;
 }
 
-// The bridge attributes each connection to a specific browser via
-// identifyBrowser() on the WinVerifyTrust-validated ancestor image, so the
-// per-browser status dots depend on Chrome and Brave mapping to distinct kinds.
+// browser status depends on distinct kinds for trusted ancestor images.
 TEST(SignerFamilyTest, ChromeAndBraveAreDistinct)
 {
     EXPECT_EQ(identifyBrowser(L"chrome.exe"), BrowserKind::Chrome);
@@ -61,7 +57,6 @@ TEST(SignerFamilyTest, RecognisesKnownBrowsers)
     EXPECT_EQ(identifyBrowser(L"librewolf.exe"), BrowserKind::LibreWolf);
 }
 
-// Mirrors how the ancestry walk hands identifyBrowser a full image path.
 TEST(SignerFamilyTest, StripsDirectoryAndIsCaseInsensitive)
 {
     EXPECT_EQ(
@@ -174,16 +169,9 @@ TEST(SignerFamilyTest, ShellHopPolicyRejectsBasenameOnlyAndUserWritablePaths)
     EXPECT_FALSE(isShellImage(L"C:\\Users\\Alice\\AppData\\Local\\Temp\\conhost.exe"));
 }
 
-// The accept direction, which nothing covered when it regressed. Every inbox
-// Windows shell is catalog-signed with an empty PE certificate table, so a
-// trust gate built only on embedded-signature APIs (WinVerifyTrust with
-// WTD_CHOICE_FILE, CryptQueryObject with PKCS7_SIGNED_EMBED) rejects all of
-// them. That silently kills the bridge's shell-hop traversal, because Chrome
-// launches native-messaging hosts as chrome.exe -> cmd.exe -> seal-browser.exe.
-//
-// This runs the production predicate against the real binary on disk; a purely
-// synthetic test cannot see the defect, since the signature carrier is a
-// property of the shipped file rather than of the path string.
+// inbox shells use catalog signatures with empty PE certificate tables.
+// exercise the shipped binaries: synthetic paths cannot verify the signature carrier.
+// Chrome native-host ancestry includes chrome.exe -> cmd.exe -> seal-browser.exe.
 TEST(SignerFamilyTest, TrustsCatalogSignedInboxShells)
 {
     const std::wstring cmdPath = system32Path(L"cmd.exe");
@@ -202,11 +190,8 @@ TEST(SignerFamilyTest, TrustsCatalogSignedInboxShells)
     }
 }
 
-// Catalog membership is keyed on the file hash, so it is location-independent
-// by construction: the genuine bytes verify no matter where they are read
-// from. isShellPathAllowed is therefore the *only* thing in the gate that
-// pins a shell hop to an admin-writable directory, and it has to keep
-// rejecting a user-writable lookalike on its own.
+// catalog trust follows file bytes across locations. isShellPathAllowed must separately
+// reject trusted shell copies in user-writable directories.
 TEST(SignerFamilyTest, ShellPathAllowListCarriesTheLocationCheckAlone)
 {
     const std::wstring cmdPath = system32Path(L"cmd.exe");
