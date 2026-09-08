@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Generate the compiled-in curated public-suffix table.
+"""
+@brief generate the deterministic public-suffix header.
 
-The application never fetches the PSL at runtime. Maintainers update
-scripts/public_suffixes.txt from the official snapshot, then run this script
-from the repository root. The output is deterministic and checked in.
+maintainers update scripts/public_suffixes.txt from a PSL snapshot, then run
+this script from the repository root. the application performs no runtime fetch.
 """
 
 from __future__ import annotations
@@ -69,33 +69,19 @@ def generate(source: Path, destination: Path) -> None:
     text = f"""#pragma once
 
 /**
- * @brief Compiled-in curated public-suffix rules for registrable-domain tests.
+ * @brief curated public-suffix rules for registrable-domain checks.
  * @author Alex (https://github.com/lextpf)
  * @ingroup Utilities
  *
- * GENERATED FILE. scripts/generate_public_suffix_table.py writes it from
- * scripts/public_suffixes.txt. A hand edit is lost on the next run of the
- * generator. To change a rule, edit the rule source; to change the prose or
- * the layout, edit the generator template.
+ * generated from scripts/public_suffixes.txt; edit that file or the generator template.
+ * this PSL subset is the sole runtime rule source. arrays are sorted, lowercase ASCII.
  *
- * The table is a curated subset of the Mozilla Public Suffix List, not the
- * whole list. seal never fetches the list at run time, so this snapshot is the
- * only rule source that seal::url::detail::publicSuffixView() reads.
- *
- * The rules are split by match kind, because each kind is applied differently:
- *  - @ref kExactPublicSuffixes - the rule is itself a public suffix. The
- *    longest dot-aligned match, counted in labels, wins.
- *  - @ref kWildcardPublicSuffixes - the base of a `*.<base>` rule. A match
- *    consumes exactly one more label to the left of the base.
- *  - @ref kPublicSuffixExceptions - the body of a `!<rule>` line. An exception
- *    outranks both other kinds, and the public suffix it yields is the rule
- *    without its left-most label.
- *
- * A host that matches no rule falls back to its last label. That is the
- * implicit `*` rule of the PSL algorithm.
- *
- * Every array is sorted, lower-case and ASCII; the generator rejects a rule
- * that is not punycode-encoded. Lookup scans the three arrays linearly.
+ * | kind      | matching rule                                      |
+ * |-----------|----------------------------------------------------|
+ * | exact     | longest dot-aligned suffix wins                    |
+ * | wildcard  | consume one label before the stored base           |
+ * | exception | override other rules; remove the leftmost label    |
+ * | no match  | use the final host label (implicit wildcard)       |
  */
 
 #include <array>
@@ -104,15 +90,15 @@ def generate(source: Path, destination: Path) -> None:
 namespace seal::url::detail
 {{
 
-/// Snapshot identity of the curated list, as `YYYY-MM-DD_HH-MM-SS_UTC`.
+/// snapshot time as YYYY-MM-DD_HH-MM-SS_UTC.
 inline constexpr std::string_view kSuffixTableSnapshot = "{snapshot}";
 
-/// Upstream PSL commit that the curated snapshot was reviewed against.
+/// upstream PSL commit used to review this subset.
 inline constexpr std::string_view kSuffixTableCommit = "{commit}";
 
-{format_array("kExactPublicSuffixes", exact, "/// Rules that are themselves public suffixes.")}
-{format_array("kWildcardPublicSuffixes", wildcard, "/// Bases of `*.<base>` rules; a match takes one more label.")}
-{format_array("kPublicSuffixExceptions", exception, "/// Bodies of `!<rule>` lines; each one cancels a wildcard match.")}
+{format_array("kExactPublicSuffixes", exact, "/// exact suffix rules.")}
+{format_array("kWildcardPublicSuffixes", wildcard, "/// wildcard bases; consume one extra label.")}
+{format_array("kPublicSuffixExceptions", exception, "/// exception bodies; override exact and wildcard matches.")}
 }}  // namespace seal::url::detail
 """
     destination.write_text(text, encoding="utf-8", newline="\n")
