@@ -18,15 +18,11 @@ namespace seal::browser_host
 namespace
 {
 
-// Pinned Chrome extension origin. The id derives from the manifest "key" and is
-// hardcoded twice: here, and as kSealExtensionIdAscii in src/CliModes.cpp, which
-// writes the allowed_origins list. Regenerating the key means updating both.
+// Manifest key changes must also update kSealExtensionIdAscii in src/CliModes.cpp.
 constexpr std::wstring_view kPinnedChromeOrigin =
     L"chrome-extension://dfjclelhkideboildnjihgildihjjmdo/";
 constexpr std::wstring_view kFirefoxOriginPrefix = L"moz-extension://";
 
-// Wide prefix compare. The origin strings are fixed and lower-case, so a
-// case-sensitive match is enough.
 bool hasPrefix(std::wstring_view full, std::wstring_view prefix) noexcept
 {
     if (full.size() < prefix.size())
@@ -38,10 +34,6 @@ bool hasPrefix(std::wstring_view full, std::wstring_view prefix) noexcept
 
 }  // namespace
 
-// argv[1] has to be the native-messaging origin the browser passes: Chrome sends
-// `chrome-extension://<id>/`, Firefox sends `moz-extension://<uuid>/`. Any other
-// shape, such as a raw exec or a malware spawn, is rejected before this process
-// touches the bridge pipe.
 bool isLegitimateLaunchOrigin()
 {
     int argc = 0;
@@ -60,9 +52,7 @@ bool isLegitimateLaunchOrigin()
         }
         else if (hasPrefix(origin, kFirefoxOriginPrefix))
         {
-            // Firefox derives the origin from a per-install UUID, so there is no
-            // fixed id to pin and the scheme is the strongest claim available
-            // here. The bridge still requires a signed firefox.exe parent.
+            // Gecko origins have per-install UUIDs; signed browser ancestry remains required.
             ok = true;
         }
     }
