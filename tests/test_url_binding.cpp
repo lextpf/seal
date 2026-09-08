@@ -18,16 +18,13 @@ class UrlBindingTest : public ::testing::Test
 {
 };
 
-// --- Tiered platformMatchesHost (auto-fill record binding) ---
-
 TEST_F(UrlBindingTest, TieredDomainRecordIsStrict)
 {
-    // A record carrying a real domain matches only that host and its
-    // subdomains, not a different-TLD lookalike or the subdomain trick.
+    // domain bindings allow the host and its subdomains only.
     EXPECT_TRUE(platformMatchesHost("paypal.com", "www.paypal.com"));
-    // Directional: an apex record binds its subdomains (parent->child)...
+
     EXPECT_TRUE(platformMatchesHost("paypal.com", "login.paypal.com"));
-    // ...but a subdomain record no longer authorizes the parent (child->parent).
+
     EXPECT_FALSE(platformMatchesHost("login.paypal.com", "paypal.com"));
     EXPECT_FALSE(platformMatchesHost("paypal.com", "paypal.co"));
     EXPECT_FALSE(platformMatchesHost("paypal.com", "paypal.com.evil.com"));
@@ -35,7 +32,7 @@ TEST_F(UrlBindingTest, TieredDomainRecordIsStrict)
 
 TEST_F(UrlBindingTest, TieredBareLabelIsFuzzyTldBlind)
 {
-    // A bare/free-form label matches by registrable name, TLD-blind.
+    // a bare/free-form label matches by registrable name, TLD-blind.
     EXPECT_TRUE(platformMatchesHost("PayPal", "www.paypal.com"));
     EXPECT_TRUE(platformMatchesHost("My PayPal", "paypal.com"));
     EXPECT_TRUE(platformMatchesHost("PayPal", "paypal.co"));  // the accepted tradeoff
@@ -51,10 +48,10 @@ TEST_F(UrlBindingTest, TieredEmptyPageHostFailsClosed)
 TEST_F(UrlBindingTest, SecretReleaseRequiresDomainRecord)
 {
     EXPECT_TRUE(platformMatchesHostForSecretRelease("paypal.com", "www.paypal.com"));
-    // Parent->child still releases: an apex record fills on its login subdomain.
+
     EXPECT_TRUE(
         platformMatchesHostForSecretRelease("https://paypal.com/signin", "login.paypal.com"));
-    // Directional: a subdomain record no longer releases on the parent domain.
+
     EXPECT_FALSE(
         platformMatchesHostForSecretRelease("https://login.paypal.com/signin", "paypal.com"));
     EXPECT_FALSE(platformMatchesHostForSecretRelease("paypal.com", "paypal.co"));
@@ -63,7 +60,6 @@ TEST_F(UrlBindingTest, SecretReleaseRequiresDomainRecord)
     EXPECT_FALSE(platformMatchesHostForSecretRelease("PayPal", "paypal.co"));
 }
 
-// extractHost - happy path
 TEST_F(UrlBindingTest, ExtractsBareHostname)
 {
     EXPECT_EQ(extractHost("example.com"), "example.com");
@@ -140,7 +136,6 @@ TEST_F(UrlBindingTest, TrimsWhitespace)
     EXPECT_EQ(extractHost("\thttps://example.com\n"), "example.com");
 }
 
-// extractHost - rejections
 TEST_F(UrlBindingTest, RejectsEmpty)
 {
     EXPECT_EQ(extractHost(""), "");
@@ -149,22 +144,19 @@ TEST_F(UrlBindingTest, RejectsEmpty)
 
 TEST_F(UrlBindingTest, RejectsFreeFormServiceName)
 {
-    // Single-label inputs are still valid hostnames; FQDN policy is the
-    // caller's concern. We just return the normalised label.
+    // single-label hosts are valid here; callers enforce any FQDN requirement.
     EXPECT_EQ(extractHost("Gmail"), "gmail");
 }
 
 TEST_F(UrlBindingTest, RejectsNonAscii)
 {
-    // Extension emits punycode; raw unicode bytes would compare apples to
-    // oranges. Reject so binding fails closed.
+    // the extension emits punycode; raw unicode must not match it.
     std::string input = "https://m\xc3\xbcnchen.de/";  // münchen.de
     EXPECT_EQ(extractHost(input), "");
 }
 
 TEST_F(UrlBindingTest, RejectsHostWithSlash)
 {
-    // Trim at first '/' and accept what remains.
     EXPECT_EQ(extractHost("example.com/extra/path"), "example.com");
 }
 
@@ -175,7 +167,6 @@ TEST_F(UrlBindingTest, RejectsPunctuationInHost)
     EXPECT_EQ(extractHost("ex<script>.com"), "");
 }
 
-// hostsMatch - happy path
 TEST_F(UrlBindingTest, MatchExact)
 {
     EXPECT_TRUE(hostsMatch("example.com", "example.com"));
@@ -183,16 +174,13 @@ TEST_F(UrlBindingTest, MatchExact)
 
 TEST_F(UrlBindingTest, MatchSubdomainBelowRecord)
 {
-    // Record google.com matches accounts.google.com / mail.google.com.
     EXPECT_TRUE(hostsMatch("google.com", "accounts.google.com"));
     EXPECT_TRUE(hostsMatch("google.com", "mail.google.com"));
 }
 
 TEST_F(UrlBindingTest, RejectParentAboveRecord)
 {
-    // Directional binding: a record for a specific subdomain does NOT authorize
-    // its parent domain or a sibling. Closes the "login.example.com authorizes
-    // example.com" widening flagged in the security review.
+    // a subdomain record must not authorize its parent or sibling.
     EXPECT_FALSE(hostsMatch("accounts.google.com", "google.com"));
     EXPECT_FALSE(hostsMatch("login.example.com", "example.com"));
     EXPECT_FALSE(hostsMatch("a.b.c.example.com", "example.com"));
@@ -201,10 +189,8 @@ TEST_F(UrlBindingTest, RejectParentAboveRecord)
 
 TEST_F(UrlBindingTest, MatchDeepSubdomain)
 {
-    // Parent->child still binds at any depth (an apex record authorizes its
-    // subdomains).
     EXPECT_TRUE(hostsMatch("example.com", "a.b.c.example.com"));
-    // A privately controlled apex still authorizes its own children.
+
     EXPECT_TRUE(hostsMatch("example.com", "evil.example.com"));
 }
 
@@ -223,7 +209,6 @@ TEST_F(UrlBindingTest, RegistrableTenantCanAuthorizeItsOwnChildren)
     EXPECT_FALSE(hostsMatch("alice.github.io", "bob.github.io"));
 }
 
-// hostsMatch - phishing-resistance rejections
 TEST_F(UrlBindingTest, RejectTyposquat)
 {
     EXPECT_FALSE(hostsMatch("google.com", "gooogle.com"));
@@ -233,8 +218,7 @@ TEST_F(UrlBindingTest, RejectTyposquat)
 
 TEST_F(UrlBindingTest, RejectPrefixWithoutDotBoundary)
 {
-    // Classic "google.com.evil.com" / "fakegoogle.com" must NOT match;
-    // dot-boundary matching is the whole point.
+    // require dot boundaries to reject lookalike suffixes.
     EXPECT_FALSE(hostsMatch("google.com", "fakegoogle.com"));
     EXPECT_FALSE(hostsMatch("google.com", "google.com.evil.com"));
     EXPECT_FALSE(hostsMatch("google.com", "evilgoogle.com"));
@@ -258,7 +242,6 @@ TEST_F(UrlBindingTest, RejectEmpty)
     EXPECT_FALSE(hostsMatch("", ""));
 }
 
-// Combined extract + match (call-site shape).
 TEST_F(UrlBindingTest, EndToEnd_RecordIsUrl_PageIsHost)
 {
     const std::string recordHost = extractHost("https://www.example.com/login");
@@ -277,15 +260,13 @@ TEST_F(UrlBindingTest, EndToEnd_RejectMixedSiteSpoof)
 
 TEST_F(UrlBindingTest, EndToEnd_RecordIsFreeForm_SkipBinding)
 {
-    // "Gmail" -> "gmail". hostsMatch is the discriminator; FillController
-    // documented to fail-open on empty record host.
+    // host extraction accepts labels; secret-release callers must enforce domain binding.
     const std::string recordHost = extractHost("Gmail");
     const std::string pageHost = extractHost("mail.google.com");
     EXPECT_EQ(recordHost, "gmail");
     EXPECT_FALSE(hostsMatch(recordHost, pageHost));
 }
 
-// Public-suffix and registrable-domain analysis.
 TEST_F(UrlBindingTest, RecognisesCuratedPublicSuffixes)
 {
     EXPECT_TRUE(isPublicSuffix("co.uk"));
@@ -341,9 +322,7 @@ TEST_F(UrlBindingTest, PlatformDisplayNamePreservesLabelsAndUnbindableSuffixes)
     EXPECT_EQ(platformDisplayName("co.uk"), "co.uk");
 }
 
-// extractKey - fuzzy normalisation (TLD strip, lowercase, dashes/
-// underscores stripped) that reduces a hostname/URL to one registrable
-// label. Used by the URL-binding warning (not a hard block).
+// extractKey supplies fuzzy UI warnings, not browser secret-release authorization.
 TEST_F(UrlBindingTest, ExtractKey_BareLabel)
 {
     EXPECT_EQ(extractKey("PayPal"), "paypal");
@@ -407,9 +386,6 @@ TEST_F(UrlBindingTest, ExtractKey_EmptyAndInvalid)
     EXPECT_EQ(extractKey("m\xc3\xbcnchen.de"), "");
 }
 
-// keysMatch - equality after normalisation. Just confirms the same-key
-// / different-key contract; the key extractor makes the comparison
-// forgiving.
 TEST_F(UrlBindingTest, KeysMatch_SameKey)
 {
     EXPECT_TRUE(keysMatch(extractKey("paypal.com"), extractKey("login.paypal.com")));
@@ -439,10 +415,7 @@ TEST_F(UrlBindingTest, KeysMatch_TldVariation)
     EXPECT_TRUE(keysMatch(extractKey("google.com"), extractKey("google.co")));
 }
 
-// extractKey - free-form multi-word labels. extractHost rejects inputs
-// with spaces; the fallback splits on non-alnum tokens, drops stop-words
-// ("my", "the", "login", "account", ...), and keeps the longest alnum
-// token so labels like "Paypal Login" / "My Gmail" reduce to the brand.
+// free-form labels select the longest non-stop-word token.
 TEST_F(UrlBindingTest, ExtractKey_FreeFormTwoWord)
 {
     EXPECT_EQ(extractKey("Paypal Login"), "paypal");
@@ -474,7 +447,7 @@ TEST_F(UrlBindingTest, ExtractKey_FreeFormPunctuation)
 
 TEST_F(UrlBindingTest, ExtractKey_FreeFormAllStopwords)
 {
-    // Nothing meaningful to bind on; caller should fail open.
+    // empty fuzzy keys do not produce a binding warning.
     EXPECT_EQ(extractKey("my account"), "");
     EXPECT_EQ(extractKey("the login"), "");
     EXPECT_EQ(extractKey("    "), "");
@@ -482,21 +455,19 @@ TEST_F(UrlBindingTest, ExtractKey_FreeFormAllStopwords)
 
 TEST_F(UrlBindingTest, ExtractKey_FreeFormSingleWord)
 {
-    // Surrounding noise: still reduces to the inner token.
     EXPECT_EQ(extractKey("[Paypal]"), "paypal");
     EXPECT_EQ(extractKey("**Gmail**"), "gmail");
 }
 
 TEST_F(UrlBindingTest, KeysMatch_FreeFormVsHostname)
 {
-    // Free-form labels and hostnames reduce to the same key.
     EXPECT_TRUE(keysMatch(extractKey("Paypal"), extractKey("paypal.com")));
     EXPECT_TRUE(keysMatch(extractKey("Paypal Login"), extractKey("login.paypal.com")));
     EXPECT_TRUE(keysMatch(extractKey("My Gmail"), extractKey("mail.google.com"))
                     ? true  // gmail vs google - different keys; we don't claim alias support.
                     : true);
     EXPECT_FALSE(keysMatch(extractKey("My Gmail"), extractKey("mail.google.com")));
-    // ... but "Gmail" record on "gmail.com" page does match:
+
     EXPECT_TRUE(keysMatch(extractKey("Gmail"), extractKey("gmail.com")));
 }
 
