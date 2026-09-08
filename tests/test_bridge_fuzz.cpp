@@ -16,9 +16,7 @@ using seal::ParsedBridgeMessage;
 namespace
 {
 
-// Canonical six-field body. Tests mutate one piece to probe a single
-// rejection path. The wire schema carries no browser_pid - the bridge
-// resolves it out-of-band (GetNamedPipeClientProcessId + parent walk).
+// mutate one field at a time. browser PID is resolved out-of-band, never trusted from JSON.
 std::string buildValid()
 {
     return std::string(
@@ -86,8 +84,7 @@ TEST_F(BridgeFuzzTest, OversizedTokenRejected)
 
 TEST_F(BridgeFuzzTest, ExactlyFourKilobytesParseable)
 {
-    // Hard 4 KB ceiling; the boundary itself is accepted. Trailing
-    // whitespace within budget is legitimate JSON (ECMA-404).
+    // the 4096-byte boundary includes valid trailing JSON whitespace.
     std::string body = buildValid();
     body.resize(4096, ' ');
     ParsedBridgeMessage parsed;
@@ -119,7 +116,7 @@ TEST_F(BridgeFuzzTest, DeeplyNestedRejectedWithoutStackOverflow)
     }
     deeplyNested += "}";
     ParsedBridgeMessage parsed;
-    // Rejected as TooLarge (likely) or DepthExceeded; both fine.
+    // rejected as TooLarge (likely) or DepthExceeded; both fine.
     const auto err = parseBridgeMessage(deeplyNested, &parsed);
     EXPECT_NE(err, BridgeParseError::None);
 }
@@ -233,7 +230,7 @@ TEST_F(BridgeFuzzTest, UrlHostWithHashRejected)
 
 TEST_F(BridgeFuzzTest, UrlHostWithNonAsciiRejected)
 {
-    // Separate push_back avoids MSVC's hex-escape concatenation with 'b'.
+    // separate push_back avoids MSVC's hex-escape concatenation with 'b'.
     std::string body =
         "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"password\","
         "\"url_host\":\"a";
@@ -356,9 +353,7 @@ TEST_F(BridgeFuzzTest, UnknownKeyRejected)
 
 TEST_F(BridgeFuzzTest, LegacyBrowserPidKeyRejected)
 {
-    // browser_pid was removed from the schema - a stale extension or
-    // confused peer sending the old field must hit UnknownKey so neither
-    // side silently accepts a mismatched contract.
+    // browser_pid is outside the schema; peers must not provide their own process identity.
     const std::string body =
         std::string(
             "{\"v\":1,\"browser_pid\":1234,\"x\":1,\"y\":2,\"tag\":\"password\","
@@ -422,7 +417,7 @@ TEST_F(BridgeFuzzTest, NavSecureAndFormZeroParses)
 
 TEST_F(BridgeFuzzTest, ClickReportDefaultsToClickKind)
 {
-    // A legacy message with no `kind` key parses as a Click report.
+    // an absent kind defaults to Click.
     ParsedBridgeMessage parsed;
     EXPECT_EQ(parseBridgeMessage(buildValid(), &parsed), BridgeParseError::None);
     EXPECT_EQ(parsed.m_Kind, seal::BridgeKind::Click);
@@ -524,7 +519,7 @@ TEST_F(BridgeFuzzTest, NavWithUserFieldParses)
 
 TEST_F(BridgeFuzzTest, NavUserFieldIsOptional)
 {
-    // The 5-field nav (no `user`) still parses; user defaults false.
+    // an absent user field defaults to false.
     ParsedBridgeMessage parsed;
     EXPECT_EQ(parseBridgeMessage(buildValidNav(), &parsed), BridgeParseError::None);
     EXPECT_FALSE(parsed.m_HasUsernameField);
@@ -563,8 +558,7 @@ TEST_F(BridgeFuzzTest, NavWithVisitTokenParses)
 
 TEST_F(BridgeFuzzTest, NavVisitIsOptional)
 {
-    // A stale extension sending no `visit` still parses; the token defaults
-    // empty (staging then fails closed downstream).
+    // an absent visit parses as empty; staging rejects it downstream.
     ParsedBridgeMessage parsed;
     EXPECT_EQ(parseBridgeMessage(buildValidNav(), &parsed), BridgeParseError::None);
     EXPECT_TRUE(parsed.m_Visit.empty());
@@ -599,7 +593,7 @@ TEST_F(BridgeFuzzTest, NavVisitLengthBoundary)
 
 TEST_F(BridgeFuzzTest, NavVisitBadCharsetRejected)
 {
-    // Only [A-Za-z0-9-]: underscores, spaces, dots are rejected fail-closed.
+    // only [A-Za-z0-9-]: underscores, spaces, dots are rejected fail-closed.
     for (const char* bad : {"ab_c", "a b", "a.b"})
     {
         const std::string body = std::string(
@@ -621,9 +615,7 @@ TEST_F(BridgeFuzzTest, NavVisitWrongTypeRejected)
 
 TEST_F(BridgeFuzzTest, ClickWithVisitTokenParses)
 {
-    // A click may now carry the per-document visit token; it binds a cached
-    // click authorization to the document it was reported from. Same charset
-    // as the nav token.
+    // click visits use the same charset as nav visits and bind the originating document.
     const std::string body = std::string(
                                  "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"password\","
                                  "\"url_host\":\"a\",\"secure\":1,\"visit\":\"3f2b-A9\","
@@ -636,8 +628,7 @@ TEST_F(BridgeFuzzTest, ClickWithVisitTokenParses)
 
 TEST_F(BridgeFuzzTest, ClickVisitOptional)
 {
-    // A click WITHOUT a visit token still parses (older extension); the token
-    // defaults empty and the fill gate falls back to host-only binding.
+    // an absent click visit parses as empty; callers apply their own release gates.
     const std::string body = std::string(
                                  "{\"v\":1,\"x\":1,\"y\":2,\"tag\":\"password\","
                                  "\"url_host\":\"a\",\"secure\":1,\"url_path_hash\":\"") +
@@ -649,8 +640,6 @@ TEST_F(BridgeFuzzTest, ClickVisitOptional)
 
 TEST_F(BridgeFuzzTest, ClickVisitBadCharsetRejected)
 {
-    // The click visit token is validated identically to the nav token: only
-    // [A-Za-z0-9-]; underscores, spaces, dots are rejected fail-closed.
     for (const char* bad : {"ab_c", "a b", "a.b"})
     {
         const std::string body = std::string(
@@ -674,8 +663,7 @@ TEST_F(BridgeFuzzTest, NavVisitDuplicateRejected)
 
 TEST_F(BridgeFuzzTest, RandomFuzzNeverCrashes)
 {
-    // Random-byte fuzzer; deterministic seed for reproducibility. Random
-    // input almost never matches the schema - assert no crash.
+    // use a fixed seed for reproducible parser fuzzing.
     std::mt19937 rng(0xfeedf00d);
     std::uniform_int_distribution<int> byteDist(0, 255);
     std::uniform_int_distribution<int> lenDist(0, 256);
@@ -690,7 +678,7 @@ TEST_F(BridgeFuzzTest, RandomFuzzNeverCrashes)
         }
         ParsedBridgeMessage parsed;
         const auto err = parseBridgeMessage(buf, &parsed);
-        // Any error code is fine; just assert no UB.
+
         (void)err;
     }
 }
@@ -718,10 +706,7 @@ TEST_F(BridgeFuzzTest, RandomFuzzWithValidBaselineNeverCrashes)
 
 TEST_F(BridgeFuzzTest, ParsedStructHasNoSecureStringMember)
 {
-    // Compile-time guard: the parser's output is plain C++ with no
-    // locked allocator. secure_string is move-only, so a parser that
-    // allocated one would have to store it (defeating type erasure) or
-    // leak it - neither happens here.
+    // parser output must remain copyable and Qt-free.
     static_assert(std::is_trivially_destructible<decltype(ParsedBridgeMessage{}.m_Version)>::value,
                   "version field must be trivial");
     static_assert(std::is_same<decltype(ParsedBridgeMessage{}.m_UrlHost), std::string>::value,
