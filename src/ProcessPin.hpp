@@ -17,43 +17,36 @@ namespace seal::signer
 
 /**
  * @class PinnedProcess
- * @brief Move-only RAII pin over a process handle that prevents PID recycling.
- * @author Alex (https://github.com/lextpf)
+ * @brief Own a process query handle that prevents PID reuse while open.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Utilities
  *
- * Holds an OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) handle for the
- * object's lifetime. The kernel cannot recycle the PID while that handle is
- * open, so pid() and imagePath() keep pointing at the pinned process. Identity
- * rests on the open handle; alive() drives prompt teardown and never decides
- * which process this is.
+ * Moves transfer ownership and clear the source handle/PID. Identity rests on the
+ * handle; alive only controls teardown. Concurrent const queries are safe;
+ * mutation requires external synchronization.
  *
- * @par Ownership
- * Copying is deleted, so CloseHandle runs exactly once. A move transfers the
- * handle and leaves the source invalid: no handle, pid() == 0.
- *
- * @par Error reporting
- * A non-zero lastError() always comes from a failed OpenProcess call. A move
- * overwrites the destination's error with the source's value and leaves the
- * source's value in place, so moving a successful pin over a failed one resets
- * lastError() to 0. reset() and the destructor never touch the field. It stays
- * 0 for a default-constructed pin and for a moved-from pin that was valid.
- *
- * @par Thread safety
- * Mutation is not thread-safe. The const accessors only query the kernel
- * through the held handle, so concurrent const use of one object is safe.
+ * lastError records failed OpenProcess calls. Moving copies the error without
+ * clearing the source; reset and destruction leave it unchanged.
  */
 class PinnedProcess
 {
 public:
-    /// @brief Construct an invalid pin. No handle is opened.
+    /**
+     * @fn PinnedProcess() noexcept
+     * @brief Construct an invalid pin.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * No handle is opened.
+     */
     PinnedProcess() noexcept = default;
 
     /**
-     * @brief Pin @p pid by opening a query handle. valid() is false on failure.
+     * @fn PinnedProcess(DWORD pid) noexcept
+     * @brief Open a process query handle.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * On failure the object keeps no handle, pid() reports 0, and lastError()
-     * carries the GetLastError value. ERROR_ACCESS_DENIED means a protection or
-     * integrity boundary; ERROR_INVALID_PARAMETER means the process is gone.
+     * Failure leaves the pin invalid with PID 0 and lastError from OpenProcess.
+     * A failed open does not establish whether the process exited or access was denied.
      */
     explicit PinnedProcess(DWORD pid) noexcept
         : m_Pid(pid),
@@ -69,10 +62,6 @@ public:
         }
     }
 
-    /**
-     * @brief Take over the handle of @p o, which is left invalid.
-     * @param o Source pin. It holds no handle and reports pid() == 0 afterwards.
-     */
     PinnedProcess(PinnedProcess&& o) noexcept
         : m_Pid(o.m_Pid),
           m_Handle(o.m_Handle),
@@ -81,14 +70,7 @@ public:
         o.m_Handle = nullptr;
         o.m_Pid = 0;
     }
-    /**
-     * @brief Close the current handle, then take over the handle of @p o.
-     *
-     * Self-assignment is a no-op and keeps the held handle open.
-     *
-     * @param o Source pin. It holds no handle and reports pid() == 0 afterwards.
-     * @return Reference to this pin.
-     */
+
     PinnedProcess& operator=(PinnedProcess&& o) noexcept
     {
         if (this != &o)
@@ -102,34 +84,64 @@ public:
         }
         return *this;
     }
-    /// @brief Copy construction is deleted: one object owns one handle.
+    /**
+     * @fn PinnedProcess(const PinnedProcess&)
+     * @brief Copy construction is deleted: one object owns one handle.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     PinnedProcess(const PinnedProcess&) = delete;
-    /// @brief Copy assignment is deleted: one object owns one handle.
+    /**
+     * @fn PinnedProcess& operator=(const PinnedProcess&)
+     * @brief Copy assignment is deleted: one object owns one handle.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     PinnedProcess& operator=(const PinnedProcess&) = delete;
-    /// @brief Close the handle, which lets the kernel recycle the PID again.
+    /**
+     * @fn ~PinnedProcess()
+     * @brief Close the handle, which lets the kernel recycle the PID again.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     ~PinnedProcess() { reset(); }
 
-    /// @brief Whether a query handle is held. It says nothing about liveness.
+    /**
+     * @fn bool valid() const noexcept
+     * @brief Whether a query handle is held.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * It says nothing about liveness.
+     */
     bool valid() const noexcept { return m_Handle != nullptr; }
-    /// @brief Same test as valid(), for use in a boolean context.
+    /**
+     * @fn operator bool() const noexcept
+     * @brief Same test as valid(), for use in a boolean context.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     explicit operator bool() const noexcept { return valid(); }
 
-    /// @brief The pinned PID, or 0 when invalid. It cannot be recycled while pinned.
+    /**
+     * @fn DWORD pid() const noexcept
+     * @brief The pinned PID, or 0 when invalid.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * It cannot be recycled while pinned.
+     */
     DWORD pid() const noexcept { return m_Pid; }
 
-    /// @brief The GetLastError value from a failed construction, else 0.
+    /**
+     * @fn DWORD lastError() const noexcept
+     * @brief The GetLastError value from a failed construction, else 0.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     DWORD lastError() const noexcept { return m_LastError; }
 
     /**
-     * @brief On-disk image path queried from the held handle.
+     * @fn std::wstring imagePath() const
+     * @brief Query the pinned process path without caching.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Queried on every call; nothing is cached. It asks for the Win32 form
-     * (QueryFullProcessImageNameW flag 0), not the native NT device form. The
-     * kernel reports the on-disk casing, so compare case-insensitively;
-     * seal::signer::isKnownBrowserImage() does that.
+     * Returns Win32 form with on-disk casing; compare case-insensitively.
      *
-     * @return The image path, or an empty string when the pin is invalid or the
-     *         query fails.
+     * @return Empty for an invalid pin or query failure.
      */
     std::wstring imagePath() const
     {
@@ -147,15 +159,12 @@ public:
     }
 
     /**
-     * @brief Whether the pinned process is still running.
+     * @fn bool alive() const noexcept
+     * @brief Check the exit code to estimate whether the process is running.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * A process that really exits with code 259 (== STILL_ACTIVE) reads as
-     * alive. That Win32 ambiguity is harmless here: a false "alive" only delays
-     * teardown, identity rests on the open handle, and the next pipe read fails
-     * on the dead peer anyway.
-     *
-     * @return true only when GetExitCodeProcess yields STILL_ACTIVE. An invalid
-     *         pin, and a failed query, both return false.
+     * Exit code 259 is indistinguishable from running. This may delay teardown;
+     * the open handle still pins identity. Invalid pins and query failures return false.
      */
     bool alive() const noexcept
     {
@@ -172,19 +181,13 @@ public:
     }
 
     /**
-     * @brief Process creation time as a 64-bit FILETIME tick count.
+     * @fn std::optional<std::uint64_t> creationTime() const noexcept
+     * @brief Query creation time in FILETIME ticks.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * The unit is the FILETIME tick: 100 nanoseconds since 1601-01-01 UTC. The
-     * two FILETIME halves are packed as `(high << 32) | low`, so two processes
-     * order the same way as their real creation order. The bridge ancestor walk
-     * uses that order to reject a parent that started after its child.
+     * One tick is 100 ns since 1601-01-01 UTC. Packs (high << 32) | low for comparison.
      *
-     * GetProcessTimes succeeds with PROCESS_QUERY_LIMITED_INFORMATION access on
-     * a same-user handle, so a valid pin nearly always yields a value. Callers
-     * still fail closed on std::nullopt instead of skipping the check.
-     *
-     * @return The packed creation time, or std::nullopt when the pin is
-     *         invalid or the query fails.
+     * @return `nullopt` for invalid pins or query failure; ancestry callers must fail closed.
      */
     std::optional<std::uint64_t> creationTime() const noexcept
     {
