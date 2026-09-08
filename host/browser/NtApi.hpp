@@ -1,20 +1,12 @@
 #pragma once
 
 /**
- * @brief Runtime-resolved ntdll entry points and their private types.
- * @author Alex (https://github.com/lextpf)
+ * @brief Load NT handle-table and object-name queries without static imports.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup FillController
  *
- * seal-browser proves its stdio pipes came from a real browser, and not from a
- * re-parented puppet, by walking the claimed parent's handle table and matching an
- * entry against its own stdin pipe object. That needs two NT-private calls,
- * NtQuerySystemInformation and NtQueryObject, plus the undocumented structs they
- * fill. Both resolve at runtime through GetProcAddress, so the binary carries no
- * ntdll import. The loaders return nullptr when the export is missing and callers
- * fail closed.
- *
- * The struct and field names mirror the OS ABI layout verbatim. Do not rename them
- * to the project's naming convention.
+ * Missing exports return nullptr; callers fail closed.
+ * Struct and field names mirror the private OS ABI and must retain that layout.
  */
 
 #ifndef NOMINMAX
