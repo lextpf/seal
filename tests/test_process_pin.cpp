@@ -18,9 +18,7 @@ std::wstring toLower(std::wstring s)
     return s;
 }
 
-// Spawn cmd.exe /c exit 0 and return its PROCESS_INFORMATION. Exit code 0 is
-// chosen deliberately: it is NOT 259 (STILL_ACTIVE), so alive() reads false
-// after the child exits.
+// exit code 0 differs from STILL_ACTIVE (259), so alive() becomes false after exit.
 PROCESS_INFORMATION spawnShortLivedChild()
 {
     STARTUPINFOW si{};
@@ -80,8 +78,7 @@ TEST(ProcessPinTest, DeadChildDetected)
     ASSERT_EQ(WAIT_OBJECT_0, WaitForSingleObject(pi.hProcess, 5000))
         << "child did not exit within 5 s";
 
-    // The held handle survives the child's exit: identity stays stable while
-    // alive() flips to false (EPROCESS persistence the pin relies on).
+    // the handle retains process identity after exit while alive() becomes false.
     EXPECT_FALSE(child.alive());
     EXPECT_EQ(child.pid(), pi.dwProcessId);
     EXPECT_TRUE(child.valid());
@@ -102,7 +99,7 @@ TEST(ProcessPinTest, CreationTimeOrdering)
     ASSERT_TRUE(parent.creationTime().has_value());
     ASSERT_TRUE(child.creationTime().has_value());
 
-    // The walk's invariant: a parent is created no later than its child.
+    // the walk's invariant: a parent is created no later than its child.
     EXPECT_LE(*parent.creationTime(), *child.creationTime());
 
     WaitForSingleObject(pi.hProcess, 5000);
@@ -172,11 +169,11 @@ TEST(BridgeSourceScanTest, CheckPhasePins)
 TEST(BridgeSourceScanTest, UsePhaseLiveness)
 {
     const std::string src = readBridgeSource();
-    // Liveness threaded INTO the read poll-loop (load-bearing), not just above it.
+    // check liveness inside the read loop, including after its first iteration.
     expectBridgeContains(src, "|| !peer.alive() || !browser.alive()");
     expectBridgeContains(src, "reason=peer_exited");
     expectBridgeContains(src, "reason=browser_exited");
-    // Refcount-gated purge on the LAST disconnect.
+    // purge browser state only on its last disconnect.
     expectBridgeContains(src, "noteBrowserConnected");
     expectBridgeContains(src, "noteBrowserDisconnected");
     expectBridgeContains(src, "m_BrowserConnCounts");
