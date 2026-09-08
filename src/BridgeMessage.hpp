@@ -9,15 +9,10 @@ namespace seal
 
 /**
  * @enum BridgeTag
- * @brief Tag classifier for a bridge message field.
- * @author Fable 5 (https://github.com/claude)
+ * @brief Map extension field tags to stored verdicts.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup FillController
  *
- * Mirrors the enumeration the extension's content script emits. The bridge maps
- * a tag to a seal::Verdict at insertion time; `text` and `other` insert nothing,
- * so neutral clicks cannot fill the map.
- *
- * @par Tag mapping (applied at insertion, see BrowserBridge.cpp mapTag)
  * | BridgeTag  | Verdict             | Stored in map? |
  * |------------|---------------------|----------------|
  * | `Password` | `Verdict::Password` | yes            |
@@ -37,142 +32,118 @@ enum class BridgeTag : std::uint8_t
 
 /**
  * @enum BridgeKind
- * @brief Message discriminator for the two bridge report shapes.
- * @author Fable 5 (https://github.com/claude)
+ * @brief Select the allowed and required keys for a report.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup FillController
  *
- * A missing `kind` field means @c Click. A click report carries the click
- * coordinates, field tag, host, path hash and `secure` bit, so http and https
- * stay distinguishable downstream. A `kind:"nav"` report carries the navigated
- * host plus the `secure`/`form` flags and no click coordinates; it drives
- * zero-gesture auto-staging and never enters the positional verdict map.
+ * Absent kind means Click. Navigation reports never enter the positional map.
+ * Keys belonging only to the other shape produce UnknownKey.
  *
- * The shape selects both the required and the allowed key set. A key legal only
- * in the other shape is rejected as @c BridgeParseError::UnknownKey, so no
- * shape-specific key crosses shapes. @ref parseBridgeMessage holds the key table.
+ * @see parseBridgeMessage
  */
 enum class BridgeKind : std::uint8_t
 {
-    /// Click report: required {v,x,y,tag,url_host,secure,url_path_hash},
-    /// optional {kind,visit}.
+    /**
+     * Click report: required {v,x,y,tag,url_host,secure,url_path_hash},
+     * optional {kind,visit}.
+     */
     Click,
-    /// Navigation report: required {v,kind,url_host,secure,form},
-    /// optional {user,visit}.
+    /**
+     * Navigation report: required {v,kind,url_host,secure,form},
+     * optional {user,visit}.
+     */
     Nav,
 };
 
 /**
  * @enum BridgeParseError
- * @brief Parser error categories surfaced to telemetry.
- * @author Fable 5 (https://github.com/claude)
+ * @brief Stable parser errors used by log consumers.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup FillController
  *
- * @ref bridgeParseErrorToken maps each value to the token that reaches the log.
- *
- * @warning These tokens are a telemetry contract. Renaming, reordering or
- *          repurposing one breaks downstream log parsers that pivot on the
- *          exact `reason=` value. Add new categories at the end and never
- *          recycle an existing name.
+ * @warning Append new categories; never rename, reorder, or reuse existing ones.
+ * @see bridgeParseErrorToken
  */
 enum class BridgeParseError : std::uint8_t
 {
     None,      ///< Parse succeeded; the output struct is populated.
     Empty,     ///< Payload was zero bytes after framing.
     TooLarge,  ///< Payload exceeded the 4 KB cap, or a string field overran its buffer.
-    /// Generic syntactic error: bad punctuation, unterminated string, a
-    /// non-object payload, or trailing bytes after the closing brace. Also
-    /// returned when the output pointer is null.
+    /**
+     * Generic syntactic error: bad punctuation, unterminated string, a
+     * non-object payload, or trailing bytes after the closing brace. Also
+     * returned when the output pointer is null.
+     */
     Malformed,
-    /// Depth budget (4) tripped. The schema is flat and every object or array
-    /// value is refused as @c BadType before the budget can matter, so this is
-    /// a residual guard that the current grammar cannot reach.
+    /**
+     * Depth budget (4) tripped. The schema is flat and every object or array
+     * value is refused as @c BadType before the budget can matter, so this is
+     * a residual guard that the current grammar cannot reach.
+     */
     DepthExceeded,
     UnknownKey,    ///< A key outside the kind-selected schema was present.
     MissingKey,    ///< One or more of the kind-selected required keys was absent.
     DuplicateKey,  ///< A schema key appeared more than once.
-    /// An object or array value. No schema key accepts a nested value, so
-    /// every such value lands here. A scalar of the wrong type (a string for an
-    /// integer key, or a number or @c true for a string key) is reported as
-    /// @c Malformed.
+    /**
+     * An object or array value. No schema key accepts a nested value, so
+     * every such value lands here. A scalar of the wrong type (a string for an
+     * integer key, or a number or @c true for a string key) is reported as
+     * `Malformed`.
+     */
     BadType,
-    /// A value parsed but failed range, length, or character-class validation
-    /// (out-of-range coordinate, bad host label, non-hex path hash, ...).
+    /**
+     * A value parsed but failed range, length, or character-class validation
+     * (out-of-range coordinate, invalid host token, non-hex path hash, ...).
+     */
     BadValue,
 };
 
 /**
  * @struct ParsedBridgeMessage
- * @brief A parsed bridge message in its canonical raw form.
- * @author Fable 5 (https://github.com/claude)
+ * @brief Parser output with defaults for fields absent from the accepted shape.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup FillController
- *
- * Plain C++ with no Qt and no @c seal::secure_string, so the parser is testable
- * without USE_QT_UI. The bridge converts this to a BridgeEntry, which holds a
- * QString host, at insertion time.
- *
- * @ref parseBridgeMessage value-initialises the whole struct before it parses,
- * so a field the accepted shape does not carry keeps the default listed below
- * rather than a value from an earlier call.
  */
 struct ParsedBridgeMessage
 {
-    std::int32_t m_Version = 0;             ///< Schema version (currently always 1).
+    std::int32_t m_Version = 0;             ///< Schema version (1 after a successful parse).
     BridgeKind m_Kind = BridgeKind::Click;  ///< Report shape; Click when `kind` is absent.
-    std::int32_t m_X = 0;  ///< Click screen X, same space as the WH_MOUSE_LL hook. Click.
-    std::int32_t m_Y = 0;  ///< Click screen Y, same space as the WH_MOUSE_LL hook. Click.
+    std::int32_t m_X = 0;  ///< Raw screen X in WH_MOUSE_LL pixels; click reports only.
+    std::int32_t m_Y = 0;  ///< Raw screen Y in WH_MOUSE_LL pixels; click reports only.
     BridgeTag m_Tag = BridgeTag::Other;  ///< Field classification reported by content.js. Click.
-    std::string m_UrlHost;               ///< Validated hostname with optional :port, <= 253 bytes.
+    std::string m_UrlHost;               ///< Host token with optional :port, <= 253 bytes.
     std::string m_UrlPathHash;           ///< 64-hex SHA-256 of the URL path. Click; no consumer.
     bool m_Secure = false;               ///< Click/Nav: page is an https/secure context.
     bool m_HasPasswordForm = false;      ///< Nav: a visible <input type=password> exists.
     bool m_HasUsernameField = false;  ///< Nav: a visible login identifier field exists (optional).
-    std::string m_Visit;  ///< Click/Nav: optional per-document page-load token, [A-Za-z0-9-]
-                          ///< <= 64. Empty when absent: a nav then fails staging closed, and
-                          ///< a click falls back to host-only binding.
+    std::string m_Visit;  ///< Optional document token; 1..64 ASCII letters, digits, or hyphens.
 };
 
 /**
- * @brief Stable string token for a parser error category.
- * @param error Error enumeration value to map.
- * @return A static string suitable for a @c reason= field in logfmt output.
- * @ingroup FillController
+ * @fn const char* bridgeParseErrorToken(BridgeParseError error)
+ * @brief Stable logfmt reason token stored for the process lifetime.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return A static token; unknown enum values return `unknown`.
  */
 const char* bridgeParseErrorToken(BridgeParseError error);
 
 /**
- * @brief Parse a single bridge message payload into its canonical form.
+ * @fn BridgeParseError parseBridgeMessage(std::string_view payload, ParsedBridgeMessage* out)
+ * @brief Parse one bounded, flat bridge report.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * Bounded and non-recursive. The top-level object must match one of the two
- * kind-selected shapes tabulated below: click (`kind` absent or `"click"`) or
- * nav (`kind:"nav"`). A key legal only in the other shape is @c UnknownKey.
+ * Accepts printable ASCII strings with only backslash and quote escapes, and
+ * signed decimal integers without leading zeros, fractions, or exponents.
+ * Nested values produce BadType; trailing bytes produce Malformed.
+ * Browser identity comes from the pipe peer and ancestry, never a payload PID.
  *
- * @par Grammar
- * Narrower than JSON on purpose. It accepts only objects, printable-ASCII
- * strings (escapes `\\` and `\"` only - no `\uXXXX`, no control bytes, no byte
- * >= 0x80) and signed decimal integers without leading zeros, exponents or
- * fractions. Every value is flat: an object or array value is refused as
- * @c BadType, so nesting never happens and the depth budget stays a residual
- * guard. Trailing bytes after the closing brace are @c Malformed.
+ * Strings use fixed stack buffers before allocating retained output fields.
+ * A host port must occur once between non-empty parts and be decimal, at most 65535.
+ * Host validation checks characters and the optional port, not DNS label structure.
+ * It preserves case and does not establish a site binding. Callers must apply the
+ * release policy after parsing. A rejected schema cell produces UnknownKey.
  *
- * @par No browser_pid on the wire
- * The originating browser is identified out of band: the bridge accepts
- * connections only from a signed @c seal-browser whose ancestor is a known
- * browser, and keys its in-memory map by that browser PID. A @c browser_pid
- * claim in the payload would only add an attacker-controlled string that has to
- * match the OS-derived PID, so the field does not exist. The resolution happens
- * server-side in @c BrowserBridge::Impl::serveConnection, which pins the peer,
- * walks its ancestry to a signed browser image, and uses that PID as the
- * verdict-map key.
- *
- * @par Allocation
- * Every string value is read into a fixed stack buffer first; an integer is
- * converted in place, straight off the payload. The parser allocates only the
- * @c std::string fields it keeps (@c url_host <= 253 bytes,
- * @c url_path_hash = 64 bytes, @c visit <= 64 bytes). It never invokes the
- * @c seal::secure_string allocator or any DPAPI primitive.
- *
- * @par Message schema (keys by report shape)
- * A `reject` cell means the key is rejected as @c UnknownKey in that shape.
  * | Key             | Click    | Nav      |
  * |-----------------|----------|----------|
  * | `v`             | required | required |
@@ -187,30 +158,21 @@ const char* bridgeParseErrorToken(BridgeParseError error);
  * | `user`          | reject   | optional |
  * | `visit`         | optional | optional |
  *
- * @par Per-field validation
- * |                    Field | Accepted value                                         |
+ * | Field                    | Accepted value                                         |
  * |--------------------------|--------------------------------------------------------|
- * |                      `v` | integer, must equal 1                                  |
- * |                   `kind` | `"click"` or `"nav"` (absent -> click)                 |
- * |                 `x`, `y` | integer in [-50000, 50000]                             |
- * |                    `tag` | password / username / email / text / other             |
- * |               `url_host` | 1..253 chars, `[A-Za-z0-9.-]` plus at most one `:port` |
- * |          `url_path_hash` | exactly 64 chars, `[0-9a-f]`                           |
+ * | `v`                      | integer, must equal 1                                  |
+ * | `kind`                   | `"click"` or `"nav"` (absent -> click)                 |
+ * | `x`, `y`                 | integer in [-50000, 50000]                             |
+ * | `tag`                    | password / username / email / text / other             |
+ * | `url_host`               | 1..253 chars, `[A-Za-z0-9.-]` plus at most one `:port` |
+ * | `url_path_hash`          | exactly 64 chars, `[0-9a-f]`                           |
  * | `secure`, `form`, `user` | integer 0 or 1                                         |
- * |                  `visit` | 1..64 chars, `[A-Za-z0-9-]`                            |
- * Whole payload <= 4096 bytes. A `:port` must sit between two non-empty parts,
- * appear once, and parse as a decimal number <= 65535.
+ * | `visit`                  | 1..64 chars, `[A-Za-z0-9-]`                            |
  *
- * @param payload  Raw UTF-8 JSON bytes from the pipe. An empty payload is
- *                 @c Empty; more than 4096 bytes is @c TooLarge.
- * @param out      Receives the parsed message. Value-initialised once the
- *                 payload clears the size checks, so no field carries over
- *                 from an earlier call. Read it only when the call returns
- *                 @c None; on error the contents are unspecified. A null
- *                 pointer returns @c Malformed.
- * @return @c BridgeParseError::None on success; otherwise the most-specific
- *         error category.
- * @ingroup FillController
+ * @param payload Empty yields Empty; more than 4096 bytes yields TooLarge.
+ * @param out Null yields Malformed. Initialized after size checks; read only on
+ *            success, since error output is unspecified.
+ * @return None on success; otherwise the most specific error category.
  */
 BridgeParseError parseBridgeMessage(std::string_view payload, ParsedBridgeMessage* out);
 
