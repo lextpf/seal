@@ -13,21 +13,20 @@ namespace seal
 
 /**
  * @struct DPAPIGuard
- * @brief RAII guard for DPAPI in-memory encryption of secure strings.
- * @author Alex (https://github.com/lextpf)
+ * @brief Apply SAME_PROCESS DPAPI protection to a borrowed secure string.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Memory
  *
- * Wraps CryptProtectMemory and CryptUnprotectMemory with SAME_PROCESS scope, so only this
- * process can decrypt the buffer. The buffer is encrypted on construction and lies in
- * plaintext only inside an explicit unprotect/reprotect window.
+ * The buffer must outlive the guard. The protected size includes DPAPI block padding.
+ * protect() and unprotect() leave payload pages PAGE_READWRITE.
  *
- * @par Padding
- * CryptProtectMemory requires the buffer size to be a multiple of
- * CRYPTPROTECTMEMORY_BLOCK_SIZE. protect() pads the backing vector up to that multiple and
- * unprotect() restores the size recorded before the padding, so `size()` reports the padded
- * length while the buffer is protected.
+ * | Method      | No-op state                  | Successful change        |
+ * |-------------|------------------------------|--------------------------|
+ * | protect()   | Absent, empty or protected   | Pad and encrypt          |
+ * | unprotect() | Absent, empty or unprotected | Decrypt and restore size |
+ * | reprotect() | Absent, empty or protected   | Same as protect()        |
  *
- * ## :material-shield-lock: Lifecycle
+ * Both boolean methods also return false on DPAPI failure. reprotect() discards this result.
  *
  * ```mermaid
  * ---
@@ -41,44 +40,35 @@ namespace seal
  *     [*] --> Unprotected : ctor(ptr), buffer empty or encryption fails
  *     Unprotected --> Protected : protect() / reprotect()
  *     Protected --> Unprotected : unprotect()
- *     Protected --> Detached : ~DPAPIGuard, unprotects first
+ *     Protected --> Detached : ~DPAPIGuard, attempts unprotect
  *     Unprotected --> Detached : ~DPAPIGuard
  *     Detached --> [*]
  * ```
  *
- * @par Guard operations
- * | Method        | No-op (returns false) when      | On success                  |
- * |---------------|---------------------------------|-----------------------------|
- * | `protect()`   | no buffer / empty / protected   | pad, encrypt; protected=1   |
- * | `unprotect()` | no buffer / empty / unprotected | decrypt, unpad; protected=0 |
- * | `reprotect()` | (alias for `protect()`)         | see `protect()`             |
- *
- * @note Destruction unprotects and detaches, but never wipes. Wiping is up to the caller,
- *       through `Cryptography::cleanseString()` or the secure string's own destructor.
- * @note protect() and unprotect() set the payload to PAGE_READWRITE and leave it there.
- *       Neither one restores PAGE_NOACCESS.
- * @warning Move assignment releases the current guard first, so the buffer that guard held
- *          is decrypted and stays in plaintext.
- *
- * @see ScopedDpapiUnprotect
+ * @warning Destruction and move assignment attempt to unprotect the released buffer without
+ *          wiping it. Failure can leave ciphertext. The owner must wipe either state.
  */
 template <class SecStr>
 struct DPAPIGuard
 {
-    /// @brief Code-unit type of the guarded string, deduced from `SecStr::data()`.
     using char_type = std::remove_pointer_t<decltype(std::declval<SecStr>().data())>;
 
     SecStr* m_Str = nullptr;    ///< Non-owning pointer to the guarded secure string.
     bool m_Protected = false;   ///< Whether the buffer is currently DPAPI-encrypted.
     size_t m_OriginalSize = 0;  ///< Pre-pad logical size, restored after unprotect.
 
-    /// @brief Create a detached guard. It protects nothing until it is move-assigned.
+    /**
+     * @fn DPAPIGuard()
+     * @brief Create a detached guard that protects nothing until move assignment.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     DPAPIGuard() = default;
     /**
-     * @brief Attach to @p str and protect it at once.
+     * @fn explicit DPAPIGuard(SecStr* str)
+     * @brief Attempt protection on attachment.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * @param str Secure string to guard. It must outlive this object. A null pointer
-     *            leaves the guard detached, and an empty string leaves it unprotected.
+     * @param str Must outlive the guard. nullptr leaves it detached; empty leaves it unprotected.
      */
     explicit DPAPIGuard(SecStr* str)
         : m_Str(str)
@@ -86,11 +76,13 @@ struct DPAPIGuard
         protect();
     }
 
-    /// @brief Copy construction is deleted: one guard owns one protection state.
     DPAPIGuard(const DPAPIGuard&) = delete;
-    /// @brief Copy assignment is deleted: one guard owns one protection state.
     DPAPIGuard& operator=(const DPAPIGuard&) = delete;
-    /// @brief Take over the state of @p o and leave @p o detached.
+    /**
+     * @fn DPAPIGuard(DPAPIGuard&& o) noexcept
+     * @brief Take over the state of o and leave o detached.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     DPAPIGuard(DPAPIGuard&& o) noexcept
         : m_Str(o.m_Str),
           m_Protected(o.m_Protected),
@@ -100,8 +92,11 @@ struct DPAPIGuard
         o.m_Protected = false;
         o.m_OriginalSize = 0;
     }
-    /// @brief Release the current guard, then take over the state of @p o.
-    /// Releasing decrypts the buffer held so far and leaves it in plaintext.
+    /**
+     * @fn DPAPIGuard& operator=(DPAPIGuard&& o) noexcept
+     * @brief Release the old guard without wiping its buffer, then take over the source guard.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     DPAPIGuard& operator=(DPAPIGuard&& o) noexcept
     {
         if (this != &o)
@@ -117,8 +112,11 @@ struct DPAPIGuard
         return *this;
     }
 
-    /// @brief Unprotect when protected, then detach. The buffer is not wiped and any
-    /// exception is swallowed, so teardown never throws.
+    /**
+     * @fn ~DPAPIGuard()
+     * @brief Attempt to unprotect without wiping; exceptions are swallowed.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     ~DPAPIGuard()
     {
         try
@@ -131,21 +129,13 @@ struct DPAPIGuard
     }
 
     /**
-     * @brief Encrypt the guarded buffer in place with CryptProtectMemory.
+     * @fn bool protect()
+     * @brief Pad and encrypt in place, with possible reallocation.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Records the logical size, pads the buffer up to the DPAPI block size, sets the
-     * payload to PAGE_READWRITE and encrypts. A no-op when there is no buffer, when the
-     * buffer is empty, or when it is already protected.
-     *
-     * @pre The payload is PAGE_READWRITE on entry. The pad grows the string before the
-     *      read-write flip, so a buffer left at PAGE_NOACCESS by protect_noaccess() must
-     *      be opened with an RWGuard first. unprotect() has no such precondition; it
-     *      flips first.
-     * @return `true` when DPAPI encryption succeeded; `false` on failure or no-op.
-     * @note The padding grows the secure string, so the call can reallocate it and
-     *       invalidate every pointer taken from data() beforehand.
-     * @warning When CryptProtectMemory fails, the padding stays in place: only unprotect()
-     *          removes it, and unprotect() does nothing on an unprotected buffer.
+     * @return False on failure or no-op; see the type table.
+     * @pre Payload pages are PAGE_READWRITE; padding precedes the protection change.
+     * @warning Encryption failure leaves padding in place and the buffer unprotected.
      */
     bool protect()
     {
@@ -164,16 +154,13 @@ struct DPAPIGuard
     }
 
     /**
-     * @brief Decrypt the guarded buffer in place with CryptUnprotectMemory.
+     * @fn bool unprotect()
+     * @brief Decrypt and restore the logical size, wiping discarded padding.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Sets the payload to PAGE_READWRITE and decrypts. On success it strips the DPAPI block
-     * padding by restoring the logical size captured at protect() time; that shrink zeroes
-     * the discarded code units. A no-op when there is no buffer, when the buffer is empty,
-     * or when it is not protected.
+     * Shrinks without allocation; ScopedDpapiUnprotect relies on this during noexcept construction.
      *
-     * @return `true` when DPAPI decryption succeeded; `false` on failure or no-op.
-     * @note The call only shrinks, so it never allocates. ScopedDpapiUnprotect relies on
-     *       that: its constructor is `noexcept` and calls this function.
+     * @return False on failure or no-op; see the type table.
      */
     bool unprotect()
     {
@@ -192,13 +179,14 @@ struct DPAPIGuard
         return false;
     }
 
-    /// @brief Re-encrypt the buffer (convenience alias for protect()).
-    /// The result is discarded, so a failed re-encryption is not observable here and
-    /// leaves the buffer in plaintext.
+    /**
+     * @fn void reprotect()
+     * @brief Discard the protection result; encryption failure leaves the buffer plaintext.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     void reprotect() { protect(); }
 
 private:
-    /// @brief Grow the buffer to the next CRYPTPROTECTMEMORY_BLOCK_SIZE multiple.
     void padToBlockSize()
     {
         if (!m_Str || m_Str->empty())
@@ -213,7 +201,6 @@ private:
         }
     }
 
-    /// @brief Unprotect when protected, then detach. The buffer is never wiped here.
     void release()
     {
         if (m_Str && m_Protected)
@@ -227,21 +214,12 @@ private:
 
 /**
  * @struct scoped_console
- * @brief RAII console mode guard that saves and restores console input mode.
- * @author Alex (https://github.com/lextpf)
+ * @brief Restore a borrowed handle's console mode on scope exit.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup CLI
  *
- * Snapshots the current console mode on construction and restores it on destruction, so the
- * terminal is never left altered after masked input or mouse-enabled hit-testing.
- *
- * @par Ownership
- * The handle is borrowed. The guard never closes it, and it must stay valid for the guard's
- * whole lifetime.
- *
- * @warning When GetConsoleMode() fails, for example because the handle is a redirected
- *          pipe, the requested mode is never applied, `changed` stays false and the
- *          destructor does nothing. Nothing reports the failure, so a caller that depends
- *          on the new mode must verify it.
+ * The handle must outlive the guard and is never closed here. Failed GetConsoleMode or
+ * SetConsoleMode leaves `changed` false; callers that require the mode must check it.
  */
 struct scoped_console
 {
@@ -250,12 +228,9 @@ struct scoped_console
     bool changed{false};  ///< Whether the constructor applied the mode and must restore it.
 
     /**
-     * @brief Snapshot the current console mode and apply @p mode.
-     *
-     * @p mode replaces the whole mode word; it is not OR-ed into the saved value.
-     *
-     * @param handle Console input or output handle.
-     * @param mode   Desired console mode flags (e.g. ENABLE_MOUSE_INPUT).
+     * @fn scoped_console(HANDLE handle, DWORD mode)
+     * @brief Replace the whole console mode word, then restore it on destruction.
+     * @author Alex (<https://github.com/lextpf>)
      */
     scoped_console(HANDLE handle, DWORD mode)
         : h(handle)
@@ -268,7 +243,11 @@ struct scoped_console
             changed = !!SetConsoleMode(h, inNew);
         }
     }
-    /// @brief Restore the saved mode, but only when the constructor changed it.
+    /**
+     * @fn ~scoped_console()
+     * @brief Restore the saved mode, but only when the constructor changed it.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     ~scoped_console()
     {
         if (changed)
@@ -280,15 +259,11 @@ struct scoped_console
 
 /**
  * @struct EvpCipherCtx
- * @brief RAII owner for an OpenSSL EVP_CIPHER_CTX.
- * @author Alex (https://github.com/lextpf)
+ * @brief Own a non-null OpenSSL cipher context until scope exit.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Crypto
  *
- * Allocates a cipher context on construction and frees it on destruction. Neither copyable
- * nor movable, so the context has a single owner and cannot outlive its scope. Construction
- * either throws or leaves `p` non-null, so no call site needs a null check.
- *
- * @throw std::runtime_error when EVP_CIPHER_CTX_new() fails.
+ * @throw std::runtime_error When EVP_CIPHER_CTX_new() fails.
  */
 struct EvpCipherCtx
 {
@@ -316,15 +291,11 @@ struct EvpCipherCtx
 
 /**
  * @struct EvpMdCtx
- * @brief RAII owner for an OpenSSL EVP_MD_CTX.
- * @author Alex (https://github.com/lextpf)
+ * @brief Own a non-null OpenSSL digest context until scope exit.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Crypto
  *
- * Allocates a digest context on construction and frees it on destruction. Neither copyable
- * nor movable, so the context has a single owner and cannot outlive its scope. Construction
- * either throws or leaves `p` non-null, so no call site needs a null check.
- *
- * @throw std::runtime_error when EVP_MD_CTX_new() fails.
+ * @throw std::runtime_error When EVP_MD_CTX_new() fails.
  */
 struct EvpMdCtx
 {
