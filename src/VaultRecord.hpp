@@ -10,15 +10,14 @@ namespace seal
 
 /**
  * @struct VaultRecord
- * @brief One record in the vault index.
- * @author Alex (https://github.com/lextpf)
+ * @brief Indexed platform name with separately sealed credentials.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Vault
  *
- * The platform name and the credential pair are two separate AES-256-GCM
- * packets. Only the platform name is decrypted on load, so the UI can list
- * accounts.
- *
- * This struct is one record; a vault frame wraps N of them.
+ * The frame magic is SVH2; each AES-256-GCM packet uses seal as its AAD magic.
+ * Packets authenticate their own payloads. The outer record count, ordering and association
+ * between platform and credential packets have no shared authentication tag.
+ * loadVaultIndex() removes whitespace and hex-decodes the frame; saveVault() writes it.
  *
  * @verbatim
  * File frame, hex-encoded to a single text line on disk:
@@ -34,59 +33,39 @@ namespace seal
  *   +------------+-----------------+------------+-------------------+
  * @endverbatim
  *
- * The frame magic "SVH2" is distinct from the per-packet AAD magic "seal"
- * carried inside each AES-256-GCM packet. loadVaultIndex() strips whitespace
- * and hex-decodes the blob before parsing this framing; saveVault() writes it.
- *
- * @par Two-tier decryption lifecycle
- * @code
+ * @code{.text}
  * loadVaultIndex()            -> decrypts platform name; leaves credential sealed
  * decryptCredentialOnDemand() -> decrypts credential   -> DecryptedCredential
  * @endcode
- *
- * @see loadVaultIndex, saveVault, encryptCredential
  */
 struct VaultRecord
 {
-    /// Cleartext platform name (in-memory only, UTF-8; decrypted from encryptedPlatform on load).
-    /// Deliberately std::string and not secure_string: the vault list view shows platform names
-    /// and plain string operations (.find(), .c_str(), fromUtf8) run on them. Locked memory is
-    /// reserved for actual secrets: passwords, usernames, and the master key.
+    /// UTF-8 display name; pageable storage reserves locked pages for credential secrets.
     std::string platform;
     std::vector<unsigned char> encryptedPlatform;  ///< AES-256-GCM packet of platform name
     std::vector<unsigned char> encryptedBlob;      ///< AES-256-GCM packet of "username\0password"
-    /// Set by encryptCredential() and by workspace mutations; cleared after a
-    /// successful save. It does not decide whether the record is written:
-    /// saveVault() writes every non-deleted record. It only forces saveVault()
-    /// to re-encrypt the platform name instead of reusing encryptedPlatform.
+    /// Forces platform re-encryption on save; credentials are always copied verbatim.
     bool dirty = false;
-    /// Soft-deleted: skipped by saveVault() and by the list model. The record
-    /// stays in memory, with both packets intact, until a successful save
-    /// drops it from the workspace.
+    /// Hidden until a successful save removes it and its packets from the workspace.
     bool deleted = false;
 };
 
 /**
  * @struct DecryptedCredential
- * @brief Temporary holder for a decrypted credential pair.
- * @author Alex (https://github.com/lextpf)
+ * @brief Hold a credential pair in locked, guarded memory until use completes.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Vault
  *
- * Both fields live in locked, guarded memory. Call cleanse(), or let the
- * destructor run, immediately after use. The struct is move-only, because
- * basic_secure_string deletes its copy operations.
+ * Call cleanse() or let destruction wipe both fields immediately after use. Page locking is
+ * best-effort, and these fields are plaintext until wiped; this type adds no DPAPI protection.
+ * Packet plaintext requires a NUL separator; a final NUL permits an empty password.
  *
- * @par Credential packet plaintext (inside the AES-256-GCM blob)
  * @verbatim
  *   +-------------------+------+-------------------+
  *   | username (UTF-8)  | 0x00 | password (UTF-8)  |
  *   +-------------------+------+-------------------+
  *                   one NUL separator
  * @endverbatim
- * A blob with no NUL is rejected as malformed; a NUL at the very end yields
- * an empty password field.
- *
- * @see decryptCredentialOnDemand
  */
 struct DecryptedCredential
 {
@@ -96,11 +75,9 @@ struct DecryptedCredential
     seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> password;
 
     /**
-     * @brief Wipe both fields and release their locked pages.
-     *
-     * Each field is flipped to read-write, zeroed, and cleared. The call is
-     * idempotent and leaves the object usable but empty, so the destructor
-     * repeats no work.
+     * @fn void cleanse()
+     * @brief Wipe both fields and release locked pages; repeated calls are safe.
+     * @author Alex (<https://github.com/lextpf>)
      */
     void cleanse();
 };
