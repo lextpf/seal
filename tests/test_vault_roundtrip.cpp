@@ -19,7 +19,7 @@ namespace
 
 namespace fs = std::filesystem;
 
-// Test-only password; not a secret. Mirrors the wide master-password type.
+// synthetic password with the production wide-string type.
 seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> goldenPassword()
 {
     return seal::utils::utf8ToSecureWide("golden-master-pw");
@@ -63,9 +63,7 @@ void writeAllBytes(const fs::path& p, const std::vector<unsigned char>& bytes)
 class VaultRoundtripTest : public ::testing::Test
 {
 protected:
-    // Build the test vault once per suite, in the current packet format,
-    // into a private temp file. Self-contained: no committed fixture to keep in
-    // sync and nothing to regenerate by hand.
+    // generate a temporary vault once per suite with the active packet format.
     static void SetUpTestSuite()
     {
         s_goldenVault =
@@ -87,7 +85,7 @@ protected:
         fs::remove(s_goldenVault, ec);
     }
 
-    // A throwaway copy for tests that mutate the vault on disk.
+    // a throwaway copy for tests that mutate the vault on disk.
     fs::path tempCopyOfGoldenVault() const
     {
         const fs::path dst =
@@ -112,7 +110,7 @@ TEST_F(VaultRoundtripTest, SaveThenReloadIsEquivalent)
     for (size_t i = 0; i < reloaded.size(); ++i)
     {
         EXPECT_EQ(reloaded[i].platform, records[i].platform);
-        // Untouched records must reuse the encrypted packets byte-for-byte.
+
         EXPECT_EQ(reloaded[i].encryptedBlob, records[i].encryptedBlob);
     }
     fs::remove(tmp);
@@ -156,7 +154,7 @@ TEST_F(VaultRoundtripTest, CorruptMagicIsRejected)
     const fs::path tmp = tempCopyOfGoldenVault();
     auto hexBytes = readAllBytes(tmp);
     ASSERT_GE(hexBytes.size(), 2u);
-    // First hex byte pair encodes 'S' of SVH2; flip it.
+    // first hex byte pair encodes 'S' of SVH2; flip it.
     hexBytes[0] = (hexBytes[0] == '0') ? '1' : '0';
     writeAllBytes(tmp, hexBytes);
     EXPECT_THROW((void)seal::loadVaultIndex(tmp, pw), std::runtime_error);
@@ -169,7 +167,7 @@ TEST_F(VaultRoundtripTest, TruncatedPayloadIsRejected)
     const fs::path tmp = tempCopyOfGoldenVault();
     auto hexBytes = readAllBytes(tmp);
     hexBytes.resize(hexBytes.size() / 2);
-    // Keep even length so hex decode succeeds and framing (not hex) fails.
+    // keep even length so hex decode succeeds and framing (not hex) fails.
     if (hexBytes.size() % 2 != 0)
     {
         hexBytes.pop_back();
@@ -255,7 +253,7 @@ TEST_F(VaultRoundtripTest, RekeySwapsPasswordAtomicallyAndUpgradesPackets)
     for (size_t i = 0; i < records.size(); ++i)
     {
         EXPECT_EQ(records[i].platform, kGoldenEntries[i].platform);
-        // Every packet must now carry the self-describing header.
+
         ASSERT_GE(records[i].encryptedBlob.size(), 4u);
         EXPECT_EQ(std::memcmp(records[i].encryptedBlob.data(), "seal", 4), 0);
         auto cred = seal::decryptCredentialOnDemand(records[i], newPw);
@@ -327,7 +325,6 @@ TEST(VaultLookupTest, MatchPlatformExactCaseInsensitivePrefixAndAmbiguity)
     auto empty = seal::matchPlatform(names, "");
     EXPECT_EQ(empty.outcome, seal::MatchOutcome::NotFound);
 
-    // Exact match wins even when it is also a prefix of others.
     const std::vector<std::string> shadow{"Go", "Google"};
     auto shadowed = seal::matchPlatform(shadow, "go");
     EXPECT_EQ(shadowed.outcome, seal::MatchOutcome::Found);
