@@ -22,10 +22,6 @@ bool CredentialSession::isSet() const noexcept
 
 void CredentialSession::adopt(SecureWide&& password)
 {
-    // Release any previous key, then take ownership and rebuild the guard over
-    // the new buffer so it stays protected while idle. The move steals the
-    // locked allocation and leaves the caller's buffer empty. The guard keeps a
-    // raw pointer to m_Password - hence the deleted copy/move on this class.
     clear();
     m_Password = std::move(password);
     m_Guard = DPAPIGuard<SecureWide>(&m_Password);
@@ -34,7 +30,7 @@ void CredentialSession::adopt(SecureWide&& password)
 
 void CredentialSession::clear()
 {
-    m_Guard = DPAPIGuard<SecureWide>{};  // drop the guard before wiping the buffer
+    m_Guard = DPAPIGuard<SecureWide>{};  // Drop the guard before wiping the buffer.
     seal::Cryptography::cleanseString(m_Password);
     m_Set = false;
 }
@@ -42,10 +38,6 @@ void CredentialSession::clear()
 CredentialSession::Access::Access(CredentialSession& session) noexcept
     : m_Session(session)
 {
-    // Unprotect only when a key is held; on an unset session ok() stays false so
-    // callers never read a non-existent secret. unprotect() also returns false
-    // for an empty buffer (DPAPI cannot protect one) and for an already-open
-    // window, so neither case claims plaintext.
     if (m_Session.m_Set)
     {
         m_Ok = m_Session.m_Guard.unprotect();
@@ -54,9 +46,7 @@ CredentialSession::Access::Access(CredentialSession& session) noexcept
 
 CredentialSession::Access::~Access()
 {
-    // Best-effort: a destructor must not throw. When the re-protect fails the
-    // guard stays unprotected, so every later unlock() reports ok() == false and
-    // the caller has to re-adopt the password.
+    // Destruction cannot report protection failure; a fresh adopt is then required.
     if (m_Ok)
     {
         try
