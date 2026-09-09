@@ -19,15 +19,13 @@
 namespace
 {
 
-// Frame: magic(4) | version(1) | packetLen(4, big endian) | packet | SHA-256(32).
-// The digest is an unkeyed integrity check over the packet only; the packet's
-// own GCM tag is what authenticates it. Minimum frame is 4+1+4+32 = 41 bytes.
+// frame: magic(4) | version(1) | packetLen(4, big endian) | packet | SHA-256(32).
+// SHA-256 checks corruption; the packet's GCM tag authenticates.
 constexpr std::array<unsigned char, 4> kProfileMagic{'S', 'F', 'P', '1'};
 constexpr unsigned char kProfileVersion = 1;
 constexpr std::size_t kDigestSize = 32;
 constexpr std::size_t kMaximumProfileBytes = 4096;
-// Fixed plaintext sealed into every profile. The profile stores no password and
-// no credential; a correct decrypt of these 32 bytes is the whole proof.
+// a fixed verifier proves decryption without storing credentials or a password.
 constexpr std::array<unsigned char, 32> kVerifier{
     's', 'e', 'a', 'l', '-', 'f', 'o', 'l', 'd', 'e', 'r', '-', 'p', 'r', 'o', 'f',
     'i', 'l', 'e', '-', 'v', 'e', 'r', 'i', 'f', 'i', 'e', 'r', '-', 'v', '1', '\0',
@@ -124,8 +122,7 @@ ParsedProfile parseProfile(const std::filesystem::path& path)
     }
     std::vector<unsigned char> frame(static_cast<std::size_t>(fileSize));
     input.read(reinterpret_cast<char*>(frame.data()), static_cast<std::streamsize>(frame.size()));
-    // Require exactly the stated size and then EOF: a file that shrank or grew
-    // between the size query and the read is rejected instead of half-parsed.
+    // reject size changes between the query and read.
     if (!input || input.peek() != std::ifstream::traits_type::eof())
     {
         parsed.message = "Could not read the folder profile.";
@@ -145,9 +142,7 @@ ParsedProfile parseProfile(const std::filesystem::path& path)
         return parsed;
     }
 
-    // The declared length must consume the frame exactly: no slack before the
-    // digest and no bytes after it. The size floor checked above keeps
-    // "frame.size() - position - kDigestSize" from wrapping.
+    // require an exact frame length; the checked size floor prevents subtraction underflow.
     const std::uint32_t packetLength =
         readU32BE(std::span<const unsigned char>(frame).subspan(position, 4));
     position += 4;
@@ -174,8 +169,6 @@ ParsedProfile parseProfile(const std::filesystem::path& path)
         return parsed;
     }
 
-    // Cap-validate the embedded KDF header now, so a hostile profile cannot
-    // make a later verify call run an oversized scrypt.
     try
     {
         (void)seal::Cryptography::parsePacketHeader(parsed.packet);
@@ -222,9 +215,7 @@ bool writeProfile(const std::filesystem::path& profilePath,
         setError(errorMessage, "The folder profile destination could not be inspected safely.");
         return false;
     }
-    // create and replace are exact mirrors: create refuses an existing
-    // destination, replace refuses a missing one. Neither ever creates the
-    // other's case by accident.
+    // create requires absence; replace requires presence.
     if ((!replaceExisting && destinationExists) || (replaceExisting && !destinationExists))
     {
         setError(errorMessage,
@@ -269,8 +260,7 @@ bool writeProfile(const std::filesystem::path& profilePath,
         frame.insert(frame.end(), digest.begin(), digest.end());
         seal::Cryptography::cleanseString(packet);
 
-        // CREATE_NEW closes the check/open race for the deterministic staging
-        // name: an unrelated file or reparse point can never be truncated.
+        // CREATE_NEW prevents truncating an occupied staging name after the probe.
         HANDLE output = CreateFileW(temporaryPath.c_str(),
                                     GENERIC_WRITE,
                                     0,
@@ -380,10 +370,7 @@ ProtectedFolderProfileVerifyResult verifyProtectedFolderProfile(
         catch (const std::exception& error)
         {
             Cryptography::cleanseString(parsed.packet);
-            // The crypto layer reports a bad password and a tampered packet the
-            // same way, so the message prefix is the only signal that separates
-            // "re-prompt" from "this folder is damaged". Keep the prefix in step
-            // with Cryptography::decryptPacket.
+            // keep this retry discriminator aligned with the crypto authentication-error prefix.
             const std::string message = error.what();
             if (message.starts_with("Authentication failed"))
             {
