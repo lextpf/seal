@@ -16,7 +16,6 @@ using namespace std::string_literals;
 namespace
 {
 
-// Encrypt `plaintext` (as raw bytes) under `password`; returns the packet.
 template <class Pwd>
 std::vector<unsigned char> encryptText(const std::string& plaintext, const Pwd& password)
 {
@@ -24,7 +23,7 @@ std::vector<unsigned char> encryptText(const std::string& plaintext, const Pwd& 
     return seal::Cryptography::encryptPacket(std::span<const unsigned char>(plainBytes), password);
 }
 
-// A copy of `packet` with its middle byte flipped (breaks GCM authentication).
+// a copy of `packet` with its middle byte flipped (breaks GCM authentication).
 std::vector<unsigned char> corruptMiddle(std::vector<unsigned char> packet)
 {
     packet[packet.size() / 2] ^= 0xFF;
@@ -201,8 +200,7 @@ TEST_F(CryptoTest, UnicodeText)
 
 TEST_F(CryptoTest, WrongMagicRejected)
 {
-    // A packet whose 4-byte magic is not the live "seal" header must not parse,
-    // even when its length is otherwise plausible.
+    // reject wrong magic even when packet length is valid.
     std::vector<unsigned char> badPacket(
         seal::cfg::MAGIC_LEN + seal::cfg::SALT_LEN + seal::cfg::IV_LEN + seal::cfg::TAG_LEN, 0);
     badPacket[0] = 'x';
@@ -242,8 +240,7 @@ TEST_F(CryptoTest, TamperedHeaderFailsAuthentication)
         std::span<const unsigned char>(reinterpret_cast<const unsigned char*>(msg.data()),
                                        msg.size()),
         pw);
-    // Flip the KDF parameter bytes (5..7) one at a time: every flip must fail
-    // either header validation (out-of-cap) or GCM authentication.
+    // mutate each KDF byte (5..7); header validation or GCM authentication must reject it.
     for (size_t i = 5; i < 8; ++i)
     {
         auto bad = packet;
