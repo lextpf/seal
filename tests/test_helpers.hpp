@@ -1,6 +1,5 @@
 #pragma once
 
-// Include headers to access internal functions
 #include "../src/Clipboard.hpp"
 #include "../src/Console.hpp"
 #include "../src/Cryptography.hpp"
