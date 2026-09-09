@@ -26,8 +26,7 @@ SecureWide makePw(const wchar_t* s)
 std::filesystem::path makeNestedTree()
 {
     namespace fs = std::filesystem;
-    // A deep+wide tree: depth 3, several files per level. Pre-fix, encrypting
-    // this could deadlock the bounded same-pool recursion.
+    // depth and sibling files exercise the bounded-pool recursion path.
     fs::path root = fs::temp_directory_path() / "seal_fileops_test_tree";
     fs::remove_all(root);
     for (const char* sub : {"", "a", "b", "a/aa", "a/ab", "b/ba", "a/aa/aaa"})
@@ -67,12 +66,10 @@ TEST(FileOperationsDirectoryTest, NestedTreeEncryptDecryptRoundTripCompletes)
 
     SecureWide pw = makePw(L"correct horse battery staple");
 
-    // Encrypt the whole tree. Must COMPLETE (no hang) and produce one .seal per file.
     EXPECT_TRUE(seal::FileOperations::processDirectory(root.string(), pw, true));
     EXPECT_EQ(countByExt(root, ".seal"), plainCount);
     EXPECT_EQ(countByExt(root, ".txt"), 0u);
 
-    // Decrypt the whole tree back. Round-trip restores the plaintext files.
     EXPECT_TRUE(seal::FileOperations::processDirectory(root.string(), pw, true));
     EXPECT_EQ(countByExt(root, ".txt"), plainCount);
     EXPECT_EQ(countByExt(root, ".seal"), 0u);
