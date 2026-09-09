@@ -106,7 +106,7 @@ TEST_F(HexUtilsTest, FromHexEmptyString)
 
     bool success = seal::utils::from_hex(hex, result);
 
-    // Empty input is rejected by design (no valid hex data).
+    // empty input is rejected by design (no valid hex data).
     EXPECT_FALSE(success);
     EXPECT_TRUE(result.empty());
 }
@@ -194,7 +194,7 @@ class HexTokenExtractionTest : public ::testing::Test
 
 TEST_F(HexTokenExtractionTest, BasicExtraction)
 {
-    // Minimum (SALT_LEN + IV_LEN + TAG_LEN) * 2 = 88 hex chars.
+    // minimum (SALT_LEN + IV_LEN + TAG_LEN) * 2 = 88 hex chars.
     std::string longHex =
         "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
         "abcdef1234567890abcdef1234567890abcdef";
@@ -207,7 +207,7 @@ TEST_F(HexTokenExtractionTest, BasicExtraction)
 
 TEST_F(HexTokenExtractionTest, MultipleTokens)
 {
-    // Two valid hex tokens (each >= 88 chars).
+    // two valid hex tokens (each >= 88 chars).
     std::string hex1 =
         "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
         "abcdef1234567890abcdef1234567890abcdef";
