@@ -15,20 +15,9 @@ namespace seal
 
 /**
  * @class VaultListModel
- * @brief Filtered, sorted view of the vault records for the QML list.
- * @author Alex (https://github.com/lextpf)
+ * @brief Present borrowed vault records as filtered, sorted, non-secret QML rows.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup VaultModel
- *
- * Presents the in-memory vault as a flat list a QML `ListView` or `Repeater`
- * binds to directly. Each row carries the cleartext platform name, fixed masked
- * placeholders, and the real index into the backing `std::vector<VaultRecord>`.
- * The model borrows that vector through setRecords(): it owns no record data
- * and never mutates it. Every mutation goes through AppViewModel.
- *
- * QML sees the `count` property and the roles below, and nothing else: the
- * model exposes no invokable methods, and a source-scan test enforces that.
- *
- * ## :material-filter: Row pipeline
  *
  * @verbatim
  *   backing vector        rebuildFilteredIndices()        QML rows
@@ -39,44 +28,27 @@ namespace seal
  *   +------------------+  +--------------------+   m_FilteredIndices
  * @endverbatim
  *
- * setFilter() matches a case-insensitive substring against the stored platform
- * string, not against the DisplayPlatform label: the filter `com` still matches
- * a record whose chip reads `github`. An empty filter keeps every non-deleted
- * record. Ordering runs over the survivors of the filter. Both steps rerun on
- * every refresh(), so a row number is valid only until the next one.
+ * Filtering matches stored platform names, so `com` matches a chip labeled `github`.
+ * Refresh after every mutation, including save: erasing soft deletes shifts record
+ * indices without a generation bump. Refresh invalidates all QModelIndex and row values.
+ * Until refreshed, a changed generation makes `data()` return invalid values.
+ * Row counts and mapping helpers still use the last snapshot; they do not validate
+ * the generation. Refresh before using a mapped index to select or mutate a record.
  *
- * ## :material-sync: Model updates and staleness
+ * | Role            | QML key           | Value                            |
+ * |-----------------|-------------------|----------------------------------|
+ * | Platform        | `platform`        | Plaintext platform label         |
+ * | MaskedUsername  | `maskedUsername`  | 8 U+2022 bullets                 |
+ * | MaskedPassword  | `maskedPassword`  | 12 U+2022 bullets                |
+ * | RecordIndex     | `recordIndex`     | Full record index                |
+ * | BrandIconPath   | `brandIconPath`   | Resource path or empty           |
+ * | SiteBinding     | `siteBinding`     | Strict browser host or empty     |
+ * | DisplayPlatform | `displayPlatform` | Registrable label without suffix |
  *
- * The model never observes its owner. Call refresh() after any mutation (add,
- * edit, delete, load, save): it runs one `beginResetModel` / `endResetModel`
- * cycle that invalidates every QModelIndex and every row index handed out
- * earlier. A successful CredentialWorkspace::save() needs one too: it erases
- * soft-deleted records and shifts later indices without bumping the generation
- * counter.
+ * Masks do not depend on secret length. The model exposes no invokable methods
+ * and never decrypts or mutates credentials.
  *
- * setRecords() borrows the owner's generation counter, and refresh() snapshots
- * it. While the live counter differs from that snapshot the row-to-record map
- * is stale, so data() returns an invalid QVariant for every row instead of
- * reading a shifted record. A null counter disables the check.
- *
- * @par Roles exposed to QML
- * | Roles enum      | roleNames() key   | data() returns                    | Secret |
- * |-----------------|-------------------|-----------------------------------|--------|
- * | Platform        | `platform`        | cleartext platform name           | no     |
- * | MaskedUsername  | `maskedUsername`  | 8 U+2022 glyphs (fixed)           | masked |
- * | MaskedPassword  | `maskedPassword`  | 12 U+2022 glyphs (fixed)          | masked |
- * | RecordIndex     | `recordIndex`     | real index into the record vector | n/a    |
- * | BrandIconPath   | `brandIconPath`   | qrc brand-icon path, or empty     | no     |
- * | SiteBinding     | `siteBinding`     | strict browser host, or empty     | no     |
- * | DisplayPlatform | `displayPlatform` | registrable label, no suffix      | no     |
- *
- * The masked roles return a fixed-width run of U+2022 bullet characters that is
- * independent of the real secret length; plaintext never reaches QML.
- *
- * @note Not internally synchronised, and Qt models are GUI-thread objects: call
- *       this model only on the thread that owns the view.
- *
- * @see AppViewModel, CredentialWorkspace
+ * @pre Call only on the view's owning thread.
  */
 class VaultListModel : public QAbstractListModel
 {
@@ -84,171 +56,145 @@ class VaultListModel : public QAbstractListModel
     Q_PROPERTY(int count READ count NOTIFY countChanged)
 
 public:
-    /// @enum Roles
-    /// @brief Custom data roles for vault record display.
-    /// Numbering starts at Qt::UserRole + 1; data() serves no standard Qt role.
+    /**
+     * @enum Roles
+     * @brief Custom roles start at Qt::UserRole + 1; standard Qt roles are unsupported.
+     */
     enum class Roles
     {
-        Platform = Qt::UserRole + 1,  ///< Cleartext service/platform name.
-        MaskedUsername,               ///< Fixed bullet-dot placeholder for username.
-        MaskedPassword,               ///< Fixed bullet-dot placeholder for password.
-        RecordIndex,                  ///< Real index for decrypt-on-demand lookups.
-        BrandIconPath,                ///< qrc path for the resolved brand icon, or empty.
-        SiteBinding,                  ///< Strict browser-binding host, or empty.
-        DisplayPlatform               ///< Registrable chip label; subdomains and suffix removed.
+        Platform = Qt::UserRole + 1,
+        MaskedUsername,
+        MaskedPassword,
+        RecordIndex,
+        BrandIconPath,  ///< Resource path for the resolved brand icon, or empty.
+        SiteBinding,
+        DisplayPlatform
     };
 
-    /// @enum SortMode
-    /// @brief Visual ordering for the filtered chip grid.
-    /// @note GroupedByBrand resolves brand membership inside the comparator and
-    ///       caches nothing, so it adds about 2*n*log2(n) BrandIconResolver
-    ///       lookups to every refresh(); the other two modes add none. Each
-    ///       lookup probes a qrc index that is built once, so it costs a hash
-    ///       probe, not file I/O.
+    /**
+     * @enum SortMode
+     * @brief Ordering of the filtered rows.
+     *
+     * GroupedByBrand resolves both compared labels during sorting. The resource
+     * index is built once; subsequent lookups perform no file I/O.
+     */
     enum class SortMode
     {
         Alphabetical = 0,    ///< Platform name A to Z (case-insensitive).
         ReverseAlpha = 1,    ///< Platform name Z to A (case-insensitive).
-        GroupedByBrand = 2,  ///< Records with a resolved brand icon first, then unbranded, each
-                             ///< group sorted alphabetically.
+        GroupedByBrand = 2,  ///< Branded records first; each group sorts alphabetically.
     };
 
-    /// @brief Construct an empty model with no backing data and no filter.
     explicit VaultListModel(QObject* parent = nullptr);
 
     /**
-     * @brief Number of visible (filtered) rows.
-     * @param parent Must be an invalid index; the list is flat, so a valid
-     *               parent has no children.
-     * @return Number of rows that pass the filter, or 0 when @p parent is valid.
+     * @fn int rowCount(const QModelIndex& parent = QModelIndex()) const override
+     * @brief A valid parent has zero children because the model is flat.
+     * @author Alex (<https://github.com/lextpf>)
      */
     int rowCount(const QModelIndex& parent = QModelIndex()) const override;
 
     /**
-     * @brief Value of @p role for the row at @p index.
+     * @fn QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override
+     * @brief Read a role without caching derived brand, host or display labels.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * BrandIconPath, SiteBinding and DisplayPlatform are recomputed on every
-     * call and never cached. SiteBinding passes an empty record span, so it
-     * never reports a duplicate count and never scans the other records.
+     * SiteBinding avoids duplicate scans by using an empty record span.
      *
-     * @param index Model index whose row is read; the column is ignored.
-     * @param role  One of the Roles values, cast to int.
-     * @return Role value, or an invalid QVariant when @p index is out of range,
-     *         when no record vector is attached, when the generation counter
-     *         differs from the last refresh() snapshot, when the mapped record
-     *         index is out of range, or when @p role is not a Roles value. No
-     *         standard Qt role is served, Qt::DisplayRole included.
+     * @param index Column is ignored.
+     * @return Invalid for missing records, stale generation, invalid row/record index
+     *         or unsupported role, including Qt::DisplayRole.
      */
     QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
 
-    /**
-     * @brief Map Roles values to the QML role name strings.
-     * @return The Roles-to-key mapping listed in the class table.
-     */
     QHash<int, QByteArray> roleNames() const override;
 
     /**
-     * @brief Attach the backing record store (non-owning pointer).
+     * @fn void setRecords(const std::vector<seal::VaultRecord>* records, const uint64_t*
+     *     ownerGeneration = nullptr)
+     * @brief Borrow the record store and refresh immediately.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Snapshots @p ownerGeneration and calls refresh(), so the view repopulates
-     * immediately. A null @p records detaches the model and leaves zero rows.
-     *
-     * @param records         Record vector to borrow. It must outlive this model
-     *                        and keep a stable address; may be null.
-     * @param ownerGeneration Owner's monotonic mutation counter to borrow, or
-     *                        null to disable the staleness check. When it is
-     *                        non-null and the counter moves without a refresh(),
-     *                        data() reports every row as invalid.
+     * @param records Borrowed vector at a stable address until detachment or model
+     *                destruction; null detaches.
+     * @param ownerGeneration Borrowed counter that outlives this model or the next
+     *                        setRecords() call; null disables stale-generation checks.
      */
     void setRecords(const std::vector<seal::VaultRecord>* records,
                     const uint64_t* ownerGeneration = nullptr);
 
     /**
-     * @brief Set the platform-name filter text.
+     * @fn void setFilter(const QString& filter)
+     * @brief Filter live records by a case-insensitive platform substring.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Matching is a case-insensitive substring test against the stored platform
-     * string. A @p filter equal to the current one is a no-op; otherwise the
-     * model resets through refresh().
+     * Refresh only when the filter changes.
      *
-     * @param filter Substring to match; an empty string shows all non-deleted
-     *               records.
+     * @param filter Empty shows all live records.
      */
     void setFilter(const QString& filter);
 
     /**
-     * @brief Set the visual ordering applied after filtering.
-     *
-     * The parameter is an int because the value reaches this model from QML
-     * through AppViewModel. A value that is not a SortMode enumerator becomes
-     * SortMode::Alphabetical. An unchanged mode is a no-op; otherwise the model
-     * resets through refresh().
-     *
-     * @param mode SortMode enumerator value as an int.
+     * @fn void setSortMode(int mode)
+     * @brief Invalid modes select Alphabetical; refresh only on change.
+     * @author Alex (<https://github.com/lextpf>)
      */
     void setSortMode(int mode);
 
     /**
-     * @brief Active ordering mode.
-     * @return The current SortMode as an int; always a valid enumerator, even
-     *         after setSortMode() received an out-of-range value.
+     * @fn int sortMode() const
+     * @brief Read the normalized row-ordering mode.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * @return A valid SortMode enumerator encoded as an integer.
      */
     int sortMode() const;
 
     /**
-     * @brief Re-filter, re-order, and notify the attached views.
+     * @fn void refresh()
+     * @brief Snapshot generation and reset the model, invalidating all prior row indices.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Re-snapshots the owner's generation counter, then runs one
-     * beginResetModel/endResetModel cycle. Every QModelIndex and every row
-     * index taken before the call is invalid afterwards. countChanged() fires
-     * only when the visible row count changed, so an in-place edit repaints
-     * through the reset but reports no count change.
+     * Emit `countChanged()` only when the visible count changes.
      */
     void refresh();
 
-    /**
-     * @brief Number of visible (filtered) records.
-     * @return The same value as rowCount() for the root index.
-     */
     int count() const;
 
     /**
-     * @brief Map a filtered-model row to the real record index.
-     * @param row Row index in the filtered view.
-     * @return Index into the backing `std::vector<VaultRecord>`, or -1 when
-     *         @p row is out of range. Row numbering changes on every refresh(),
-     *         so map again after each one; the record index itself stays valid
-     *         until the owner mutates the vector.
+     * @fn int recordIndexForRow(int row) const
+     * @brief Map a visible row to its backing record; -1 when out of range.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Map again after refresh. Record indices survive only until the next owner mutation.
      */
     int recordIndexForRow(int row) const;
 
     /**
-     * @brief Map a real record index back to its visible (filtered) row.
+     * @fn int rowForRecordIndex(int recordIndex) const
+     * @brief Find a record in the current row snapshot.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Linear scan over the filtered rows; cost is O(visible rows).
+     * Scan visible rows in linear time. Refresh after a workspace mutation before
+     * using this mapping; the helper does not check the generation.
      *
-     * @param recordIndex Index into the backing `std::vector<VaultRecord>`.
-     * @return Row in the filtered view, or -1 when that record is filtered out,
-     *         soft-deleted, or out of range.
-     * @note Not exposed to QML, which never resolves indices. AppViewModel uses
-     *       it to highlight an auto-armed record.
+     * @param recordIndex Full record index in the current workspace.
+     * @return Visible row, or -1 if the snapshot contains no matching index.
      */
     int rowForRecordIndex(int recordIndex) const;
 
 signals:
-    /// @brief Emitted from refresh() only when the visible row count changed.
     void countChanged();
 
 private:
-    /// @brief Rebuild m_FilteredIndices: drop deleted and non-matching records,
-    /// then order the survivors per m_SortMode.
     void rebuildFilteredIndices();
 
     const std::vector<seal::VaultRecord>* m_Records = nullptr;  ///< Borrowed record vector or null.
     const uint64_t* m_OwnerGeneration = nullptr;  ///< Owner's mutation counter (null = unchecked).
-    uint64_t m_SnapshotGeneration = 0;   ///< Generation at the last refresh(); stale = blank rows.
-    QString m_Filter;                    ///< Case-insensitive substring; empty shows every record.
+    uint64_t m_SnapshotGeneration = 0;  ///< Generation at the last refresh(); stale = blank rows.
+    QString m_Filter;
     std::vector<int> m_FilteredIndices;  ///< Visible row -> index into the borrowed vector.
-    SortMode m_SortMode = SortMode::Alphabetical;  ///< Ordering applied after filtering.
+    SortMode m_SortMode = SortMode::Alphabetical;
 };
 
 }  // namespace seal
