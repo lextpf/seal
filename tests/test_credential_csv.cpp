@@ -36,7 +36,7 @@ TEST(CredentialCsvTest, ParsesBasicChromeExport)
     EXPECT_EQ(out[0].platform, "GitHub");
     EXPECT_EQ(out[0].username, "alice");
     EXPECT_EQ(out[0].password, "gh-pass-1");
-    // Blank name falls back to the URL host.
+    // blank name falls back to the URL host.
     EXPECT_EQ(out[1].platform, "accounts.google.com");
     EXPECT_EQ(out[1].username, "bob");
     EXPECT_EQ(stats.imported, 2u);
