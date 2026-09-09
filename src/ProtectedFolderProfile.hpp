@@ -10,167 +10,129 @@
 namespace seal
 {
 
-/// Required file name of a folder profile. The write paths reject any other
-/// name, so the profile is always this leading-dot file inside the protected
-/// root. Protected-folder policy protects this name and its `.tmp` sibling.
+/// required profile identity; policy also protects its .tmp staging sibling.
 inline constexpr std::wstring_view kProtectedFolderProfileFileName = L".seal-folder-profile";
 
 /**
  * @enum ProtectedFolderProfileState
- * @brief Structural state of a protected-folder password profile.
+ * @brief structural state after bounded inspection without key derivation.
  * @author Alex (https://github.com/lextpf)
  * @ingroup Vault
  *
- * Inspection does bounded I/O and validates the frame, the checksum and the
- * embedded packet header without deriving a key, so it is cheap enough for any
- * thread.
+ * frames are 41..4096 bytes and end immediately after the digest. the unkeyed SHA-256 detects
+ * corruption; the embedded packet's GCM tag authenticates it.
  *
- * @par On-disk frame
  * @verbatim
  *   +--------+---------+------------+--------------------+--------------+
  *   | "SFP1" | ver = 1 | len (BE32) | AES-256-GCM packet | SHA-256 (32) |
  *   |  4 B   |   1 B   |    4 B     |      len bytes     |  of packet   |
  *   +--------+---------+------------+--------------------+--------------+
  * @endverbatim
- * The frame must be 41 to 4096 bytes and the file must end right after the
- * digest. The digest is an unkeyed integrity check that catches truncation and
- * corruption early; authentication is the packet's own GCM tag.
  */
 enum class ProtectedFolderProfileState
 {
-    Missing,  ///< No file at the path.
-    Valid,    ///< Frame, checksum and packet header all parsed.
-    Invalid,  ///< Present but unusable; see the paired message.
+    Missing,  ///< no file at the path.
+    Valid,    ///< frame, checksum and packet header all parsed.
+    Invalid,  ///< present but unusable; see the paired message.
 };
 
 /**
  * @struct ProtectedFolderProfileInspection
- * @brief Outcome of a structural profile inspection.
+ * @brief outcome of a structural profile inspection.
  * @author Alex (https://github.com/lextpf)
  * @ingroup Vault
  */
 struct ProtectedFolderProfileInspection
 {
-    /// Structural verdict.
+    /// structural verdict.
     ProtectedFolderProfileState state = ProtectedFolderProfileState::Missing;
-    /// English explanation for the user. Empty when `state` is `Valid`; set on
-    /// every other verdict, including `Missing`.
+    /**
+     * english explanation for the user. empty when `state` is `Valid`; set on
+     * every other verdict, including `Missing`.
+     */
     std::string message;
 };
 
 /**
  * @enum ProtectedFolderProfileVerification
- * @brief Password-verification result for a protected-folder profile.
+ * @brief distinguish a password retry from an invalid profile.
  * @author Alex (https://github.com/lextpf)
  * @ingroup Vault
  *
- * `WrongPassword` is separated from `Invalid` so the caller can re-prompt
- * instead of reporting a damaged folder. The split is derived from the crypto
- * layer's `"Authentication failed"` message prefix, so that prefix is a
- * contract between Cryptography.cpp and this file.
+ * WrongPassword depends on the crypto error prefix "Authentication failed"; keep that contract
+ * aligned with Cryptography.cpp.
  */
 enum class ProtectedFolderProfileVerification
 {
-    Verified,       ///< The password decrypted the profile and the verifier matched.
-    WrongPassword,  ///< The frame is sound but GCM authentication failed.
-    Missing,        ///< No file at the path.
-    Invalid,        ///< Structurally unusable, or the decrypted verifier did not match.
+    Verified,       ///< the password decrypted the profile and the verifier matched.
+    WrongPassword,  ///< the frame is sound but GCM authentication failed.
+    Missing,        ///< no file at the path.
+    Invalid,        ///< structurally unusable, or the decrypted verifier did not match.
 };
 
 /**
  * @struct ProtectedFolderProfileVerifyResult
- * @brief Outcome of a password verification against a profile.
+ * @brief outcome of a password verification against a profile.
  * @author Alex (https://github.com/lextpf)
  * @ingroup Vault
  */
 struct ProtectedFolderProfileVerifyResult
 {
     ProtectedFolderProfileVerification result =
-        ProtectedFolderProfileVerification::Invalid;  ///< Verification verdict.
-    /// English explanation for the user. Empty when `result` is `Verified`.
+        ProtectedFolderProfileVerification::Invalid;  ///< verification verdict.
+    /// english explanation for the user. empty when `result` is `Verified`.
     std::string message;
 };
 
-/// Folder password held in locked, non-pageable memory. scrypt is fed the raw
-/// `wchar_t` code-unit bytes, so a narrow container holding the same characters
-/// derives a different key and must never be substituted.
+/**
+ * locked wide password. scrypt hashes raw wchar_t bytes;
+ * a narrow container with the same text derives a different key.
+ */
 using ProtectedFolderPassword = basic_secure_string<wchar_t, locked_allocator<wchar_t>>;
 
 /**
- * @brief Inspect a profile without attempting password verification.
+ * @brief inspect structure, checksum and KDF limits without deriving a key.
  * @ingroup Vault
  *
- * Reparse points, non-regular files, files outside the 41 to 4096 byte range,
- * malformed frames, checksum failures, and hostile KDF headers are all
- * rejected. No key is derived, so the call is cheap and never blocks on
- * scrypt.
+ * rejects reparse points, non-regular files, sizes outside 41..4096 bytes and malformed frames.
  *
- * @param profilePath Full path to the profile file. It is read, never written.
- * @return `Missing` with a message when nothing is at the path; `Valid` with
- *         an empty message when every structural check passed; `Invalid` with
- *         the first failing check's message otherwise.
- *
- * @note Every exception is caught and reported as `Invalid`.
+ * @return `Missing` for absent paths, `Valid` with an empty message, otherwise `Invalid` with a
+ *         reason.
+ * @note all exceptions become `Invalid`.
  */
 [[nodiscard]] ProtectedFolderProfileInspection inspectProtectedFolderProfile(
     const std::filesystem::path& profilePath) noexcept;
 
 /**
- * @brief Verify that @p password opens a structurally valid profile.
+ * @brief authenticate a profile's fixed verifier after structural inspection.
  * @ingroup Vault
  *
- * The profile contains only an authenticated fixed verifier; it never stores a
- * password, credential, or folder payload. The structural checks of
- * @ref inspectProtectedFolderProfile run first, so a damaged profile is
- * reported without deriving a key.
+ * profiles contain no password, credentials or folder payload.
  *
- * @param profilePath Full path to the profile file. It is read, never written.
- * @param password    Folder password to test.
- * @return `Missing` or `Invalid` for a profile that fails inspection,
- *         `WrongPassword` when GCM authentication fails, `Invalid` when the
- *         decrypted bytes are not the fixed verifier, and `Verified` with an
- *         empty message otherwise.
- *
- * @warning A profile that passes inspection runs one scrypt derivation at
- *          the profile's own KDF parameters. The default cost needs 64 MiB
- *          and blocks the calling thread for about 100 ms on a current
- *          desktop, longer on slower hardware. Never call this on the UI
- *          thread. A `Missing` or `Invalid` result returns before any
- *          derivation runs.
- * @note Every exception is caught and reported as `Invalid`.
+ * @return `Missing`/`Invalid` for failed inspection, `WrongPassword` for GCM failure, `Invalid` for
+ *         unexpected plaintext, otherwise `Verified` with an empty message.
+ * @note all exceptions become `Invalid`.
+ * @warning derives one key with the profile's parameters; default cost is 64 MiB. run off the UI
+ *          thread. structural rejection returns before derivation.
  */
 [[nodiscard]] ProtectedFolderProfileVerifyResult verifyProtectedFolderProfile(
     const std::filesystem::path& profilePath, const ProtectedFolderPassword& password) noexcept;
 
 /**
- * @brief Atomically create a new protected-folder profile.
+ * @brief create a durable profile without replacing occupied paths.
  * @ingroup Vault
  *
- * Fails closed when the destination or the deterministic `<profilePath>.tmp`
- * staging path already exists, is a reparse point, or cannot be probed. The
- * staging file is opened with `CREATE_NEW`, which closes the check-then-open
- * race on that fixed name, then written through and renamed onto the
- * destination. The final file is marked hidden on Windows for presentation
- * only; the leading-dot name is the portable identity.
+ * destination and deterministic .tmp staging probes fail closed, including reparse points.
+ * CREATE_NEW prevents staging races; write-through rename commits the file. the hidden attribute
+ * is presentation only.
  *
- * @param profilePath  Destination path. Its file name must equal
- *                     seal::kProtectedFolderProfileFileName and its parent
- *                     must be an existing directory.
- * @param password     Folder password. Must not be empty.
- * @param errorMessage Optional sink for an English failure reason. May be
- *                     `nullptr`; it is written only on `false`.
- * @param kdf          Write-side scrypt parameters. They are recorded in the
- *                     packet header, so verification later reuses them.
- * @return `true` only when the profile is durable on disk.
- *
- * @post A `false` return leaves the destination untouched. Any staging file
- *       this call created is deleted; a staging path that was already occupied
- *       is never touched.
- * @warning One scrypt derivation runs at @p kdf cost. Never call this on the
- *          UI thread with the default parameters.
- * @note Every `std::exception` is caught and reported as `false`. In that
- *       case @p errorMessage receives the exception text instead of one of
- *       this file's curated messages, so do not present it as a fixed string.
+ * @param profilePath must use kProtectedFolderProfileFileName under an existing directory.
+ * @param password must not be empty.
+ * @param errorMessage optional; written only on false, including std::exception text.
+ * @param kdf saved in the packet for verification; one derivation runs at this cost.
+ * @return true only after durable commit.
+ * @post false preserves the destination and removes only staging created by this call.
+ * @warning use a worker thread for default KDF parameters.
  */
 [[nodiscard]] bool createProtectedFolderProfile(
     const std::filesystem::path& profilePath,
@@ -179,34 +141,18 @@ using ProtectedFolderPassword = basic_secure_string<wchar_t, locked_allocator<wc
     const cfg::KdfParams& kdf = cfg::DEFAULT_KDF) noexcept;
 
 /**
- * @brief Atomically replace an existing profile under a new password.
+ * @brief replace a live profile only after its new frame is durable.
  * @ingroup Vault
  *
- * Used when a loaded credential vault is rekeyed while folder protection is
- * armed. The old profile remains live until the replacement is durable: the
- * new frame is staged and flushed first, then renamed over the destination
- * with `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`.
+ * requires an existing destination; other constraints match createProtectedFolderProfile.
+ * uses MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH after staging and flush.
  *
- * This is the exact mirror of @ref createProtectedFolderProfile: it fails when
- * the destination is missing, where create fails when it is present. Every
- * other precondition, the staging rules and the scrypt cost are identical.
- *
- * @param profilePath  Existing profile to replace. Same name and parent
- *                     requirements as @ref createProtectedFolderProfile.
- * @param password     New folder password. Must not be empty.
- * @param errorMessage Optional sink for an English failure reason. May be
- *                     `nullptr`; it is written only on `false`.
- * @param kdf          Write-side scrypt parameters for the new profile.
- * @return `true` only when the replacement is durable on disk.
- *
- * @post A `false` return leaves the old profile as the live one, under the old
- *       password. Any staging file this call created is deleted.
- * @warning One scrypt derivation runs at @p kdf cost, so the default
- *          parameters need 64 MiB and about 100 ms. Never call this on the UI
- *          thread with the default parameters.
- * @note Every `std::exception` is caught and reported as `false`. In that
- *       case @p errorMessage receives the exception text instead of one of
- *       this file's curated messages, so do not present it as a fixed string.
+ * @param password non-empty replacement password.
+ * @param errorMessage optional; written only on false, including std::exception text.
+ * @param kdf recorded in the new packet; one derivation runs at this cost.
+ * @return true only after durable commit.
+ * @post false preserves the old profile and removes staging created by this call.
+ * @warning use a worker thread for default KDF parameters (64 MiB).
  */
 [[nodiscard]] bool replaceProtectedFolderProfile(
     const std::filesystem::path& profilePath,
