@@ -10,14 +10,12 @@ namespace seal::csv
 
 /**
  * @struct Credential
- * @brief One credential row parsed from a password-manager CSV export.
- * @author Alex (https://github.com/lextpf)
+ * @brief One imported credential in pageable memory.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup CLI
  *
- * The three fields are ordinary pageable memory, not locked memory: bulk
- * import is a short-lived path, and locked memory is reserved for long-lived
- * secrets. The caller must cleanse every parsed Credential, and the CSV
- * buffer it was parsed from, as soon as the values are encrypted.
+ * Cleanse each row and the source CSV buffer as soon as encryption finishes. Ordinary string
+ * destruction does not wipe these fields.
  */
 struct Credential
 {
@@ -28,13 +26,11 @@ struct Credential
 
 /**
  * @struct Stats
- * @brief Row-level statistics from a CSV import parse.
- * @author Alex (https://github.com/lextpf)
+ * @brief Cumulative parse outcomes; each data row increments one counter.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup CLI
  *
- * Every data row lands in one counter, so the four fields add up to the number
- * of rows after the header. @ref ParseChromeCsv adds to the counters and never
- * clears them; reuse one instance only to total several files.
+ * ParseChromeCsv never resets these counters. Use a fresh instance for each file's totals.
  */
 struct Stats
 {
@@ -45,69 +41,39 @@ struct Stats
 };
 
 /**
- * @brief Cheap header sniff for the Chrome/Edge password-export format.
+ * @fn bool LooksLikeChromeCsv(std::string_view firstLine)
+ * @brief Choose the CSV import format with a substring sniff.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup CLI
- * @param firstLine First line of the input (UTF-8 BOM tolerated).
- * @return `true` when the line is a Chrome-style CSV header containing the
- *         `name`, `url`, `username`, and `password` columns.
  *
- * @par Sniff conditions (all required)
- * The line is lowercased after stripping a UTF-8 BOM and cutting at the first
- * `\r`; then every substring test below must hold:
- * | Condition            | Rationale                                        |
- * |----------------------|--------------------------------------------------|
- * | contains `name`      | Chrome header column                             |
- * | contains `url`       | Chrome header column                             |
- * | contains `username`  | Chrome header column                             |
- * | contains `password`  | Chrome header column                             |
- * | contains `,`         | it is comma-separated                            |
- * | must not contain `:` | rejects `plat:user:pass` and URL-bearing headers |
+ * Strips a UTF-8 BOM, cuts at CR and lowercases the line. ParseChromeCsv validates exact column
+ * names later; `username` alone satisfies this sniff's `name` test.
  *
- * These are substring tests on the whole line, not column matches, so
- * `username` alone already satisfies the `name` condition. The sniff only
- * chooses between the `chrome` and `seal` import formats; @ref ParseChromeCsv
- * matches columns exactly by header name and decides whether the file parses.
+ * | Required substrings                          | Forbidden substring |
+ * |----------------------------------------------|---------------------|
+ * | `name`, `url`, `username`, `password`, comma | Colon               |
  */
 bool LooksLikeChromeCsv(std::string_view firstLine);
 
 /**
- * @brief Parse a Chrome/Edge password CSV export (RFC 4180).
+ * @fn bool ParseChromeCsv(std::string_view content, std::vector<Credential>& out, Stats& stats)
+ * @brief Parse password CSV with RFC 4180 quoting and CRLF or LF endings.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup CLI
  *
- * Handles quoted fields, doubled-quote escapes, embedded commas and newlines,
- * CRLF/LF endings, an optional UTF-8 BOM, and extra columns such as `note`.
- * Columns are matched by header name, case-insensitively. A row-level problem
- * is counted in @p stats and is never fatal.
+ * Allows a UTF-8 BOM, extra columns and embedded newlines. Blank rows are discarded; the first
+ * remaining row is the header. Names match case-insensitively; the last duplicate wins.
+ * Quoting is permissive: an unclosed quoted field consumes the rest of the input. Malformed
+ * quoting is not checked separately; badRows counts data rows with missing required columns.
+ * Parser scratch strings use pageable storage and are not explicitly wiped.
  *
- * Blank lines are dropped before anything else, so the header is the first
- * non-blank row wherever it sits. A duplicated header name resolves to its
- * last occurrence.
+ * | Required column | Destination                                  |
+ * |-----------------|----------------------------------------------|
+ * | name            | `platform`; empty uses url::extractHost(url) |
+ * | url             | Normalized host fallback                     |
+ * | username        | `username`                                   |
+ * | password        | `password`                                   |
  *
- * @param content Whole CSV file content. Not required to be valid UTF-8;
- *                bytes are copied through unchanged.
- * @param out     Parsed credentials, appended. Existing elements are kept.
- * @param stats   Per-row outcome counters. Added to, never reset, so pass a
- *                fresh instance for a per-file total.
- * @return `false` when @p content yields no rows at all, or when the header
- *         row does not carry all four required columns. `true` otherwise,
- *         even when every data row was rejected.
- * @post Neither @p out nor the buffer behind @p content is cleansed. The
- *       caller wipes both.
- *
- * @par Column mapping (header matched exactly, case-insensitive)
- * | CSV column      | Credential field                                             |
- * |-----------------|--------------------------------------------------------------|
- * | `name`          | `platform` (falls back to the `url` host when empty)         |
- * | `url`           | host fallback for an empty `name` (`seal::url::extractHost`) |
- * | `username`      | `username`                                                   |
- * | `password`      | `password`                                                   |
- *
- * All four columns must be present or the parse returns `false`. The host
- * fallback is normalised by `seal::url::extractHost`: lower-cased, with
- * scheme, path, credentials, port and a leading `www.` removed. A `url` value
- * with no usable host yields an empty platform, and the row is skipped.
- *
- * @par Row outcome (per data row; counters land in @p stats)
  * @verbatim
  * data row (rows after the header)
  *   |
@@ -123,27 +89,26 @@ bool LooksLikeChromeCsv(std::string_view firstLine);
  *   +-- otherwise
  *            -> ++imported, append to out
  * @endverbatim
+ *
+ * @param content Bytes pass through without UTF-8 validation.
+ * @param out Appended, never cleared.
+ * @param stats Incremented, never reset.
+ * @return False for no rows or missing required columns; rejected data rows are not fatal.
+ * @post Caller must cleanse both out and content.
  */
 bool ParseChromeCsv(std::string_view content, std::vector<Credential>& out, Stats& stats);
 
 /**
- * @brief Serialize one CSV row with minimal RFC 4180 quoting and CRLF.
+ * @fn std::string WriteCsvRow(std::initializer_list<std::string_view> fields)
+ * @brief Serialize one row with minimal RFC 4180 quoting and a trailing CRLF.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup CLI
  *
- * A field is wrapped in double quotes only when it contains `,`, `"`, CR or
- * LF; an inner `"` is then doubled. Every other field is written verbatim, so
- * leading and trailing spaces survive and no BOM is added. This is the inverse
- * of the tokenizer @ref ParseChromeCsv uses.
+ * Commas, quotes, CR and LF require quoting; embedded quotes are doubled. Spaces are preserved;
+ * no BOM is added. An empty field list produces only CRLF.
  *
- * @param fields Field values in column order. An empty list yields a row that
- *               is only the CRLF.
- * @return Encoded row including the trailing CRLF.
- * @warning The returned string is ordinary pageable heap memory and holds
- *          every field verbatim; the function cleanses nothing. When a field
- *          is a secret, the caller must cleanse the returned row after
- *          writing it, and must account for the copy the output stream keeps
- *          in its own buffer. The CLI `export --format csv` path is the caller
- *          this duty falls on.
+ * @warning The returned pageable string is not cleansed. Wipe it after writing secrets and
+ *          account for copies in stream buffers.
  */
 std::string WriteCsvRow(std::initializer_list<std::string_view> fields);
 
