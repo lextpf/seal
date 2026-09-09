@@ -11,26 +11,22 @@ namespace seal
 
 /**
  * @class FileOperations
- * @brief Static entry points for file, directory, batch and stream crypto.
- * @author Fable 5 (https://github.com/claude)
+ * @brief file and CLI boundaries for AES-256-GCM operations.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup IO_FileOperations
  *
- * Groups every high-level path that moves data between disk (or stdin/stdout)
- * and the AES-256-GCM core. The class holds no instance state and cannot be
- * constructed. processDirectory() is the one exception: its leaf-file tasks run
- * on a worker pool shared by every caller in the process.
+ * disk writes reserve the deterministic `<dstPath>.tmp` name and replace existing destinations.
+ * reported failures remove staging files; escaping exceptions can leave them behind.
+ * FlushFileBuffers is best-effort: its failure does not prevent rename or a true return.
+ * progress and errors use stdout and stderr.
  *
- * ## :material-file-lock: Single-file operations
+ * | operation                           | failure result               |
+ * |-------------------------------------|------------------------------|
+ * | encryptFileTo, encryptFileStreaming | false for I/O; crypto throws |
+ * | decryptFileTo, decryptFileStreaming | std::exception becomes false |
+ * | streamEncrypt, streamDecrypt        | std::exception becomes false |
+ * | encryptLine, decryptLine            | exceptions propagate         |
  *
- * encryptFileTo() / decryptFileTo() transform a file into a new destination
- * through `Cryptography::encryptPacket` / `Cryptography::decryptPacket`, and
- * re-dispatch to encryptFileStreaming() / decryptFileStreaming() above
- * `cfg::FILE_CHUNK` (1 MiB). encryptLine() / decryptLine() do the same for
- * hex-encoded text and return the result instead of writing to disk.
- *
- * @par Atomic write sequence
- * Every disk-writing path commits through temp-then-rename, so a crash cannot
- * leave a half-written destination:
  * @verbatim
  *   src  (read-only; never modified by encrypt/decrypt)
  *     |
@@ -40,46 +36,6 @@ namespace seal
  *     v  MoveFileEx(<dst>.tmp -> <dst>, MOVEFILE_REPLACE_EXISTING)
  *   <dst>  (replaced atomically; on crash <dst> is fully old or fully new)
  * @endverbatim
- * The FlushFileBuffers step is best-effort: its result is not checked, so the
- * rename proceeds and the call still returns `true` when the durable flush
- * failed. Only the stream-level write and flush failures are reported as
- * `false`.
- *
- * The staging name is always `<dstPath>.tmp` and is never randomised, so a
- * caller must treat that name as reserved. It is deleted on every `false` path
- * that created it; an escaping exception leaves it behind.
- *
- * ## :material-folder-lock: Directory and batch processing
- *
- * processDirectory() walks a tree with `FindFirstFileA` and transforms each
- * file by its `.seal` extension. Once the destination is committed the source
- * is removed with `DeleteFileA`, not shredded. processBatch() dispatches mixed
- * CLI input (paths, hex tokens, raw plaintext) and, in censored mode, presents
- * the result through MaskedCredentialView.
- *
- * ## :material-pipe: Stream mode
- *
- * streamEncrypt() / streamDecrypt() pipe binary data between `std::cin` and
- * `std::cout` for shell integration. No CLI mode routes here: `-e` /
- * `--text-encrypt` and `-d` / `--text-decrypt` select the hex/Base64 text mode,
- * which is a separate path.
- *
- * ## :material-format-list-group: Triple helpers
- *
- * parseTriples() splits `service:username:password` text into secure UTF-16
- * triplets and serves both processBatch() display modes. tripleToUtf8()
- * serialises a triplet back into one UTF-8 line and is reached only from the
- * uncensored stdout echo, never from the masked view. tripleLen() measures the
- * same line in `wchar_t` units and has no in-tree caller.
- *
- * @par Failure reporting
- * Progress and errors print to `std::cout` / `std::cerr`.
- * - encryptFileTo(), encryptFileStreaming(): a `std::runtime_error` from the
- *   OpenSSL layer propagates, and `false` means an I/O failure only.
- * - decryptFileTo(), decryptFileStreaming(), streamEncrypt(), streamDecrypt():
- *   every `std::exception` becomes `false`.
- * - encryptLine() and decryptLine() return a value, so they throw instead of
- *   reporting `false`.
  */
 class FileOperations
 {
@@ -89,31 +45,13 @@ public:
     FileOperations& operator=(const FileOperations&) = delete;
 
     /**
-     * @brief Encrypt a file to a new destination without modifying the source.
+     * @brief encrypt to a replacement destination, preserving the source.
      *
-     * Writes the packet atomically to @p dstPath through a `<dstPath>.tmp`
-     * staging file. @p srcPath is never modified; delete it only after this
-     * returns `true`. An existing @p dstPath is replaced without warning.
+     * streams above cfg::FILE_CHUNK (1 MiB); failed size queries use the whole-file path.
      *
-     * A source larger than `cfg::FILE_CHUNK` (1 MiB) is forwarded to
-     * @ref encryptFileStreaming, so only smaller files are read whole into
-     * memory. A size that cannot be queried counts as small and stays on the
-     * single-shot path.
-     *
-     * @tparam SecurePwd Secure password container.
-     * @param srcPath Source file; left unmodified.
-     * @param dstPath Destination for the encrypted output.
-     * @param pwd     Master password for key derivation.
-     * @return `true` on success, `false` when the source cannot be opened or a
-     *         write, flush or rename fails.
-     *
-     * @throw std::runtime_error propagated from the OpenSSL layer; an
-     *        encryption failure is not reported as `false`. On the in-memory
-     *        path it is thrown before the staging file exists, so nothing is
-     *        left behind. A source above `cfg::FILE_CHUNK` runs
-     *        @ref encryptFileStreaming, which opens `<dstPath>.tmp` before it
-     *        encrypts the payload, so an exception can leave that file on disk
-     *        for the caller to remove.
+     * @return false for source-open, write, flush or rename failure.
+     * @throw std::runtime_error on crypto failure. streaming can leave a staging file;
+     *        whole-file encryption fails before staging starts.
      */
     template <secure_password SecurePwd>
     static bool encryptFileTo(const std::string& srcPath,
@@ -121,24 +59,11 @@ public:
                               const SecurePwd& pwd);
 
     /**
-     * @brief Decrypt a file to a new destination without modifying the source.
+     * @brief authenticate before creating plaintext output, preserving the source.
      *
-     * Writes the plaintext atomically to @p dstPath through a `<dstPath>.tmp`
-     * staging file. @p srcPath is never modified. Authentication completes
-     * before the staging file is created, so a wrong password or a tampered
-     * packet leaves no output file at all.
+     * streams above 1 MiB plus 52 framing bytes; failed size queries use the whole-file path.
      *
-     * A source larger than `cfg::FILE_CHUNK` (1 MiB) plus the 52-byte framing
-     * overhead is forwarded to @ref decryptFileStreaming. A size that cannot be
-     * queried counts as small.
-     *
-     * @tparam SecurePwd Secure password container.
-     * @param srcPath Encrypted source file; left unmodified.
-     * @param dstPath Destination for the decrypted output.
-     * @param pwd     Master password for key derivation.
-     * @return `true` on success, `false` on I/O failure, a malformed packet, or
-     *         authentication failure. Every `std::exception` from the crypto
-     *         layer is caught, logged to `std::cerr` and reported as `false`.
+     * @return false for I/O, format or authentication failure; std::exception is logged to stderr.
      */
     template <secure_password SecurePwd>
     static bool decryptFileTo(const std::string& srcPath,
@@ -146,68 +71,37 @@ public:
                               const SecurePwd& pwd);
 
     /**
-     * @brief Encrypt a UTF-8 string and return the result as a hex string.
+     * @brief encrypt raw bytes without adding a terminator.
      *
-     * The bytes of @p s are encrypted verbatim: no terminator is added and the
-     * content need not be valid UTF-8. Both the argument and the returned hex
-     * live in ordinary heap memory, so the caller must wipe them.
+     * UTF-8 validity is not required. the caller wipes the pageable input and output strings.
      *
-     * @tparam SecurePwd Secure password container.
-     * @param s   Plaintext to encrypt.
-     * @param pwd Master password for key derivation.
-     * @return Lowercase hex encoding of the framed packet. Framing adds 52
-     *         bytes, so the result is `2 * s.size() + 104` characters long.
-     *
-     * @throw std::runtime_error propagated from the OpenSSL layer.
+     * @return lowercase hex, `2 * s.size() + 104` characters including framing.
+     * @throw std::runtime_error on crypto failure.
      */
     template <secure_password SecurePwd>
     [[nodiscard]] static std::string encryptLine(const std::string& s, const SecurePwd& pwd);
 
     /**
-     * @brief Decrypt a hex-encoded packet back to a secure plaintext string.
+     * @brief decode whitespace-tolerant hex into locked plaintext.
      *
-     * Strips every whitespace character, decodes the hex, then decrypts. Hex
-     * case is not significant. The result holds raw bytes and may contain
-     * embedded NUL characters, so read it with `.size()`, never as a C string.
+     * hex is case-insensitive. use size() because plaintext can contain NULs.
+     * intermediate plaintext is wiped before return.
      *
-     * @tparam SecurePwd Secure password container.
-     * @param rawHex Hex-encoded packet. Spaces, tabs and line breaks anywhere
-     *               in the token are ignored.
-     * @param pwd    Master password for key derivation.
-     * @return Decrypted plaintext in a locked-page string. The intermediate
-     *         plaintext buffer is wiped before returning.
-     *
-     * @throw std::runtime_error on odd-length or non-hex input, a malformed
-     *        packet, out-of-cap KDF parameters, or authentication failure.
+     * @throw std::runtime_error on odd-length or non-hex input, invalid framing, excessive KDF
+     *        parameters or authentication failure.
      */
     template <secure_password SecurePwd>
     [[nodiscard]] static seal::secure_string<seal::locked_allocator<char>> decryptLine(
         const std::string& rawHex, const SecurePwd& pwd);
 
     /**
-     * @brief Encrypt a file to a new destination using chunked streaming I/O.
+     * @brief encrypt with two 1 MiB buffers, preserving the source.
      *
-     * Reads the source in `cfg::FILE_CHUNK` (1 MiB) blocks and feeds them to
-     * `EVP_EncryptUpdate`, so peak memory is two chunks instead of the whole
-     * file. The wire format matches `encryptPacket`
-     * (`AAD | salt | IV | ciphertext | tag`), so every decrypt path reads the
-     * output. This function has no size gate of its own: @ref encryptFileTo
-     * decides when to come here, and a direct call always streams.
+     * uses the encryptPacket wire format with fresh salt and IV. plaintext chunks and the derived
+     * key are wiped after use. direct calls stream at any file size.
      *
-     * Salt and IV are freshly random per call, so encrypting the same source
-     * twice yields different ciphertext. Every plaintext chunk is wiped once
-     * consumed, and the derived key is wiped before returning.
-     *
-     * @tparam SecurePwd Secure password container.
-     * @param srcPath Source file; left unmodified.
-     * @param dstPath Destination for the encrypted output.
-     * @param pwd     Master password for key derivation.
-     * @return `true` on success, `false` when the source cannot be opened or a
-     *         write, flush or rename fails. The `<dstPath>.tmp` staging file is
-     *         deleted on every `false` path that created it.
-     *
-     * @throw std::runtime_error propagated from the OpenSSL layer. A throw
-     *        after the staging file opens leaves that file behind.
+     * @return false for I/O failure; staging files are removed on reported failure.
+     * @throw std::runtime_error on crypto failure; an opened staging file can remain.
      */
     template <secure_password SecurePwd>
     static bool encryptFileStreaming(const std::string& srcPath,
@@ -215,19 +109,11 @@ public:
                                      const SecurePwd& pwd);
 
     /**
-     * @brief Decrypt a file to a new destination using chunked streaming I/O.
+     * @brief authenticate in a first pass, then stream plaintext to disk.
      *
-     * Reads the ciphertext in `cfg::FILE_CHUNK` (1 MiB) blocks and feeds them
-     * to `EVP_DecryptUpdate`. The 8-byte packet header is parsed and
-     * cap-validated first, then salt and IV are read, then the GCM tag is read
-     * from the last `cfg::TAG_LEN` bytes of the file. This function has no size
-     * gate of its own: @ref decryptFileTo decides when to come here, and a
-     * direct call always streams.
+     * uses 1 MiB chunks and one derived key for both passes. validates header/KDF limits and reads
+     * the stored tag before decryption. direct calls stream at any file size.
      *
-     * @par Two-pass authentication
-     * The source is read twice, so unauthenticated plaintext never reaches the
-     * filesystem, at the cost of decrypting the payload twice. The key is
-     * derived once and shared by both passes.
      * @verbatim
      *   pass 1  read CT -> EVP_DecryptUpdate -> scratch buffer, wiped at once
      *              |                            (nothing is written to disk)
@@ -240,16 +126,8 @@ public:
      *   pass 2  re-read CT -> decrypt -> <dst>.tmp -> flush -> rename
      * @endverbatim
      *
-     * @tparam SecurePwd Secure password container.
-     * @param srcPath Encrypted source file; left unmodified.
-     * @param dstPath Destination for the decrypted output.
-     * @param pwd     Master password for key derivation.
-     * @return `true` on success. `false` when the source cannot be opened or
-     *         stated, the header is malformed, the file is shorter than its own
-     *         framing, the tag does not verify, the source changed between the
-     *         two passes, or a write, flush or rename fails. Every
-     *         `std::exception` from the crypto layer is caught and reported as
-     *         `false`.
+     * @return false on I/O, format or authentication failure, source size/time change between
+     *         passes, or std::exception.
      */
     template <secure_password SecurePwd>
     static bool decryptFileStreaming(const std::string& srcPath,
@@ -257,13 +135,9 @@ public:
                                      const SecurePwd& pwd);
 
     /**
-     * @brief Compute the serialized wide-character length of a triple as `s:u:p`.
-     * @tparam A Locked allocator type for `wchar_t`.
-     * @return Wide-character count including the two `:` separators.
+     * @brief count wchar_t units including the two separators.
      *
-     * @note The unit is `wchar_t`, not bytes. @ref tripleToUtf8 can return a
-     *       longer string because non-ASCII characters expand to several UTF-8
-     *       bytes.
+     * UTF-8 serialization can require more bytes.
      */
     template <class A>
     static size_t tripleLen(const seal::secure_triplet16<A>& t)
@@ -272,97 +146,44 @@ public:
     }
 
     /**
-     * @brief Convert a UTF-16 triple to a single UTF-8 line `service:username:password`.
+     * @brief serialize service, username and password with two colon separators.
      *
-     * Empty fields become empty segments, so the result always holds two `:`
-     * characters.
+     * empty fields produce empty segments. colons inside fields prevent parseTriples round trips.
      *
-     * @param t Secure triple to serialize.
-     * @return UTF-8 string in ordinary heap memory.
-     *
-     * @warning The returned string is not in locked memory. Pass it to
-     *          `Cryptography::cleanseString` once it is no longer needed.
-     * @note The round trip through @ref parseTriples is not lossless: a field
-     *       that itself contains `:` produces a line with more than two
-     *       separators, which parseTriples() rejects.
+     * @return pageable UTF-8 string; cleanse it immediately after use.
      */
     static std::string tripleToUtf8(const seal::secure_triplet16_t& t);
 
     /**
-     * @brief Parse one or more `service:username:password` items from plain text.
+     * @brief parse non-empty service, username and password fields into locked UTF-16 storage.
      *
-     * `,`, `\n` and `\r` all end an item, so one decrypted blob can carry many
-     * credentials. Each item is trimmed at both ends and must hold two `:`
-     * characters: fewer is an incomplete triple, more is ambiguous. An item
-     * that is empty after trimming is ignored rather than rejected. All three
-     * fields must be non-empty.
+     * comma, CR and LF end items. trim each item, ignore empty items and require exactly two
+     * colons.
+     * trim service and username again; password retains leading/interior spaces after item
+     * trimming.
+     * no intermediate narrow secret copy is made.
      *
-     * @par Whitespace handling
-     * The service and username fields are trimmed a second time, individually.
-     * The password field is not: it keeps everything between the second `:` and
-     * the end of the trimmed item, so leading and interior spaces stay part of
-     * the password.
-     *
-     * @tparam A Locked allocator for `wchar_t`.
-     * @param plain UTF-8 input, converted to UTF-16 with `MultiByteToWideChar`.
-     *              Items are sub-views of the caller's buffer, so no extra
-     *              narrow copy of the secret is made.
-     * @param out   Destination vector of secure UTF-16 triplets. Cleared on
-     *              entry and cleared again if any item is rejected, so a
-     *              `false` return always leaves it empty.
-     * @return `true` when at least one item parsed and every item was
-     *         well-formed; `false` when any item is malformed or the input
-     *         holds no items at all.
+     * @param out cleared on entry and on failure.
+     * @return true only when at least one item exists and every item is valid.
      */
     template <class A>
     static bool parseTriples(std::string_view plain, std::vector<seal::secure_triplet16<A>>& out);
 
     /**
-     * @brief Encrypt/decrypt all files in a directory tree (CLI path).
+     * @brief transform a CLI directory tree by file extension, then remove each source.
      *
-     * Walks the directory with `FindFirstFileA` and hands every leaf file to
-     * @ref processFilePath, which transforms it by `.seal` extension, writes a
-     * sibling output, then removes the source.
+     * skips dot entries, reparse points, `.exe` names and the seal binary. name checks precede
+     * directory checks, so a directory ending in .exe is skipped entirely.
      *
-     * @par Entries that never reach processFilePath
-     * - `.` and `..`.
-     * - Any entry carrying `FILE_ATTRIBUTE_REPARSE_POINT` (symlink, junction or
-     *   mount point), skipped silently so the walk cannot escape the tree or
-     *   loop.
-     * - `.exe` files and the `seal` binary, reported as `(skipped)`. The name
-     *   test runs before the directory test, so a directory named `*.exe` is
-     *   skipped whole and never descended into.
+     * all callers share max(1, min(hardware_concurrency, 8)) workers and a 32-slot queue; a full
+     * queue blocks submission. recursion runs on the caller to avoid pool deadlock. tasks borrow
+     * password and join on every exit, including exceptions; task exceptions become false.
      *
-     * @par Concurrency
-     * Leaf files run on a fixed-size worker pool in a function-local static, so
-     * every caller in the process shares the same
-     * `max(1, min(hardware_concurrency, 8))` threads and one 32-slot queue.
-     * Submitting to a full queue blocks. Subdirectory recursion runs inline on
-     * the calling thread, which keeps a pool worker from ever waiting on
-     * another pool task.
-     *
-     * @par Lifetime and errors
-     * Pool tasks capture @p password by reference and are joined on every exit
-     * path, including an exception, so @p password must outlive the call. A
-     * task never propagates an exception; it reports `false` instead.
-     *
-     * @tparam SecurePwd Secure password container.
-     * @param dir      Root directory to walk.
-     * @param password Master password for key derivation.
-     * @param recurse  Recurse into subdirectories when `true`. When `false`,
-     *                 subdirectories are ignored and do not count as failures.
-     * @return `true` when nothing failed: the directory listed, every leaf file
-     *         succeeded, and every recursive call returned `true`.
-     *
-     * @note This is the CLI-mode directory processor. The GUI-mode
-     *       seal::encryptDirectory() / seal::decryptDirectory() in Vault.hpp
-     *       scan with `std::filesystem::recursive_directory_iterator` on one
-     *       thread, decide with ProtectedFolderPolicy.hpp, and refuse an entry
-     *       whose destination or `.tmp` staging path already exists. This path
-     *       replaces both without warning.
-     * @note The `[dir]` summary line counts leaf files in `total` but counts
-     *       both leaf files and subdirectory results in `ok` / `fail`, so
-     *       `ok + fail` can exceed `total`.
+     * @param recurse false ignores subdirectories without failure.
+     * @return true only if enumeration, leaf transforms and recursive calls all succeed.
+     * @note summary total counts files; ok/fail also count subdirectories and can exceed total.
+     * @warning destinations and staging files are replaced; the GUI protected-folder path refuses
+     *          these collisions. removed sources are not shredded.
      */
     template <secure_password SecurePwd>
     static bool processDirectory(const std::string& dir,
@@ -370,80 +191,39 @@ public:
                                  bool recurse = true);
 
     /**
-     * @brief Process a single file path or convenience token.
+     * @brief normalize a CLI path, transform it and remove a successfully transformed source.
      *
-     * @par Normalisation
-     * Outer whitespace and quotes are removed, every control character (below
-     * 0x20, plus 0x7F) is deleted as clipboard paste residue, and trailing `\`
-     * and `/` are dropped one by one, stopping at a drive root such as `C:\`.
-     * A string left empty by the control-character pass returns `false`.
+     * strips outer whitespace/quotes, control bytes below 0x20 plus 0x7F, and trailing separators
+     * without shortening drive roots.
      *
-     * @par Classification order
-     * - Basename `.exe` or `seal`: skipped and reported as success.
-     * - `.`: expanded to the current working directory.
-     * - Directory: delegated to processDirectory() with recursion enabled. The
-     *   test runs twice, first through `GetFileAttributesA` and then through
-     *   `std::filesystem`, so long paths and forward-slash forms still resolve.
-     * - Missing path: rejected, which is how processBatch() decides a line is
-     *   not a path and moves on to the hex and plaintext tiers.
-     * - `.seal` file: decrypted to the same name with the extension removed.
-     * - Any other file: encrypted to `<name>.seal`.
+     * | first matching case | action                                     |
+     * |---------------------|--------------------------------------------|
+     * | .exe or seal name   | skip successfully                          |
+     * | dot                 | expand to current directory                |
+     * | directory           | recurse; return true even if children fail |
+     * | missing/empty path  | return false                               |
+     * | .seal file          | decrypt; remove final extension            |
+     * | other file          | encrypt to name.seal                       |
      *
-     * @tparam SecurePwd Secure password container.
-     * @param raw      Path string; may be quoted.
-     * @param password Master password for key derivation.
-     * @return `true` when the path was recognized and processed. Skipped names
-     *         and directories also return `true`; a directory returns `true`
-     *         even when files inside it failed.
-     *
-     * @post After a successful file transform the source is removed with
-     *       `DeleteFileA`. It is not shredded, and an existing destination is
-     *       replaced without warning.
-     * @throw std::runtime_error propagated from the encrypt path (see
-     *        @ref encryptFileTo). The decrypt path reports failures as `false`.
+     * @throw std::runtime_error from encryption; decryption reports false.
+     * @post replaces destinations; source removal uses DeleteFileA, not shredding.
      */
     template <secure_password SecurePwd>
     static bool processFilePath(const std::string& raw, const SecurePwd& password);
 
     /**
-     * @brief Batch dispatcher for mixed CLI input.
+     * @brief classify CLI lines as paths, hex tokens or plaintext, in that order.
      *
-     * Each line is classified by the first tier that accepts it:
-     * - Tier 1, file or directory path, handled by processFilePath(). A path
-     *   always wins, even when the same text would also scan as hex.
-     * - Tier 2, hex tokens, decrypted with decryptLine(). Tokens that parse as
-     *   triples contribute their service names to the masked view; any other
-     *   plaintext is copied to the clipboard with a TTL scrub and kept for the
-     *   echo step below.
-     * - Tier 3, anything else, encrypted with encryptLine().
+     * hex credentials retain only service names and source-token indices after the scan; other
+     * credential fields are wiped. censored mode re-decrypts one clicked row and blocks until the
+     * masked view exits. uncensored mode re-decrypts and prints every triple.
      *
-     * Output is emitted in three groups once every line is classified: the
-     * credential view first, then the non-triple plaintext echo, then the newly
-     * produced hex.
+     * non-triple plaintext is copied to the clipboard with TTL during the scan. censored echo
+     * copies it again; only the final copy survives. output order is credentials, non-triple
+     * plaintext (masked unless uncensored), then newly encrypted hex.
      *
-     * @par Credential exposure
-     * The scan keeps only service names plus an index back to the source hex
-     * token; usernames and passwords are wiped as soon as the names are copied.
-     * In censored mode (`uncensored == false`) a credential is re-decrypted one
-     * at a time when its row is clicked, and the call blocks in
-     * interactiveMaskedWin() until the user exits. In uncensored mode every
-     * triple is re-decrypted and printed to `std::cout` on one line.
-     *
-     * @par Non-triple plaintext
-     * Uncensored mode prints it as-is; censored mode prints `*` runs. Both
-     * modes copy it to the clipboard during the scan, and censored mode copies
-     * it once more at the echo step. Each copy replaces the previous one and
-     * restarts the single TTL scrub timer, so only the last non-triple
-     * plaintext of the batch survives there.
-     *
-     * @tparam SecurePwd Secure password container.
-     * @param lines      Input lines to process. Returns immediately when empty.
-     * @param uncensored Print plaintext when `true`, mask when `false`.
-     * @param password   Master password for key derivation.
-     *
-     * @note A token that fails to decrypt is reported on `std::cerr` and the
-     *       remaining lines are still processed. An exception from the encrypt
-     *       side of processFilePath() is not caught here and aborts the batch.
+     * @note failed token decryption is logged and processing continues. file-encryption exceptions
+     *       propagate and abort the batch.
      */
     template <secure_password SecurePwd>
     static void processBatch(const std::vector<std::string>& lines,
@@ -451,89 +231,47 @@ public:
                              const SecurePwd& password);
 
     /**
-     * @brief Stream encryption: read from stdin, encrypt, write binary to stdout.
+     * @brief encrypt all of stdin as one binary packet on stdout.
      *
-     * Reads `std::cin` to end of stream, encrypts the bytes as one AES-256-GCM
-     * packet, and writes that raw packet to `std::cout`. Despite the name the
-     * read is not incremental: the whole input is buffered in heap memory and
-     * the packet is built beside it, so peak memory is the input plus its
-     * packet (input + 52 bytes).
+     * buffers the entire input and packet; peak storage is twice input size plus 52 bytes.
      *
-     * @tparam SecurePwd Secure password container.
-     * @param password Master password for key derivation.
-     * @return `true` on success. `false` when stdin is empty, the write to
-     *         stdout fails, or the crypto layer throws; the reason goes to
-     *         `std::cerr`.
-     *
-     * @pre `stdin` and `stdout` are in binary mode. seal never calls `_setmode`,
-     *      so the caller must switch them. In text mode Windows translates `\n`
-     *      to `\r\n` on output and stops reading at 0x1A, which corrupts the
-     *      packet.
-     * @note No CLI mode reaches this function; `-e` / `--text-encrypt` selects
-     *       the hex/Base64 text mode instead.
+     * @return false for empty stdin, output failure or crypto exception; logs to stderr.
+     * @pre caller sets stdin and stdout to binary mode; text translation corrupts packets.
+     * @note no CLI mode routes here; text-encrypt uses hex/Base64 instead.
      */
     template <secure_password SecurePwd>
     static bool streamEncrypt(const SecurePwd& password);
 
     /**
-     * @brief Stream decryption: read binary from stdin, decrypt, write to stdout.
+     * @brief authenticate a complete stdin packet before writing plaintext to stdout.
      *
-     * Reads one raw AES-256-GCM packet from `std::cin`, decrypts it, and writes
-     * the plaintext to `std::cout`. The whole packet is buffered first, so peak
-     * memory is the size of the input plus its plaintext. GCM authenticates
-     * only at the end, so nothing is emitted until the tag verifies.
+     * buffers the packet and plaintext in full.
      *
-     * @tparam SecurePwd Secure password container.
-     * @param password Master password for key derivation.
-     * @return `true` on success. `false` when stdin is empty, the packet is
-     *         malformed, authentication fails, or the write to stdout fails;
-     *         the reason goes to `std::cerr`.
-     *
-     * @pre `stdin` and `stdout` are in binary mode; see @ref streamEncrypt.
-     * @note No CLI mode reaches this function; `-d` / `--text-decrypt` selects
-     *       the hex/Base64 text mode instead.
+     * @return false for empty input, malformed packet, authentication or output failure.
+     * @pre caller sets stdin and stdout to binary mode.
+     * @note no CLI mode routes here; text-decrypt uses hex/Base64 instead.
      */
     template <secure_password SecurePwd>
     static bool streamDecrypt(const SecurePwd& password);
 
     /**
-     * @brief Securely delete a file by overwriting with random data then removing.
+     * @brief overwrite random/zero/random passes, flush each and remove the file.
      *
-     * Opens the file exclusively with `FILE_FLAG_WRITE_THROUGH`, makes three
-     * full-length passes over it - random, zeros, random - flushing after each,
-     * then deletes it. A file whose size is zero or cannot be queried skips the
-     * passes and is deleted directly.
+     * opens exclusively with FILE_FLAG_WRITE_THROUGH. zero or unknown size skips overwriting.
      *
-     * @param path File to shred.
-     * @return `true` when the file is gone. `false` when it cannot be opened
-     *         exclusively, a seek or write fails, `RAND_bytes` fails, or the
-     *         final delete fails.
-     *
-     * @warning Overwriting reaches the original sectors only on media that
-     *          write in place. On SSDs, copy-on-write or journalling
-     *          filesystems, shadow copies and network shares the old contents
-     *          can survive.
-     * @warning A `false` return from a failed pass leaves the file on disk,
-     *          partly overwritten and therefore unusable. Do not treat the data
-     *          as either intact or destroyed.
+     * @return false on open, seek, write, random-generation or delete failure.
+     * @warning overwrite cannot erase copies on SSDs, copy-on-write/journaled filesystems, shadow
+     *          copies or network shares. a failed pass can leave partly overwritten, unusable data.
      */
     static bool shredFile(const std::string& path);
 
     /**
-     * @brief Compute the SHA-256 hash of a file.
+     * @brief hash binary file bytes with a 64 KiB buffer.
      *
-     * Reads the file in 64 KiB chunks, so memory use does not depend on the
-     * file size. The file is opened in binary mode and hashed byte for byte.
-     *
-     * @param path File to hash.
-     * @return 64 lowercase hex characters, or an empty string when the file
-     *         cannot be opened or an OpenSSL digest call fails. An empty file
-     *         hashes to the SHA-256 of zero bytes, not to an empty string.
-     *
-     * @warning A read error after the first chunk is not reported. The call
-     *          returns the SHA-256 of the bytes read so far, so a returned
-     *          digest is not proof that the whole file was read. A caller that
-     *          needs that proof must check the byte count itself.
+     * @return 64 lowercase hex characters; empty on open or OpenSSL failure. empty files have a
+     *         digest.
+     * @warning read errors return a digest of the bytes read so far; this does not prove a full
+     *          read.
      */
     [[nodiscard]] static std::string hashFile(const std::string& path);
 };
