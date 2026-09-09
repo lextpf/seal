@@ -14,8 +14,7 @@ namespace seal
 
 bool Cryptography::ctEqualRaw(const unsigned char* a, const unsigned char* b, size_t n)
 {
-    // XOR each byte and OR-accumulate into v: any difference sets a bit. Every iteration
-    // runs identical work, so timing is data-independent.
+    // accumulate every difference without data-dependent exits.
     unsigned char v = 0;
     for (size_t i = 0; i < n; ++i)
         v |= static_cast<unsigned char>(a[i] ^ b[i]);
@@ -29,15 +28,16 @@ void Cryptography::hardenHeap()
 
 void Cryptography::hardenProcessAccess()
 {
-    // Deny the dangerous process-access rights to Everyone, then allow SYSTEM and
-    // Administrators. The deny ACE comes first and Everyone covers both principals, so they
-    // keep only the rights the deny mask leaves over. This blocks procdump, Process Hacker
-    // and malware memory reads; a caller holding SeDebugPrivilege still bypasses the DACL.
+    // the Everyone deny ACE also covers SYSTEM and administrators.
+    // SeDebugPrivilege bypasses the DACL.
+    // SDDL "D:(D;;0x147A;;;WD)(a;;GA;;;SY)(a;;GA;;;BA)":
+    //   0x147A = CREATE_THREAD|VM_OPERATION|VM_READ|VM_WRITE|DUP_HANDLE|
+    //            QUERY_INFORMATION|QUERY_LIMITED_INFORMATION.
 
     PSECURITY_DESCRIPTOR pSD = nullptr;
     PACL pDacl = nullptr;
 
-    // SDDL "D:(D;;0x147A;;;WD)(A;;GA;;;SY)(A;;GA;;;BA)": DACL denying Everyone (WD)
+    // SDDL "D:(D;;0x147A;;;WD)(a;;GA;;;SY)(a;;GA;;;BA)": DACL denying Everyone (WD)
     //   0x147A = CREATE_THREAD|VM_OPERATION|VM_READ|VM_WRITE|DUP_HANDLE|
     //            QUERY_INFORMATION|QUERY_LIMITED_INFORMATION,
     //   and allowing SYSTEM (SY) and Administrators (BA) GENERIC_ALL (GA).
@@ -61,8 +61,7 @@ void Cryptography::hardenProcessAccess()
     }
 
 #ifdef USE_QT_UI
-    // `ok` reports the SDDL conversion only. SetSecurityInfo has no checked result, so a
-    // failed apply is still logged as result=ok.
+    // the diagnostic reports SDDL conversion, not SetSecurityInfo success.
     qCInfo(logCrypto).noquote() << QString::fromStdString(seal::diag::joinFields(
         {"event=security.process_access.apply", seal::diag::kv("result", ok ? "ok" : "fail")}));
 #endif
@@ -70,10 +69,9 @@ void Cryptography::hardenProcessAccess()
 
 void Cryptography::disableCrashDumps()
 {
-    // Suppress WER - minidumps could contain secrets.
     SetErrorMode(SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS);
 
-    // Terminate before the default handler can write a crash dump.
+    // prevent the default exception handler from collecting memory.
     SetUnhandledExceptionFilter(
         [](PEXCEPTION_POINTERS) -> LONG
         {
@@ -89,7 +87,6 @@ void Cryptography::disableCrashDumps()
 
 void Cryptography::detectDebugger()
 {
-    // Check 1: user-mode debugger.
     if (IsDebuggerPresent())
     {
 #ifdef USE_QT_UI
@@ -101,16 +98,13 @@ void Cryptography::detectDebugger()
 #else
         OutputDebugStringA("[seal] FATAL: debugger detected\n");
 #endif
-        // 0xDEAD is the seal security-kill exit code: it marks an anti-debug termination
-        // in logs and crash reports.
+        // 0xDEAD identifies a security termination.
         TerminateProcess(GetCurrentProcess(), 0xDEAD);
-        // __fastfail(7) = FAST_FAIL_FATAL_APP_EXIT: kernel-level termination that cannot
-        // be caught. It backs up TerminateProcess and never returns.
+        // __fastfail is the non-returning fallback if TerminateProcess fails.
         __fastfail(7);
         return;
     }
 
-    // Check 2: remote/kernel debugger.
     BOOL remoteDebugger = FALSE;
     if (CheckRemoteDebuggerPresent(GetCurrentProcess(), &remoteDebugger) && remoteDebugger)
     {
@@ -128,8 +122,7 @@ void Cryptography::detectDebugger()
         return;
     }
 
-    // Check 3: NtQueryInformationProcess(ProcessDebugPort), resolved dynamically to avoid
-    // a hard ntdll dependency. It is skipped when the export cannot be resolved.
+    // resolve dynamically; an unavailable ProcessDebugPort probe is skipped.
     using PFN_NtQueryInformationProcess = LONG(WINAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
     HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
     if (hNtdll)
@@ -170,8 +163,7 @@ void Cryptography::detectDebugger()
 
 void Cryptography::trimWorkingSet()
 {
-    // Force pages out so plaintext does not linger in physical RAM after sensitive
-    // operations. VirtualLock'd pages stay resident.
+    // call only after wiping; eviction can page dirty memory to disk.
     EmptyWorkingSet(GetCurrentProcess());
 }
 
@@ -179,7 +171,6 @@ using PFN_SetProcessMitigationPolicy = BOOL(WINAPI*)(PROCESS_MITIGATION_POLICY, 
 
 BOOL Cryptography::setSecureProcessMitigations(bool allowDynamicCode)
 {
-    // Resolve dynamically (Windows 8+ only).
     HMODULE hK32 = GetModuleHandleW(L"kernel32.dll");
     if (!hK32)
         return FALSE;
@@ -190,8 +181,7 @@ BOOL Cryptography::setSecureProcessMitigations(bool allowDynamicCode)
 
     BOOL allSuccess = TRUE;
 
-    // 1. Block dynamic code generation (JIT-injection mitigation). Skipped in QML UI mode
-    // because Qt Quick's V4 engine needs a JIT.
+    // QML V4 needs dynamic code for its JIT.
     if (!allowDynamicCode)
     {
         PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynCodePolicy = {};
@@ -199,17 +189,17 @@ BOOL Cryptography::setSecureProcessMitigations(bool allowDynamicCode)
         allSuccess &= pSet(ProcessDynamicCodePolicy, &dynCodePolicy, sizeof(dynCodePolicy));
     }
 
-    // 2. Require signed images (block unsigned DLL injection).
     PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY sigPolicy = {};
     sigPolicy.MitigationOptIn = 1;
     sigPolicy.MicrosoftSignedOnly = 0;
     sigPolicy.AuditMicrosoftSignedOnly = 0;
     allSuccess &= pSet(ProcessSignaturePolicy, &sigPolicy, sizeof(sigPolicy));
 
-    // 3. Side-channel isolation vs transient-exec attacks (best-effort; unknown bits ignored):
-    //    SmtBranchTargetIsolation=Spectre-BTI cross-thread BTB poisoning;
-    //    IsolateSecurityDomain/RestrictCoreSharing=keep foreign work off sibling SMT/core;
-    //    DisablePageCombine=no CoW-timing dedup; SpeculativeStoreBypassDisable=SSB CVE-2018-3639.
+    // best-effort side-channel flags:
+    // SmtBranchTargetIsolation: cross-thread BTB isolation;
+    // IsolateSecurityDomain/RestrictCoreSharing: sibling SMT/core isolation;
+    // DisablePageCombine: prevent deduplication timing;
+    // SpeculativeStoreBypassDisable: SSB mitigation.
     PROCESS_MITIGATION_SIDE_CHANNEL_ISOLATION_POLICY sc{};
     sc.SmtBranchTargetIsolation = 1;
     sc.IsolateSecurityDomain = 1;
@@ -218,18 +208,15 @@ BOOL Cryptography::setSecureProcessMitigations(bool allowDynamicCode)
     sc.RestrictCoreSharing = 1;
     allSuccess &= pSet(ProcessSideChannelIsolationPolicy, &sc, sizeof(sc));
 
-    // 4. Strict handle checks.
     PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY handlePolicy = {};
     handlePolicy.RaiseExceptionOnInvalidHandleReference = 1;
     handlePolicy.HandleExceptionsPermanentlyEnabled = 1;
     allSuccess &= pSet(ProcessStrictHandleCheckPolicy, &handlePolicy, sizeof(handlePolicy));
 
-    // 5. Disable extension points (third-party injection mitigation).
     PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY extPolicy = {};
     extPolicy.DisableExtensionPoints = 1;
     allSuccess &= pSet(ProcessExtensionPointDisablePolicy, &extPolicy, sizeof(extPolicy));
 
-    // 6. Image-load policy: restrict DLL load locations.
     PROCESS_MITIGATION_IMAGE_LOAD_POLICY imgPolicy = {};
     imgPolicy.NoRemoteImages = 1;
     imgPolicy.NoLowMandatoryLabelImages = 1;
@@ -272,9 +259,7 @@ BOOL Cryptography::tryEnableLockPrivilege()
         return FALSE;
     }
 
-    // AdjustTokenPrivileges returns TRUE on partial success, for example when the
-    // privilege is absent from the token. Only GetLastError() == ERROR_SUCCESS confirms
-    // that the privilege was enabled.
+    // true can mean partial success; GetLastError confirms privilege assignment.
     DWORD gle = GetLastError();
     CloseHandle(hToken);
 
@@ -314,8 +299,6 @@ Cryptography::PacketHeader Cryptography::makeHeader(const seal::cfg::KdfParams& 
 {
     PacketHeader h;
     h.kdf = kdf;
-    // Copy the magic into the fixed header buffer. The destination capacity is proven at
-    // compile time, so no overflow is constructible.
     static_assert(sizeof(h.bytes) >= seal::cfg::MAGIC_LEN,
                   "packet header buffer must hold the magic bytes");
     std::copy_n(seal::cfg::AAD_HDR, seal::cfg::MAGIC_LEN, h.bytes.begin());
@@ -345,8 +328,6 @@ Cryptography::PacketHeader Cryptography::parsePacketHeader(std::span<const unsig
         {
             throw std::runtime_error("Rejected KDF parameters (out of accepted range)");
         }
-        // The source length was checked above (data.size() >= HDR_LEN) and the destination
-        // capacity is proven here, so neither buffer can overflow.
         static_assert(sizeof(h.bytes) >= seal::cfg::HDR_LEN,
                       "packet header buffer must hold the full header");
         std::copy_n(data.data(), seal::cfg::HDR_LEN, h.bytes.begin());
@@ -362,13 +343,9 @@ Cryptography::LockedKeyBuffer Cryptography::deriveKey(const SecurePwd& pwd,
                                                       const seal::cfg::KdfParams& kdf)
 {
     using CharT = std::remove_pointer_t<decltype(pwd.data())>;
-    // Key material lives in guard-paged, VirtualLock'd memory; never swaps.
     LockedKeyBuffer key(seal::cfg::KEY_LEN);
 
-    // scrypt needs raw bytes, so RWGuard flips the payload span to PAGE_READWRITE and
-    // restores the previous protection on every exit, including a throw from opensslCheck
-    // below. No call site leaves a payload at PAGE_NOACCESS today, so the flip is usually a
-    // no-op; the guard keeps the contract for a caller that does.
+    // RWGuard restores password page protection on every exit.
     seal::RWGuard<CharT> guard(pwd.data());
 
     const char* pass = nullptr;
@@ -417,16 +394,13 @@ std::vector<unsigned char> Cryptography::encryptPacket(std::span<const unsigned 
                                                        const SecurePwd& password,
                                                        const seal::cfg::KdfParams& kdf)
 {
-    // Packets carry the self-describing KDF header as AAD.
     const PacketHeader header = makeHeader(kdf);
     std::span<const unsigned char> aad(header.bytes.data(), header.size);
 
-    // salt and key
     std::vector<unsigned char> salt(seal::cfg::SALT_LEN);
     opensslCheck(RAND_bytes(salt.data(), (int)salt.size()), "RAND_bytes(salt) failed");
     auto key = deriveKey(password, std::span<const unsigned char>(salt), header.kdf);
 
-    // iv
     std::vector<unsigned char> iv(seal::cfg::IV_LEN);
     opensslCheck(RAND_bytes(iv.data(), (int)iv.size()), "RAND_bytes(iv) failed");
 
@@ -438,7 +412,6 @@ std::vector<unsigned char> Cryptography::encryptPacket(std::span<const unsigned 
     opensslCheck(EVP_EncryptInit_ex(ctx.p, nullptr, nullptr, key.data(), iv.data()),
                  "EncryptInit(key/iv) failed");
 
-    // AAD. makeHeader() always yields 8 bytes; the empty check is defensive only.
     if (!aad.empty())
     {
         int tmp = 0;
@@ -446,7 +419,6 @@ std::vector<unsigned char> Cryptography::encryptPacket(std::span<const unsigned 
                      "EncryptUpdate(AAD) failed");
     }
 
-    // Encrypt
     std::vector<unsigned char> ct(plaintext.size() + 16 /*block slop*/);
     int outlen = 0, fin = 0;
     opensslCheck(
@@ -457,13 +429,12 @@ std::vector<unsigned char> Cryptography::encryptPacket(std::span<const unsigned 
     total += fin;
     ct.resize((size_t)total);
 
-    // Tag
     std::vector<unsigned char> tag(seal::cfg::TAG_LEN);
     opensslCheck(EVP_CIPHER_CTX_ctrl(ctx.p, EVP_CTRL_GCM_GET_TAG, (int)tag.size(), tag.data()),
                  "GET_TAG failed");
 
-    // Wire format: [ AAD (8) | salt (16) | IV (12) | ciphertext | GCM tag (16) ]. The
-    // receiver parses the fixed-size fields and takes the remainder as ciphertext. The AAD
+    // wire format: [ AAD (8) | salt (16) | IV (12) | ciphertext | GCM tag (16) ]. the
+    // receiver parses the fixed-size fields and takes the remainder as ciphertext. the AAD
     // stays unencrypted so the header can be checked before scrypt runs.
     std::vector<unsigned char> out;
     out.reserve(aad.size() + salt.size() + iv.size() + ct.size() + tag.size());
@@ -489,19 +460,15 @@ template <secure_password SecurePwd>
 std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned char> packet,
                                                        const SecurePwd& password)
 {
-    // Parse [ header | salt | IV | ciphertext | tag ]. The header doubles as the AAD and
-    // carries cap-validated KDF parameters.
     const PacketHeader header = parsePacketHeader(packet);
     std::span<const unsigned char> aad_expected(header.bytes.data(), header.size);
     const unsigned char* p = packet.data();
     size_t n = packet.size();
     size_t off = header.size;
 
-    // Structure sizes
     if (n < off + seal::cfg::SALT_LEN + seal::cfg::IV_LEN + seal::cfg::TAG_LEN)
         throw std::runtime_error("Ciphertext too short");
 
-    // Slice fixed-size fields; ciphertext = bytes between IV and tag.
     const unsigned char* salt = p + off;
     const unsigned char* iv = p + off + seal::cfg::SALT_LEN;
     const unsigned char* ct = p + off + seal::cfg::SALT_LEN + seal::cfg::IV_LEN;
@@ -513,7 +480,6 @@ std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned 
     size_t ct_len = ct_len_with_tag - seal::cfg::TAG_LEN;
     const unsigned char* tag = ct + ct_len;
 
-    // Derive key with the header's effective parameters.
     auto key =
         deriveKey(password, std::span<const unsigned char>(salt, seal::cfg::SALT_LEN), header.kdf);
 
@@ -526,8 +492,7 @@ std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned 
     opensslCheck(EVP_DecryptInit_ex(ctx.p, nullptr, nullptr, key.data(), iv),
                  "DecryptInit(key/iv) failed");
 
-    // AAD: always the 8 header bytes, taken verbatim from the packet so that a tampered
-    // header fails the tag check.
+    // authenticate received header bytes verbatim.
     if (!aad_expected.empty())
     {
         int tmp = 0;
@@ -536,15 +501,12 @@ std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned 
             "DecryptUpdate(AAD) failed");
     }
 
-    // Decrypt. `plain` is an ordinary vector, so the plaintext is pageable: the caller
-    // wipes the result with cleanseString() once it has consumed it.
     std::vector<unsigned char> plain(ct_len);
     int outlen = 0, fin = 0;
     opensslCheck(EVP_DecryptUpdate(ctx.p, plain.data(), &outlen, ct, (int)ct_len),
                  "DecryptUpdate(CT) failed");
 
-    // Set the tag and finalize: this is the authentication check. SET_TAG takes void*, not
-    // const void*, so copy into a mutable buffer.
+    // SET_TAG requires mutable storage; finalization authenticates the packet.
     std::vector<unsigned char> tagCopy(tag, tag + seal::cfg::TAG_LEN);
     opensslCheck(
         EVP_CIPHER_CTX_ctrl(ctx.p, EVP_CTRL_GCM_SET_TAG, (int)seal::cfg::TAG_LEN, tagCopy.data()),
@@ -569,7 +531,6 @@ std::vector<unsigned char> Cryptography::decryptPacket(std::span<const unsigned 
 template <secure_password SecurePwd>
 void Cryptography::verifyPacket(std::span<const unsigned char> packet, const SecurePwd& password)
 {
-    // Parse the wire format (same layout as decryptPacket).
     const PacketHeader header = parsePacketHeader(packet);
     std::span<const unsigned char> aad_expected(header.bytes.data(), header.size);
     const unsigned char* p = packet.data();
@@ -610,9 +571,7 @@ void Cryptography::verifyPacket(std::span<const unsigned char> packet, const Sec
             "DecryptUpdate(AAD) failed");
     }
 
-    // Stream the ciphertext through GCM and discard the plaintext; only the tag matters
-    // here. The thread_local scratch keeps allocation at O(1) without burning 64 KiB of
-    // stack per call.
+    // thread-local scratch bounds plaintext memory without a 64 KiB stack allocation.
     constexpr size_t VERIFY_CHUNK = 65536;
     thread_local unsigned char scratch[VERIFY_CHUNK];
     int outlen = 0;
@@ -648,8 +607,6 @@ void Cryptography::verifyPacket(std::span<const unsigned char> packet, const Sec
     }
 }
 
-// Explicit instantiations for narrow (char) and wide (wchar_t) password containers. These
-// two types are what links; another container type gives a link error, not a compile error.
 template Cryptography::LockedKeyBuffer Cryptography::deriveKey(const secure_string<>&,
                                                                std::span<const unsigned char>,
                                                                const seal::cfg::KdfParams&);
