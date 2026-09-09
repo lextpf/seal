@@ -68,13 +68,11 @@ std::vector<std::string> extractHexTokens(const std::string& raw)
     if (!cur.empty())
         tokens.push_back(cur);
 
-    // Minimum hex length: salt + IV + GCM tag (each *2 for hex). A shorter
-    // token cannot be real ciphertext, so filtering avoids false matches.
+    // omit AAD from the early filter so no valid packet is discarded.
     constexpr size_t min_hex_chars = (cfg::SALT_LEN + cfg::IV_LEN + cfg::TAG_LEN) * 2;
     std::vector<std::string> good;
     for (auto& t : tokens)
     {
-        // Even length, >= framing minimum, all xdigit.
         if ((t.size() % 2) == 0 && t.size() >= min_hex_chars)
         {
             bool allhex = std::all_of(
@@ -123,7 +121,6 @@ std::string joinPath(const std::string& dir, const char* name)
     return r;
 }
 
-// UTF-8 -> VirtualLock'd wchar_t string (Win32 size-then-convert pattern).
 seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> utf8ToSecureWide(
     const std::string& utf8)
 {
@@ -139,8 +136,6 @@ seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>> utf8ToSecure
     return result;
 }
 
-// Inverse of utf8ToSecureWide. The output is not locked memory, so the caller
-// cleanses it promptly after use.
 std::string secureWideToUtf8(
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& wide)
 {
@@ -179,7 +174,7 @@ std::vector<unsigned char> fromBase64(const std::string& b64)
                                   static_cast<int>(b64.size()));
     if (written < 0)
         return {};
-    // Trim padding '=' (EVP_DecodeBlock doesn't account for it).
+    // trim padding '=' (EVP_DecodeBlock doesn't account for it).
     size_t pad = 0;
     if (b64.size() >= 2 && b64[b64.size() - 1] == '=')
         ++pad;
@@ -195,15 +190,11 @@ bool isBase64(const std::string& s)
     {
         return false;
     }
-    // Base64 output is always a multiple of 4.
     if (s.size() % 4 != 0)
     {
         return false;
     }
-    // Require at least one character that distinguishes Base64 from hex (G-Z,
-    // g-z, '+', '/', '='). Without it pure hex passes the alphabet check and
-    // the string-mode dispatchers (HandleStringMode,
-    // CliPanelViewModel::executeCliCommand) misroute it through Base64 decode.
+    // a non-hex character keeps text-mode dispatch from decoding hex as Base64.
     bool hasNonHex = false;
     for (char c : s)
     {
