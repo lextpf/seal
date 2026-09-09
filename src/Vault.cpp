@@ -31,25 +31,19 @@
 namespace
 {
 
-// Wipe a std::string, SSO inline buffer included, then release its storage.
-// Unlike SecureZeroMemory(&obj), this zeroes only the character data, not the
-// metadata, so the destructor still sees a valid (empty) object.
+// wipe character storage, including SSO slack, without corrupting string metadata.
 void wipeStdString(std::string& s)
 {
     if (!s.empty())
     {
-        // capacity() covers the full SSO buffer (15 chars on MSVC), not
-        // just size(), so stale slack bytes are wiped too.
+        // capacity includes stale SSO bytes beyond size().
         SecureZeroMemory(s.data(), s.capacity());
     }
     s.clear();
     s.shrink_to_fit();
 }
 
-// Flush a path's data blocks to stable storage before the rename commits: a
-// rename persists directory metadata, not file data, so a power loss right
-// after it could leave a renamed but empty vault. Wide-path counterpart of
-// flushFileToDisk in FileOperations.cpp.
+// attempt a durable data flush before rename; directory metadata does not flush file bytes.
 bool flushPathToDisk(const std::filesystem::path& path)
 {
     HANDLE h = CreateFileW(path.c_str(),
@@ -68,13 +62,13 @@ bool flushPathToDisk(const std::filesystem::path& path)
     return ok != 0;
 }
 
-// Vault binary format: magic(4 "SVH2") + version(1) + count(4 BE) +
-// N records. Each record: platformLen(4 BE) + blob + credLen(4 BE) + blob.
-// The binary frame is hex-encoded into a single text string on disk.
+// vault binary format: magic(4 "SVH2") + version(1) + count(4 BE) +
+// N records. each record: platformLen(4 BE) + blob + credLen(4 BE) + blob.
+// the binary frame is hex-encoded into a single text string on disk.
 constexpr unsigned char kVaultMagic[4] = {'S', 'V', 'H', '2'};
 constexpr unsigned char kVaultFormatVersion = 1;
 
-// All multi-byte ints use big-endian for cross-machine portability.
+// all multi-byte ints use big-endian for cross-machine portability.
 void appendU32BE(std::vector<unsigned char>& out, uint32_t v)
 {
     out.push_back(static_cast<unsigned char>((v >> 24) & 0xFFu));
@@ -112,10 +106,7 @@ std::string pathMetaString(const std::filesystem::path& p)
     return seal::diag::pathSummary(reinterpret_cast<const char*>(p.generic_u8string().c_str()));
 }
 
-// ASCII-lowercase copy: platform names are compared, not collated. Bytes
-// outside 'A'-'Z' pass through unchanged, so a non-ASCII UTF-8 name matches
-// only byte for byte. The account-list filter uses a different rule:
-// VaultListModel folds through Qt::CaseInsensitive.
+// ASCII-only lookup deliberately differs from the Qt list filter.
 std::string asciiLowerCopy(std::string_view s)
 {
     std::string out(s);
@@ -129,10 +120,7 @@ std::string asciiLowerCopy(std::string_view s)
     return out;
 }
 
-// First *.seal file in a directory, by ordinal filename order (case-sensitive,
-// no locale collation); empty when none. The match is on the extension, so a
-// file named exactly ".seal" has no extension and is never returned. The scan
-// is one level deep and skips everything that is not a regular file.
+// choose the first regular .seal extension by ordinal filename; hidden .seal is excluded.
 std::filesystem::path firstSealFileIn(const std::filesystem::path& dir)
 {
     std::error_code ec;
@@ -158,10 +146,7 @@ std::filesystem::path firstSealFileIn(const std::filesystem::path& dir)
     return best;
 }
 
-// Vault diagnostics sink: one logfmt line to the `vault` Qt category, shared by
-// the vault load, save, rekey and directory operations. In non-Qt (CLI/test)
-// builds only the emit compiles out; the initializer_list is still built at the
-// call site.
+// non-Qt builds omit emission but still construct diagnostic fields.
 void logVaultInfo([[maybe_unused]] std::initializer_list<std::string> fields)
 {
 #ifdef USE_QT_UI
@@ -184,9 +169,7 @@ bool looksLikeVault(const std::filesystem::path& path) noexcept
 {
     try
     {
-        // Nine decoded bytes cover magic(4), version(1) and record_count(4).
-        // Requiring the whole fixed header, not just the magic, rejects a file
-        // that carries the four magic bytes and is otherwise truncated.
+        // require the full nine-byte frame header to reject magic-only truncation.
         constexpr std::size_t kHeaderHexCharacters = 18;
         std::ifstream in(path, std::ios::in | std::ios::binary);
         if (!in)
@@ -197,10 +180,7 @@ bool looksLikeVault(const std::filesystem::path& path) noexcept
         std::string compactHeader;
         compactHeader.reserve(kHeaderHexCharacters);
         char ch = '\0';
-        // This is a sniff, not a parser: cap the physical read so a huge
-        // whitespace-only payload cannot make an inventory walk read the whole
-        // file. A normal vault has its header at byte zero; the small allowance
-        // keeps the loader's tolerance for stray leading space.
+        // cap physical reads so whitespace cannot make a sniff scan an entire file.
         constexpr std::size_t kMaximumBytesToRead = 4096;
         std::size_t bytesRead = 0;
         while (compactHeader.size() < kHeaderHexCharacters && bytesRead < kMaximumBytesToRead &&
@@ -281,9 +261,7 @@ static std::vector<unsigned char> encryptString(
         kdf);
 }
 
-// Decrypt into a regular std::string. Platform names only: they are not secret
-// and the list view displays them. Secret fields go through
-// decryptCredentialOnDemand() into a locked-memory secure_string.
+// platform names use pageable storage because the list displays them; secrets use locked memory.
 static std::string decryptToString(
     const std::vector<unsigned char>& packet,
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password)
@@ -316,8 +294,6 @@ std::vector<VaultRecord> loadVaultIndex(
         throw std::runtime_error("Cannot open vault file");
     }
 
-    // Step 1: read the file as a hex-encoded text string and strip stray
-    // whitespace (e.g. line breaks).
     std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::string compact = seal::utils::stripSpaces(raw);
     if (compact.empty())
@@ -331,9 +307,6 @@ std::vector<VaultRecord> loadVaultIndex(
         return {};
     }
 
-    // Step 2: hex-decode to the raw binary frame. The on-disk hex form
-    // keeps the file a safe single-line text blob (no NULs, no encoding
-    // ambiguity).
     std::vector<unsigned char> framed;
     if (!seal::utils::from_hex(std::string_view{compact}, framed))
     {
@@ -345,7 +318,6 @@ std::vector<VaultRecord> loadVaultIndex(
         throw std::runtime_error("Invalid vault format");
     }
 
-    // Step 3: parse header: magic(4) + version(1) + count(4) = 9 bytes min.
     size_t pos = 0;
     if (framed.size() < 9)
     {
@@ -399,8 +371,7 @@ std::vector<VaultRecord> loadVaultIndex(
                       seal::diag::kv("duration_ms", seal::diag::elapsedMs(started))});
         throw std::runtime_error("Corrupted vault file");
     }
-    // Sanity: each record needs >= 8 bytes (two u32 lengths); reject
-    // counts that don't fit in the remaining payload.
+    // each record requires at least two u32 lengths.
     if (entryCount > (framed.size() - pos) / 8)
     {
         logVaultWarn({"event=vault.index.load.finish",
@@ -412,9 +383,6 @@ std::vector<VaultRecord> loadVaultIndex(
         throw std::runtime_error("Corrupted vault file");
     }
 
-    // Step 4: read each [platformLen|platformBlob|credLen|credBlob]. Only
-    // the platform name decrypts here; the credential stays encrypted
-    // until decryptCredentialOnDemand().
     std::vector<VaultRecord> records;
     records.reserve(entryCount);
 
@@ -450,8 +418,7 @@ std::vector<VaultRecord> loadVaultIndex(
         }
         catch (...)
         {
-            // Fail-fast on first decrypt failure: keeps the record count
-            // from leaking via timing on wrong-password attempts.
+            // Stop after the first rejected platform packet; do not derive keys for later records.
             logVaultWarn({"event=vault.index.load.finish",
                           "result=fail",
                           seal::diag::kv("op", opId),
@@ -461,8 +428,6 @@ std::vector<VaultRecord> loadVaultIndex(
             throw std::runtime_error("Wrong password");
         }
     }
-    // Step 5: every byte must have been consumed; trailing bytes mean
-    // corruption, concatenation, or tampering.
     if (pos != framed.size())
     {
         logVaultWarn({"event=vault.index.load.finish",
@@ -496,8 +461,6 @@ bool saveVault(const std::filesystem::path& vaultPath,
                   seal::diag::kv("record_count", records.size()),
                   pathMeta});
 
-    // Atomic save: write tmp, flush, rename. Mid-write crash never
-    // corrupts the existing vault.
     const std::filesystem::path& finalPath = vaultPath;
     std::filesystem::path tmpPath = vaultPath;
     tmpPath += ".tmp";
@@ -526,8 +489,7 @@ bool saveVault(const std::filesystem::path& vaultPath,
         if (rec.deleted)
             continue;
 
-        // Reuse the stored platform packet unless the record is dirty or has no
-        // packet yet; a fresh encrypt costs one scrypt derivation.
+        // reuse clean platform packets to avoid another scrypt derivation.
         std::vector<unsigned char> platformBlob;
         if (!rec.encryptedPlatform.empty() && !rec.dirty)
         {
@@ -569,7 +531,6 @@ bool saveVault(const std::filesystem::path& vaultPath,
         return false;
     }
 
-    // Build the binary frame in the layout loadVaultIndex parses back.
     size_t framedSize = 4 + 1 + 4;  // magic(4) + version(1) + entryCount(4)
     for (const auto& rec : serialized)
     {
@@ -590,7 +551,6 @@ bool saveVault(const std::filesystem::path& vaultPath,
         framed.insert(framed.end(), rec.credential.begin(), rec.credential.end());
     }
 
-    // Hex-encode the entire binary frame so the file is plain text on disk.
     const std::string hexBlob = seal::utils::to_hex(framed);
     out.write(hexBlob.data(), static_cast<std::streamsize>(hexBlob.size()));
     out.flush();
@@ -599,13 +559,9 @@ bool saveVault(const std::filesystem::path& vaultPath,
 
     if (ok)
     {
-        // Durable flush before the rename so a crash/power-loss can't lose the
-        // freshly-written vault (the rename persists metadata, not file data).
         flushPathToDisk(tmpPath);
 
-        // Atomic rename: MOVEFILE_REPLACE_EXISTING is atomic on NTFS so
-        // readers never see a half-written vault. MOVEFILE_COPY_ALLOWED
-        // is the cross-volume fallback (copy + delete).
+        // NTFS replacement is atomic; cross-volume fallback copies and deletes.
         if (!MoveFileExW(tmpPath.c_str(),
                          finalPath.c_str(),
                          MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED))
@@ -681,7 +637,6 @@ PlatformMatch matchPlatform(const std::vector<std::string>& names, std::string_v
 
 std::filesystem::path findDefaultVault()
 {
-    // 1. Environment override (used verbatim when the file exists).
     if (const char* env = std::getenv("SEAL_VAULT"); env != nullptr && env[0] != '\0')
     {
         std::filesystem::path p{env};
@@ -692,7 +647,6 @@ std::filesystem::path findDefaultVault()
         }
     }
 
-    // 2. Executable directory.
     wchar_t exeBuf[MAX_PATH]{};
     if (GetModuleFileNameW(nullptr, exeBuf, MAX_PATH) > 0)
     {
@@ -702,14 +656,12 @@ std::filesystem::path findDefaultVault()
         }
     }
 
-    // 3. Current working directory.
     std::error_code ec;
     if (auto hit = firstSealFileIn(std::filesystem::current_path(ec)); !hit.empty())
     {
         return hit;
     }
 
-    // 4. User home.
     if (const char* home = std::getenv("USERPROFILE"); home != nullptr && home[0] != '\0')
     {
         if (auto hit = firstSealFileIn(std::filesystem::path{home}); !hit.empty())
@@ -729,7 +681,6 @@ size_t rekeyVault(
     [[maybe_unused]] const auto started = std::chrono::steady_clock::now();
     logVaultInfo({"event=vault.rekey.begin", "result=start", seal::diag::kv("op", opId)});
 
-    // Throws "Wrong password" fast on a bad current password.
     std::vector<VaultRecord> records = loadVaultIndex(vaultPath, currentPassword);
 
     std::filesystem::path tmpPath = vaultPath;
@@ -737,7 +688,7 @@ size_t rekeyVault(
 
     try
     {
-        // Re-encrypt one record at a time: peak plaintext = one credential.
+        // keep at most one credential plaintext during rekey.
         std::vector<VaultRecord> rekeyed;
         rekeyed.reserve(records.size());
         for (const VaultRecord& rec : records)
@@ -758,8 +709,7 @@ size_t rekeyVault(
             throw std::runtime_error("Rekey failed: could not write temp vault");
         }
 
-        // Verify the temp vault is loadable with the new password and
-        // structurally equivalent before touching the original.
+        // verify the new key and structure before replacing the original.
         std::vector<VaultRecord> verify = loadVaultIndex(tmpPath, newPassword);
         if (verify.size() != rekeyed.size())
         {
@@ -773,9 +723,6 @@ size_t rekeyVault(
             }
         }
 
-        // Durable flush so the rekeyed temp is on stable storage before the
-        // atomic swap over the live vault (a rename persists metadata, not
-        // file data); a power loss here could otherwise lose every record.
         flushPathToDisk(tmpPath);
 
         if (!ReplaceFileW(vaultPath.c_str(),
@@ -785,8 +732,7 @@ size_t rekeyVault(
                           nullptr,
                           nullptr))
         {
-            // ReplaceFileW requires an existing target; fall back for the
-            // cross-volume / exotic-FS cases.
+            // ReplaceFileW needs an existing target; other filesystems can require fallback.
             if (!MoveFileExW(tmpPath.c_str(),
                              vaultPath.c_str(),
                              MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED))
@@ -824,14 +770,12 @@ DecryptedCredential decryptCredentialOnDemand(
          seal::diag::kv("platform_len", record.platform.size()),
          seal::diag::kv("encrypted_blob_len", record.encryptedBlob.size())}));
 #endif
-    // Credential blob plaintext is "username\0password" - one NUL separator.
     auto plainBytes = seal::Cryptography::decryptPacket(
         std::span<const unsigned char>(record.encryptedBlob), password);
 
     const char* data = reinterpret_cast<const char*>(plainBytes.data());
     size_t len = plainBytes.size();
 
-    // Locate the '\0' separator.
     size_t sep = len;
     for (size_t i = 0; i < len; ++i)
     {
@@ -855,7 +799,6 @@ DecryptedCredential decryptCredentialOnDemand(
         throw std::runtime_error("Malformed credential blob");
     }
 
-    // Before separator = username, after = password.
     std::string userUtf8(data, sep);
     std::string passUtf8;
     if (sep + 1 < len)
@@ -868,7 +811,6 @@ DecryptedCredential decryptCredentialOnDemand(
     cred.username = seal::utils::utf8ToSecureWide(userUtf8);
     cred.password = seal::utils::utf8ToSecureWide(passUtf8);
 
-    // Wipe the intermediate UTF-8 strings, SSO buffers included.
     wipeStdString(userUtf8);
     wipeStdString(passUtf8);
 
@@ -947,12 +889,10 @@ VaultRecord encryptCredential(
     qCDebug(logVault).noquote() << QString::fromStdString(seal::diag::joinFields(
         {"event=credential.encrypt.begin", seal::diag::kv("platform_len", platform.size())}));
 #endif
-    // Wide chars -> UTF-8 for the on-disk format.
     std::string userUtf8 = seal::utils::secureWideToUtf8(username);
     std::string passUtf8 = seal::utils::secureWideToUtf8(password);
 
-    // Plaintext format: "username\0password" - mirrors what
-    // decryptCredentialOnDemand splits on.
+    // credential format: "username\0password".
     std::string credPlain;
     credPlain.reserve(userUtf8.size() + 1 + passUtf8.size());
     credPlain.append(userUtf8);
@@ -961,7 +901,6 @@ VaultRecord encryptCredential(
     wipeStdString(userUtf8);
     wipeStdString(passUtf8);
 
-    // Encrypt the combined credential blob with the master password.
     auto credBlob = seal::Cryptography::encryptPacket(
         std::span<const unsigned char>(reinterpret_cast<const unsigned char*>(credPlain.data()),
                                        credPlain.size()),
@@ -1018,9 +957,7 @@ ProtectedFolderScan scanProtectedFolder(const std::filesystem::path& root)
         }
         else if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
         {
-            // Never follow a symlink, junction, or other reparse point out of
-            // the protected root. Keep the entry in the inventory so policy
-            // diagnostics explain it with the stable "symlink" token.
+            // retain reparse points for policy diagnostics without following them.
             iterator.disable_recursion_pending();
             const fs::path relative = item.path().lexically_relative(root);
             if (!relative.empty())
@@ -1064,10 +1001,7 @@ ProtectedFolderScan scanProtectedFolder(const std::filesystem::path& root)
         if (ec)
         {
             ++scan.failures;
-            // Continuing after an iterator error is implementation-dependent
-            // and may silently omit the remainder of a subtree. A partial
-            // inventory is already unsafe, so stop and let preflight/exit fail
-            // closed on the recorded error.
+            // stop on iterator errors; a partial inventory must fail preflight/exit protection.
             break;
         }
     }
@@ -1130,10 +1064,7 @@ struct WindowsPathLess
                                                 rhs.data(),
                                                 static_cast<int>(rhs.size()),
                                                 TRUE);
-        // CompareStringOrdinal is invariant and case-insensitive here. It
-        // returns 0 only on failure, for example an input longer than INT_MAX;
-        // the lexical fallback then keeps the comparator ordered for those
-        // inputs instead of reporting every pair as equivalent.
+        // API failure uses lexical fallback to keep the comparator ordered.
         return result == CSTR_LESS_THAN || (result == 0 && lhs < rhs);
     }
 };
@@ -1176,10 +1107,7 @@ DirectoryProcessResult processFolderPlan(
                   seal::diag::kv("skipped", plan.skipped.size()),
                   pathMeta});
 
-    // A FileOperations staging name collides with its own parent transform,
-    // and during encryption it otherwise looks like an independent plaintext
-    // payload. Reserve every planned staging name up front so the executor
-    // never consumes that user-owned file later in the same snapshot.
+    // reserve all staging names before execution so they cannot become later source entries.
     std::set<std::wstring, WindowsPathLess> reservedTemporaryPaths;
     for (const protected_folder::Entry& entry : plan.act)
     {
@@ -1235,9 +1163,7 @@ DirectoryProcessResult processFolderPlan(
                 continue;
             }
 
-            // Close the scan/execute TOCTOU window for the most important
-            // protected identity. A file swapped to an SVH2 vault after the
-            // plan was made is still never transformed.
+            // recheck vault magic because source identity may have changed since planning.
             if (looksLikeVault(source))
             {
                 logVaultInfo({"event=directory.plan.skip",
@@ -1250,12 +1176,7 @@ DirectoryProcessResult processFolderPlan(
 
             const fs::path destination = transformDestination(source, encrypt);
 
-            // FileOperations commits with MOVEFILE_REPLACE_EXISTING and uses a
-            // deterministic "<destination>.tmp" staging path. Neither is safe
-            // for an automatic whole-folder operation: a plaintext sibling
-            // named "vault" must never replace the protected "vault.seal",
-            // and an unrelated user-owned .tmp file must not be truncated.
-            // Probe with symlink_status so even dangling links fail closed.
+            // refuse occupied output/staging names; symlink_status rejects dangling links.
             fs::path temporary = destination;
             temporary += L".tmp";
             const PathProbe destinationProbe = probePathWithoutFollowing(destination);
@@ -1318,10 +1239,7 @@ DirectoryProcessResult processFolderPlan(
     return result;
 }
 
-// Shared body for the manual GUI directory operations. Folder protection calls
-// the plan and the executor directly so it can keep the failure counts. Here
-// the summed failure count is discarded: encryptDirectory and decryptDirectory
-// report only the success count, and a scan failure reaches no log line.
+// manual GUI operations return successes only; scan failures are not logged here.
 static int processDirectoryFiles(
     const std::filesystem::path& dirPath,
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& password,
