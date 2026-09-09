@@ -9,8 +9,6 @@
 namespace seal
 {
 
-// --- session ---
-
 bool CredentialWorkspace::isPasswordSet() const noexcept
 {
     return m_Session.isSet();
@@ -30,8 +28,6 @@ CredentialSession& CredentialWorkspace::session() noexcept
 {
     return m_Session;
 }
-
-// --- records (read) ---
 
 const std::vector<VaultRecord>& CredentialWorkspace::records() const noexcept
 {
@@ -61,8 +57,6 @@ size_t CredentialWorkspace::recordCount() const noexcept
     return count;
 }
 
-// --- vault path ---
-
 const std::filesystem::path& CredentialWorkspace::vaultPath() const noexcept
 {
     return m_VaultPath;
@@ -72,8 +66,6 @@ void CredentialWorkspace::setVaultPath(std::filesystem::path path)
 {
     m_VaultPath = std::move(path);
 }
-
-// --- domain ops ---
 
 void CredentialWorkspace::addRecord(const std::string& platform,
                                     const SecureWide& username,
@@ -117,7 +109,6 @@ void CredentialWorkspace::editRecord(size_t index,
     const auto& finalUsername = username ? *username : existing.username;
     const auto& finalPassword = password ? *password : existing.password;
 
-    // Replace the record entirely - fresh salt/IV on re-encrypt.
     m_Records[index] =
         seal::encryptCredential(platform, finalUsername, finalPassword, access.password());
     ++m_Generation;
@@ -157,8 +148,6 @@ DecryptedCredential CredentialWorkspace::decrypt(size_t index) const
     {
         throw std::runtime_error("decrypt: index out of range");
     }
-    // m_Session is mutable: the DPAPI unprotect/re-protect cycle mutates the session
-    // buffer temporarily, but decrypt() is logically const (it only reads records).
     auto access = m_Session.unlock();
     if (!access.ok())
     {
@@ -167,13 +156,9 @@ DecryptedCredential CredentialWorkspace::decrypt(size_t index) const
     return seal::decryptCredentialOnDemand(m_Records[index], access.password());
 }
 
-// --- persistence ---
-
 void CredentialWorkspace::load(const std::filesystem::path& path)
 {
-    // Clone the password to a local buffer so the Access window can close
-    // before we mutate m_Records (replaceRecords bumps the generation and
-    // the Access destructor re-protects the session buffer).
+    // Close the Access window before replacing records and advancing generation.
     SecureWide pw;
     {
         auto access = m_Session.unlock();
@@ -191,12 +176,10 @@ void CredentialWorkspace::load(const std::filesystem::path& path)
     }
     catch (...)
     {
-        // Wipe the local copy on the failure path too.
         seal::Cryptography::cleanseString(pw);
         throw;
     }
 
-    // Wipe the local copy before moving data in.
     seal::Cryptography::cleanseString(pw);
 
     replaceRecords(std::move(loaded));
