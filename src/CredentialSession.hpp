@@ -9,54 +9,47 @@ namespace seal
 
 /**
  * @class CredentialSession
- * @brief Single owner of the master password and its DPAPI in-memory guard.
- * @author Alex (https://github.com/lextpf)
+ * @brief Own the long-lived master key and its DPAPI guard.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Memory
  *
- * The master key lives in locked memory and stays DPAPI-protected while idle.
- * @ref unlock returns an RAII window during which the key is plaintext. This
- * class is the only long-lived holder of the key in the process; anything else
- * is a short-lived clone taken inside a window, and its holder must cleanse it.
+ * The key uses the locked allocator, which attempts page locking. After protection succeeds,
+ * the idle key is DPAPI-protected. Take temporary clones inside an Access window and cleanse
+ * them after use. Keep the session at one address because the guard points into its buffer.
  *
- * @par Master-key lifecycle
  * @verbatim
  *   States:  unset - no key held
  *            idle  - key held, DPAPI-protected  (the resting state)
  *            open  - Access alive and ok(): key is plaintext-readable
  *
  *   Transitions:
- *     unset  --adopt(pw)---------------------->  idle
- *     idle   --adopt(pw)  (clear + re-adopt)-->  idle
+ *     unset  --adopt(pw) [protection succeeds]-> idle
+ *     idle   --adopt(pw) [protection succeeds]-> idle
  *     idle   --clear()------------------------>  unset
- *     idle   --unlock()  [key held]----------->  open
- *     open   --~Access: reprotect()----------->  idle   (best-effort)
+ *     idle   --unlock() [unprotect succeeds]--> open
+ *     open   --~Access [protection succeeds]-> idle
  *     unset  --unlock()----------------------->  unset  (ok() == false)
  * @endverbatim
  *
- * @par Address stability
- * The DPAPI guard stores a raw pointer to the member buffer, so the session
- * must not change address while it holds a key. Copy and move are therefore
- * deleted: own the session in place and pass it by reference.
+ * Empty input or a DPAPI failure can leave a held key unprotected. In that state, unlock()
+ * fails until a fresh adopt(); isSet() alone does not authorize plaintext access.
  *
- * @warning Access windows do not nest. A second @ref unlock inside an open
- *          window finds the buffer already unprotected, so it reports
- *          `ok() == false` and its destructor re-protects nothing. Open one
- *          window per call chain and pass the key down, or copy the key out.
- *
- * @note Not internally synchronised. Call it only on the owning (GUI) thread;
- *       background workers must receive an owned SecureWide copy taken inside
- *       an unlock() window, never a CredentialSession&.
+ * @note Call only on the owning thread. Background workers receive an owned SecureWide clone.
+ * @warning Access windows do not nest; a second unlock() reports `ok() == false`.
  */
 class CredentialSession
 {
 public:
-    /// Master-password buffer type: a wide secure string in locked memory.
+    /// Master-password buffer with guarded allocation and best-effort page locking.
     using SecureWide = basic_secure_string<wchar_t, locked_allocator<wchar_t>>;
 
-    /// @brief Construct an empty (unset) session.
     CredentialSession();
 
-    /// @brief Wipe and release the master key by calling @ref clear.
+    /**
+     * @fn ~CredentialSession()
+     * @brief Wipe and release the master key by calling clear.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     ~CredentialSession();
 
     CredentialSession(const CredentialSession&) = delete;
@@ -65,65 +58,52 @@ public:
     CredentialSession& operator=(CredentialSession&&) = delete;
 
     /**
-     * @brief Whether a master password is currently held.
-     * @return true after @ref adopt and before the next @ref clear. A true
-     *         result does not promise that @ref unlock will succeed.
+     * @fn bool isSet() const noexcept
+     * @brief Report key ownership, independent of unlock success.
+     * @author Alex (<https://github.com/lextpf>)
      */
     bool isSet() const noexcept;
 
     /**
-     * @brief Adopt a new master password (sole acquire path).
+     * @fn void adopt(SecureWide&& password)
+     * @brief Replace and wipe the key, then attempt DPAPI protection.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Wipes any previous key, takes ownership of @p password, rebuilds the
-     * DPAPI guard over the new buffer, and protects it, which normally leaves
-     * the session idle. The locked allocation moves into the session, so
-     * @p password is left empty.
-     *
-     * @param password Master password to take ownership of.
-     * @pre No Access window is open on this session.
-     * @note The DPAPI encryption result is discarded. Two cases leave the key in
-     *       plaintext: a zero-length @p password, which DPAPI cannot protect, and
-     *       a CryptProtectMemory failure. Both still set @ref isSet, and every
-     *       @ref unlock then reports `ok() == false`. Recovery is a fresh
-     *       @ref adopt. Callers reject empty input earlier.
+     * @param password Moved into the session; empty on return.
+     * @pre No Access window is open.
+     * @note Empty input or DPAPI failure leaves the buffer unprotected but isSet() true.
+     *       unlock() then fails until a fresh adopt(); the encryption result is not reported.
      */
     void adopt(SecureWide&& password);
 
     /**
-     * @brief Wipe the master key and return to the unset state (sole release).
+     * @fn void clear()
+     * @brief Release the DPAPI guard and wipe the key; repeated calls are safe.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Drops the DPAPI guard first, which unprotects the buffer and restores its
-     * pre-padding size, then cleanses it. Calling this on an unset session is a
-     * harmless no-op.
-     *
-     * @pre No Access window is open on this session.
+     * @pre No Access window is open.
      */
     void clear();
 
     /**
      * @class Access
-     * @brief RAII plaintext window over the session's master key.
+     * @brief Scoped plaintext access to the session's key.
+     * @author Alex (<https://github.com/lextpf>)
      * @ingroup Memory
      *
-     * Unprotects on construction and re-protects on destruction. @ref ok
-     * reports whether the buffer is readable; check it before calling
-     * @ref password. The key is plaintext in process memory for the whole
-     * lifetime of the window, so keep windows short.
+     * Check ok() before reading and keep the scope short. The session must outlive this window;
+     * do not adopt or clear a key while it is open. Borrowed data is plaintext only inside this
+     * window. Copy into owned secure storage for use after the window closes.
      *
-     * An Access must not outlive its session, and the session must not be
-     * adopted into or cleared while a window is open. The type is neither
-     * copyable nor movable; @ref unlock returns it by guaranteed elision.
-     *
-     * @par Canonical usage
      * @code{.cpp}
-     * auto access = session.unlock();  // ctor: unprotect() when a key is held
-     * if (!access.ok())                // false: unset session or unprotect failed
+     * auto access = session.unlock();  // Ctor: unprotect() when a key is held
+     * if (!access.ok())                // False: unset session or unprotect failed
      * {
-     *     // master key unavailable - do not read
+     *     // Master key unavailable - do not read
      * }
      * else
      * {
-     *     use(access.password());      // valid only within this scope
+     *     use(access.password());      // Valid only within this scope
      * }
      * // ~access here: reprotect() (best-effort; exceptions swallowed)
      * @endcode
@@ -132,22 +112,21 @@ public:
     {
     public:
         /**
-         * @brief Open a plaintext window over @p session.
+         * @fn explicit Access(CredentialSession& session) noexcept
+         * @brief Attempt scoped access; prefer CredentialSession::unlock().
+         * @author Alex (<https://github.com/lextpf>)
          *
-         * Prefer @ref CredentialSession::unlock. Unprotects only when the
-         * session holds a key, so @ref ok stays false on an unset session.
-         *
-         * @param session Session to borrow; it must outlive this window.
+         * @param session Must outlive this window; an unset session yields ok() false.
          */
         explicit Access(CredentialSession& session) noexcept;
 
         /**
-         * @brief Re-protect the buffer.
+         * @fn ~Access()
+         * @brief Attempt DPAPI protection without throwing.
+         * @author Alex (<https://github.com/lextpf>)
          *
-         * Best-effort and never throws: an exception from the re-protect is
-         * swallowed. A failed re-protect leaves the key plaintext and makes
-         * every later @ref unlock report `ok() == false`, because the guard no
-         * longer considers the buffer protected. Recovery is a fresh @ref adopt.
+         * Failure leaves the key plaintext and causes later unlock() calls to fail until a fresh
+         * adopt().
          */
         ~Access();
 
@@ -155,19 +134,21 @@ public:
         Access& operator=(const Access&) = delete;
 
         /**
-         * @brief Whether the key is plaintext and readable in this window.
-         * @return false when the session is unset, when the held key is empty,
-         *         when the DPAPI unprotect failed, or when another Access
-         *         window is already open.
+         * @fn bool ok() const noexcept
+         * @brief Confirm that this window made the key readable.
+         * @author Alex (<https://github.com/lextpf>)
+         *
+         * @return False for an unset or empty key, DPAPI failure or an already-open window.
          */
         bool ok() const noexcept;
 
         /**
-         * @brief The plaintext master password.
-         * @return Reference to the locked-memory buffer, owned by the session
-         *         and valid only while this window is alive and ok(). The
-         *         buffer is not NUL-terminated; use size() or the iterators.
-         * @throw std::logic_error if called when !ok().
+         * @fn const SecureWide& password() const
+         * @brief Borrow the session-owned plaintext buffer.
+         * @author Alex (<https://github.com/lextpf>)
+         *
+         * @return Valid only while this window is alive and ok(); not NUL-terminated.
+         * @throw std::logic_error When !ok().
          */
         const SecureWide& password() const;
 
@@ -177,23 +158,18 @@ public:
     };
 
     /**
-     * @brief Open a scoped plaintext window over the master key.
+     * @fn Access unlock() noexcept
+     * @brief Keep the key plaintext until the returned window leaves scope.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Bind the result to a named local: the window closes, and the key is
-     * re-protected, when that local goes out of scope.
-     *
-     * @return An Access whose ok() is false when the session is unset, when the
-     *         held key is empty, when the DPAPI unprotect failed, or when a
-     *         window is already open.
+     * Bind the result to a named local and check Access::ok() before reading.
      */
     [[nodiscard]] Access unlock() noexcept;
 
 private:
     friend class Access;
 
-    /// Master password in locked memory. While protected it holds ciphertext
-    /// padded up to the DPAPI block size, so size() is meaningful only inside
-    /// an open Access window.
+    /// Locked ciphertext while idle; size() includes DPAPI padding outside Access.
     SecureWide m_Password;
     DPAPIGuard<SecureWide> m_Guard;  ///< In-memory DPAPI guard pointing at m_Password.
     bool m_Set = false;              ///< Whether a password is held; independent of guard state.
