@@ -34,17 +34,18 @@ namespace seal
 
 /**
  * @class Cryptography
- * @brief AES-256-GCM encryption, scrypt key derivation, and secure memory.
+ * @brief AES-256-GCM packets, scrypt derivation and process hardening.
  * @author Alex (https://github.com/lextpf)
  * @ingroup Crypto
  *
- * The cryptographic core of seal. Every member is static; callers use it without an instance.
+ * packet calls are independent and may run concurrently. verifyPacket keeps one thread-local
+ * 64 KiB scratch buffer; OpenSSL update exceptions can skip its wipe.
  *
- * ## :material-lock: Encryption
+ * crypto templates are instantiated only for secure_string<> and basic_secure_string<wchar_t>.
+ * other containers link-fail despite satisfying secure_password. scrypt hashes raw code units:
+ * the same text in narrow and wide containers derives different keys.
  *
- * encryptPacket() and decryptPacket() implement framed AES-256-GCM with scrypt key
- * derivation. Each packet carries its own random salt and IV, so no external state is
- * needed.
+ * hardening changes process-wide state at startup. trimWorkingSet runs only after secret wiping.
  *
  * ```mermaid
  * ---
@@ -66,69 +67,27 @@ namespace seal
  *         DEC --> PT["plaintext"]
  *     end
  * ```
- *
- * ## :material-shield: Process Hardening
- *
- * These methods change process-wide state and run once during start-up:
- * - hardenHeap() - terminates the process on detected heap corruption
- * - hardenProcessAccess() - restricts the DACL to block external memory reads
- * - disableCrashDumps() - suppresses WER and terminates on unhandled exceptions
- * - detectDebugger() - terminates the process if a debugger is detected
- * - setSecureProcessMitigations() - signature, side-channel, handle, extension-point
- *   and image-load policies (DEP, CFG and ASLR come from the link-time image flags)
- * - tryEnableLockPrivilege() - enables SeLockMemoryPrivilege before the first locked
- *   allocation
- *
- * trimWorkingSet() is not a start-up step. Callers run it at run time after each secret is
- * wiped; see its own warning.
- *
- * @par Threading
- * The class keeps no shared mutable state, so the packet methods may run on several threads
- * at once. verifyPacket() is the only method that keeps memory between calls: a
- * `thread_local` 64 KiB scratch buffer, wiped on every normal exit. A throw from the
- * OpenSSL update call inside the streaming loop skips the wipe.
- *
- * @par Password containers
- * deriveKey(), encryptPacket(), decryptPacket() and verifyPacket() are defined in
- * Cryptography.cpp and instantiated there for `secure_string<>` and
- * `basic_secure_string<wchar_t>` alone, so any other type that satisfies @ref
- * secure_password fails at link time. scrypt hashes the raw code units, so the same text in
- * a narrow and in a wide container derives two different keys.
- *
- * @see locked_allocator, secure_string, cfg
  */
 class Cryptography
 {
 public:
     /**
-     * @brief Constant-time byte comparison.
+     * @brief compare all bytes without an early exit.
      *
-     * The loop has no early exit, so the run time depends on @p n alone, not on where the
-     * buffers differ. When @p n is 0 neither pointer is read and the result is `true`.
-     *
-     * @param a First buffer; at least @p n readable bytes.
-     * @param b Second buffer; at least @p n readable bytes.
-     * @param n Number of bytes to compare.
-     * @return `true` when all @p n bytes are identical.
+     * @param a readable for n bytes; unused when n is zero.
+     * @param b readable for n bytes; unused when n is zero.
+     * @param n byte count; determines runtime.
+     * @return true for identical buffers, including zero bytes.
      */
     static bool ctEqualRaw(const unsigned char* a, const unsigned char* b, size_t n);
 
     /**
-     * @brief Constant-time equality for two byte-like ranges.
+     * @brief compare equal-sized byte ranges without data-dependent exits.
      *
-     * The per-byte comparison runs in data-independent time, but a size mismatch returns
-     * early: the lengths are treated as public, not secret. The constraint accepts
-     * contiguous ranges of `char`, `unsigned char` or `std::byte`; wide ranges do not
-     * compile, so compare those through ctEqualRaw() after casting.
+     * length mismatch returns early; lengths are public. wide ranges require ctEqualRaw with a
+     * cast.
      *
-     * @tparam A First range type; contiguous, with @ref byte_like elements.
-     * @tparam B Second range type; contiguous, with @ref byte_like elements.
-     * @param aa First range.
-     * @param bb Second range.
-     * @return `true` when the ranges have equal length and identical bytes.
-     * @note Only the size-mismatch path can be constant-evaluated. The equal-size path
-     *       calls the out-of-line ctEqualRaw() through `reinterpret_cast`, so it always
-     *       runs at run time.
+     * @note only size mismatch can be constant-evaluated; equal sizes require the runtime raw call.
      */
     template <class A, class B>
         requires requires(const A& aa, const B& bb) {
@@ -149,19 +108,10 @@ public:
     }
 
     /**
-     * @brief Constant-time equality for two secure strings of the same char type.
+     * @brief apply byte-range equality to secure strings.
      *
-     * Forwards to ctEqualAny(), so `CharT` must be byte-like: narrow secure strings
-     * compare here, wide ones do not compile.
-     *
-     * @tparam CharT Character type of both strings; must satisfy @ref byte_like.
-     * @tparam A     Allocator type shared by both strings.
-     * @param a First string.
-     * @param b Second string.
-     * @return `true` when both strings hold the same number of identical bytes.
-     * @pre Both payloads are readable. The comparison reads the buffers directly, so a
-     *      payload left at PAGE_NOACCESS must be opened with an @ref RWGuard first, and a
-     *      DPAPI-protected buffer must be inside a ScopedDpapiUnprotect window.
+     * @tparam CharT must be byte-like; wide strings do not compile.
+     * @pre payloads are readable and DPAPI-unprotected; open guards before comparing.
      */
     template <class CharT, class A>
     static bool ctEqual(const basic_secure_string<CharT, A>& a,
@@ -171,149 +121,88 @@ public:
     }
 
     /**
-     * @brief Enable heap termination on corruption via `HeapSetInformation`.
+     * @brief attempt irreversible heap-corruption termination for every process heap.
      *
-     * The call passes a null heap handle, so the setting covers every heap in the process
-     * and cannot be switched off again while the process runs.
-     *
-     * @post Detected heap corruption terminates the process instead of returning an error
-     *       code to the caller.
-     * @note The result of `HeapSetInformation` is ignored; the call is best-effort.
+     * HeapSetInformation failure is ignored.
      */
     static void hardenHeap();
 
     /**
-     * @brief Set a restrictive DACL on the current process to block external memory reads.
+     * @brief deny external memory, handle-duplication, thread-creation and query rights.
      *
-     * The deny entry names Everyone and comes first, so it covers SYSTEM and Administrators
-     * too; the allow entries that follow grant them only what the deny mask leaves over.
-     * Denied rights: PROCESS_VM_READ, PROCESS_VM_WRITE, PROCESS_VM_OPERATION,
-     * PROCESS_DUP_HANDLE, PROCESS_CREATE_THREAD and both query-information rights.
+     * the Everyone deny ACE precedes allows and includes SYSTEM and administrators.
      *
-     * @post A normal handle request for a memory read fails, which stops tools such as
-     *       procdump or Process Hacker from dumping secrets.
-     * @warning A caller that holds SeDebugPrivilege bypasses the DACL, so an elevated
-     *          debugger or dumper still reads this process.
-     * @note Failures never stop start-up: the return type is void, and neither a rejected
-     *       SDDL string nor a failing `SetSecurityInfo` is propagated. The Qt build logs
-     *       `event=security.process_access.apply`, whose result reports the SDDL conversion
-     *       alone, so a failing apply still logs `result=ok`.
+     * @warning SeDebugPrivilege bypasses the DACL. startup continues on failure; the Qt diagnostic
+     *          reports only SDDL conversion, so failed SetSecurityInfo can still log result=ok.
      */
     static void hardenProcessAccess();
 
     /**
-     * @brief Suppress crash dumps and WER dialogs to prevent memory disclosure.
+     * @brief suppress WER dialogs and terminate on unhandled exceptions with exit code 1.
      *
-     * Sets SEM_NOGPFAULTERRORBOX and SEM_FAILCRITICALERRORS, then installs an
-     * unhandled-exception filter that calls `TerminateProcess` with exit code 1 at once, so
-     * the default handler never runs and WER never collects a dump.
+     * replaces any existing exception filter.
      *
-     * @post An unhandled exception ends the process without writing a dump file.
-     * @note The filter replaces any unhandled-exception filter installed earlier, including
-     *       one set by the C runtime or by Qt.
-     * @warning Only the process's own dump path is closed. A debugger, a direct
-     *          `MiniDumpWriteDump` call from inside the process, or a kernel dump still
-     *          captures memory.
+     * @warning debugger dumps, in-process MiniDumpWriteDump calls and kernel dumps remain possible.
      */
     static void disableCrashDumps();
 
     /**
-     * @brief Detect attached debuggers and terminate the process if found.
+     * @brief terminate on a positive startup debugger check.
      *
-     * Runs three checks in order: `IsDebuggerPresent()`, `CheckRemoteDebuggerPresent()` and
-     * `NtQueryInformationProcess(ProcessDebugPort)`. The third check is skipped when ntdll
-     * or the export cannot be resolved, so it fails open.
+     * checks IsDebuggerPresent, CheckRemoteDebuggerPresent and ProcessDebugPort in order.
+     * unresolved ntdll/export skips the last check.
      *
-     * @post On a positive check the process calls `TerminateProcess` with exit code 0xDEAD
-     *       and then `__fastfail(7)` (FAST_FAIL_FATAL_APP_EXIT); the function does not
-     *       return.
-     * @note The verdict is a snapshot taken at start-up. A debugger attached after the call
-     *       is not detected.
+     * @post detection calls TerminateProcess(0xDEAD), then __fastfail(7); it does not return.
+     * @note later debugger attachment is not detected.
      */
     static void detectDebugger();
 
     /**
-     * @brief Trim the working set via `EmptyWorkingSet()`.
+     * @brief evict pageable pages from the working set; locked pages stay resident.
      *
-     * Removes pageable pages from the process working set. Pages that locked_allocator
-     * pinned with VirtualLock stay resident, so secrets in a secure_string are unaffected.
-     *
-     * @post The resident set holds fewer plaintext pages.
-     * @warning Trimming moves data toward the page file rather than erasing it: a dirty
-     *          pageable page that still holds a secret can be written to disk as it is
-     *          trimmed. Wipe secrets first and call this afterwards.
+     * @warning wipe first. trimming can write dirty pageable secrets to the page file; it does not
+     *          erase.
      */
     static void trimWorkingSet();
 
     /**
-     * @brief Apply process mitigation policies through `SetProcessMitigationPolicy`.
+     * @brief attempt dynamic-code, signature, side-channel, handle, extension and image policies.
      *
-     * Applies, in this order: dynamic-code prohibition (skipped when @p allowDynamicCode is
-     * `true`), binary-signature opt-in, side-channel isolation, strict handle checks,
-     * extension-point disable, and image-load restrictions. DEP, CFG and ASLR are not set
-     * here; they come from the link-time image flags.
+     * DEP, CFG and ASLR come from linker flags. every policy is attempted even after failure;
+     * successful policies remain active and most cannot be undone.
      *
-     * Every policy is attempted even after an earlier one fails, and most cannot be undone,
-     * so a `FALSE` result still leaves the policies that did apply in force.
-     *
-     * @param allowDynamicCode `true` to permit dynamic code generation
-     *        (required for Qt QML's V4 JIT engine); `false` for stricter CLI mode.
-     * @return `TRUE` when every attempted policy succeeded. `FALSE` when kernel32 or the
-     *         export cannot be resolved, or when at least one policy call failed, for
-     *         example on a Windows build that does not know that policy.
+     * @param allowDynamicCode true permits the QML V4 JIT; false prohibits dynamic code.
+     * @return false if the API cannot resolve or any attempted policy fails.
      */
     static BOOL setSecureProcessMitigations(bool allowDynamicCode);
 
     /**
-     * @brief Enable SeLockMemoryPrivilege if available.
+     * @brief attempt to enable SeLockMemoryPrivilege on the process token.
      *
-     * `AdjustTokenPrivileges` reports success even when the privilege is missing from the
-     * token, so the verdict comes from `GetLastError()` instead of its return value.
+     * checks GetLastError because AdjustTokenPrivileges can succeed without assigning the
+     * privilege.
      *
-     * @post The process token keeps the privilege enabled on success. The token handle is
-     *       closed on every path.
-     * @return `TRUE` when the privilege was enabled. `FALSE` when the process token cannot
-     *         be opened, the privilege name cannot be resolved, or the token does not hold
-     *         the privilege (non-admin accounts typically do not).
-     * @note locked_allocator treats VirtualLock as best-effort, so page locking still works
-     *       inside the process working-set quota when this returns `FALSE`.
+     * @return false for token/API failure or missing privilege.
+     * @note VirtualLock can still work within the working-set quota without this privilege.
      */
     static BOOL tryEnableLockPrivilege();
 
-    /// @brief Overload selected when cleanseString() is called with no arguments; it wipes
-    /// nothing. A non-template beats the variadic template for an empty pack, so the
-    /// zero-argument call stays unambiguous.
     static void cleanseString() noexcept
-    { /* Base case for variadic fold expression - intentionally empty */ }
+    { /* base case for variadic fold expression - intentionally empty */ }
 
     /**
-     * @brief Securely wipe and release one or more containers.
+     * @brief wipe mutable containers and pointers, releasing container storage.
      *
-     * Accepts any mix of `std::string`, `std::vector<byte_like>`, `secure_string`,
-     * `basic_secure_string` and raw `CharT*` pointers. Each argument is dispatched on its
-     * own type, wiped, then released. Container arguments must be lvalues: the wipe
-     * overloads take non-const references. A `basic_secure_string` payload is flipped to
-     * PAGE_READWRITE for the wipe and set back to its previous protection afterwards. The
-     * vector and raw-pointer overloads write in place, so their memory must already be
-     * accessible, even when locked_allocator supplied it.
+     * | argument               | wipe coverage               | after          |
+     * |------------------------|-----------------------------|----------------|
+     * | std::basic_string      | live bytes                  | clear + shrink |
+     * | basic_secure_string    | full allocation usable span | clear          |
+     * | std::vector<byte_like> | live bytes                  | clear + shrink |
+     * | CharT*                 | code units before first NUL | not freed      |
      *
-     * @par Per-argument wipe dispatch
-     * | Argument type            | Wipe primitive                     | After          |
-     * |--------------------------|------------------------------------|----------------|
-     * | `std::basic_string`      | `OPENSSL_cleanse`                  | clear + shrink |
-     * | `basic_secure_string`    | RW-flip -> `SecureZeroMemory`      | clear          |
-     * | `std::vector<byte_like>` | `OPENSSL_cleanse`                  | clear + shrink |
-     * | `CharT*` (NUL-term)      | traits length -> `OPENSSL_cleanse` | not freed      |
-     * | `CharT*` + length        | `OPENSSL_cleanse(len)`             | not freed      |
-     *
-     * A raw pointer is wiped up to its terminator and never freed; a null pointer is
-     * ignored. The last row is the private primitive the NUL-terminated form delegates to;
-     * `cleanseString` cannot select it, because one fold argument cannot carry both a
-     * pointer and a length. The secure-string wipe covers the whole `usable` payload from
-     * the allocation header, not only the live code units.
-     *
-     * @tparam Ts Argument types (deduced).
-     * @param xs Containers or pointers to wipe.
+     * null pointers are ignored. secure strings open payload pages and restore protection;
+     * vectors and raw pointers must already be writable. the private pointer-plus-length primitive
+     * cannot be selected through this variadic interface.
      */
     template <class... Ts>
     static void cleanseString(Ts&&... xs) noexcept
@@ -321,60 +210,45 @@ public:
         (cleanseOne(std::forward<Ts>(xs)), ...);
     }
 
-    /// @brief Report whether the process runs inside a Remote Desktop client session.
+    /// @brief report whether the process runs inside a remote desktop client session.
     static bool isRemoteSession() { return GetSystemMetrics(SM_REMOTESESSION) != 0; }
 
     /**
      * @struct PacketHeader
-     * @brief Parsed (or freshly built) packet header.
+     * @brief exact on-wire header bytes used verbatim as GCM AAD.
      *
-     * `bytes` and `size` hold the exact on-wire header. These bytes are the GCM AAD, so
-     * encrypt and decrypt feed them verbatim. A default-constructed header is unusable;
-     * makeHeader() and parsePacketHeader() are what fill it in.
+     * default construction is unusable; makeHeader() or parsePacketHeader() fills bytes and size.
      */
     struct PacketHeader
     {
-        seal::cfg::KdfParams kdf{};            ///< Effective KDF parameters.
-        std::array<unsigned char, 8> bytes{};  ///< Raw header bytes (AAD).
-        /// Valid byte count in `bytes`; 0 before the header is filled, `cfg::HDR_LEN`
-        /// (8) after makeHeader() or parsePacketHeader() returns.
+        seal::cfg::KdfParams kdf{};            ///< effective KDF parameters.
+        std::array<unsigned char, 8> bytes{};  ///< raw header bytes (AAD).
+        /// zero until filled; cfg::HDR_LEN (8) after construction or parsing.
         size_t size = 0;
     };
 
     /**
-     * @brief Build the on-wire packet header for the given KDF parameters.
+     * @brief serialize trusted KDF parameters as packet AAD.
      *
-     * @param kdf Parameters to serialize; defaults to `cfg::DEFAULT_KDF`.
-     * @return Header with `bytes` and `size` filled, ready to write and to use as AAD.
-     * @warning @p kdf is copied into the header without a range check. Never build a header
-     *          from parameters that came from an untrusted packet; parsePacketHeader() is
-     *          the one place that cap-checks.
+     * @warning no range check occurs; never pass parameters from an untrusted packet.
      */
     [[nodiscard]] static PacketHeader makeHeader(
         const seal::cfg::KdfParams& kdf = seal::cfg::DEFAULT_KDF);
 
     /**
-     * @brief Parse and validate a packet header.
+     * @brief cap-check KDF fields before derivation and preserve the received AAD bytes.
      *
-     * Parameters are checked against the acceptance caps before any key derivation, so a
-     * hostile header cannot trigger an expensive or memory-exhausting scrypt call.
+     * only the first eight bytes are inspected; the caller validates the remaining packet lengths.
      *
-     * The first 8 bytes are copied verbatim into `bytes`, because decryption feeds the
-     * received bytes as AAD, not a re-serialized copy. Nothing after byte 7 is inspected;
-     * the caller checks the salt, IV, ciphertext and tag sizes.
-     *
-     * @param data Leading bytes of a packet; at least `cfg::HDR_LEN` (8) bytes.
-     * @return Parsed header with effective KDF parameters and `size` = 8.
-     * @throw std::runtime_error on short input, unknown magic, or out-of-cap parameters.
-     *        The magic is compared before the full-length check, so input that starts with
-     *        the packet magic but is shorter than 8 bytes reports a truncated header.
+     * @throw std::runtime_error on short input, unknown magic or excessive parameters. recognized
+     *        magic followed by fewer than eight bytes reports a truncated header.
      */
     [[nodiscard]] static PacketHeader parsePacketHeader(std::span<const unsigned char> data);
 
     /**
-     * @brief Encrypt plaintext into a framed AES-256-GCM packet.
+     * @brief frame ciphertext with fresh random salt and IV.
      *
-     * Packet format: `AAD(8) | Salt(16) | IV(12) | Ciphertext(n) | Tag(16)`.
+     * the derived key is wiped on success and exceptions.
      *
      * @verbatim
      *  offset  size  field
@@ -386,17 +260,10 @@ public:
      *  36+n     16   GCM tag     (authenticates AAD + ciphertext)
      * @endverbatim
      *
-     * @tparam SecurePwd See the class-level note on password containers.
-     * @param plaintext Raw bytes to encrypt.
-     * @param password  Master password for scrypt key derivation.
-     * @param kdf       Parameters serialized into the header and used for key derivation;
-     *                  defaults to `cfg::DEFAULT_KDF`. Not cap-checked here.
-     * @return The framed encrypted packet, 52 bytes longer than @p plaintext.
-     * @pre `plaintext.size()` fits in `int`; OpenSSL takes the length as `int`.
-     * @throw std::runtime_error when RAND_bytes, scrypt or an OpenSSL cipher call fails.
-     * @note Salt and IV are drawn per call, so two packets over the same plaintext and the
-     *       same password differ. The derived key is wiped before the return, and its
-     *       locked buffer scrubs itself when an exception leaves the function early.
+     * @param kdf trusted parameters; not cap-checked.
+     * @return packet length is plaintext length plus 52 bytes.
+     * @throw std::runtime_error on random-generation, scrypt or cipher failure.
+     * @pre plaintext.size() fits in int.
      */
     template <secure_password SecurePwd>
     [[nodiscard]] static std::vector<unsigned char> encryptPacket(
@@ -405,49 +272,27 @@ public:
         const seal::cfg::KdfParams& kdf = seal::cfg::DEFAULT_KDF);
 
     /**
-     * @brief Decrypt a framed AES-256-GCM packet.
+     * @brief authenticate packet AAD and ciphertext after cap-checking its KDF fields.
      *
-     * The KDF parameters come from the packet's self-describing header and pass through
-     * cfg::kdfParamsAcceptable() before any key derivation, so a hostile header cannot
-     * force an oversized scrypt call.
-     *
-     * @tparam SecurePwd See the class-level note on password containers.
-     * @param packet   Framed encrypted packet (as produced by encryptPacket()).
-     * @param password Master password for scrypt key derivation.
-     * @return Decrypted plaintext bytes; empty when the packet carried no ciphertext.
-     * @pre The ciphertext length fits in `int`; OpenSSL takes the length as `int`.
-     * @throw std::runtime_error on authentication failure or malformed packet. A wrong
-     *        password and a corrupted packet raise the same message on purpose.
-     * @warning The plaintext is returned in an ordinary `std::vector`, so it sits in
-     *          pageable heap memory, not in locked memory. Wipe it with cleanseString() as
-     *          soon as the value is consumed. On authentication failure the function
-     *          discards the already-decrypted, unauthenticated bytes without a wipe, so they
-     *          can stay in freed pageable heap.
+     * @return pageable plaintext vector; empty for authenticated empty ciphertext.
+     * @throw std::runtime_error for malformed packets or authentication failure; wrong passwords
+     *        and corruption share the same message.
+     * @pre ciphertext length fits in int.
+     * @warning wipe returned plaintext immediately. authentication failure frees already-decrypted
+     *          unauthenticated bytes without wiping them.
      */
     template <secure_password SecurePwd>
     [[nodiscard]] static std::vector<unsigned char> decryptPacket(
         std::span<const unsigned char> packet, const SecurePwd& password);
 
     /**
-     * @brief Verify a framed AES-256-GCM packet without allocating full plaintext.
+     * @brief authenticate an in-memory packet with a 64 KiB thread-local plaintext buffer.
      *
-     * Runs the same key derivation and GCM authentication as decryptPacket(), but decrypts
-     * into a fixed 64 KiB scratch buffer and discards the output. Peak extra memory is that
-     * buffer instead of the full plaintext length, which suits large encrypted files where
-     * only password correctness matters. The packet arrives as a span, so it is already in
-     * memory.
+     * normal return means success; no plaintext leaves the function. scratch is wiped before the
+     * tag check, including authentication failure.
      *
-     * The scratch buffer is `thread_local`: one per calling thread, never shared. It is
-     * wiped on every normal exit, including authentication failure, because the wipe runs
-     * before the tag check. A throw from the OpenSSL update call inside the streaming loop
-     * skips the wipe and leaves unauthenticated plaintext in the buffer.
-     *
-     * @tparam SecurePwd See the class-level note on password containers.
-     * @param packet   Framed encrypted packet (as produced by encryptPacket()).
-     * @param password Master password for scrypt key derivation.
-     * @throw std::runtime_error on authentication failure or malformed packet.
-     * @note A normal return is the success signal; there is no return value and no
-     *       plaintext leaves the function.
+     * @throw std::runtime_error for malformed packets or authentication failure.
+     * @warning an OpenSSL update exception skips the scratch wipe.
      */
     template <secure_password SecurePwd>
     static void verifyPacket(std::span<const unsigned char> packet, const SecurePwd& password);
@@ -458,41 +303,27 @@ private:
     friend class FileOperations;
 
     /**
-     * @brief Turn an OpenSSL return code into an exception.
+     * @brief throw on any OpenSSL result other than one.
      *
-     * @param ok  OpenSSL return code; 1 means success, every other value fails.
-     * @param msg Context text placed in front of the OpenSSL error string.
-     * @throw std::runtime_error when @p ok is not 1. The message joins @p msg with the
-     *        OpenSSL reason as `msg (OpenSSL: reason)`. It pops one entry with
-     *        `ERR_get_error()`; older entries stay in the thread error queue.
+     * @param msg prefixed to one error popped from the thread queue; remaining errors stay queued.
+     * @throw std::runtime_error with format msg (OpenSSL: reason).
      */
     static void opensslCheck(int ok, const char* msg);
 
-    /// @brief Derived key type backed by guard-paged, locked memory.
+    /// @brief derived key type backed by guard-paged, locked memory.
     using LockedKeyBuffer = std::vector<unsigned char, locked_allocator<unsigned char>>;
 
     /**
-     * @brief Derive the AES-256 key with scrypt into locked memory.
+     * @brief derive a self-wiping locked key from raw password code units.
      *
-     * The password bytes are read inside an @ref RWGuard, so the payload protection is
-     * restored on every exit, including a throw from opensslCheck(). scrypt is fed
-     * `pwd.size() * sizeof(CharT)` raw code-unit bytes: a narrow and a wide container
-     * holding the "same" password derive different keys. An empty password is passed as a
-     * null pointer with length 0.
+     * RWGuard restores password page protection on every exit. scrypt receives
+     * pwd.size() * sizeof(CharT) bytes; empty passwords use nullptr and zero length.
+     * OpenSSL maxmem is max(SCRYPT_MAXMEM, 2 * 128 * r * N).
      *
-     * The OpenSSL maxmem argument is `max(cfg::SCRYPT_MAXMEM, 2 * 128 * r * N)`, so the
-     * cost parameters from an already cap-checked header always fit.
-     *
-     * @tparam SecurePwd See the class-level note on password containers.
-     * @param pwd  Master password; read only for the duration of the call.
-     * @param salt Packet salt, `cfg::SALT_LEN` bytes.
-     * @param kdf  Effective KDF parameters, normally from a parsed header.
-     * @return A `cfg::KEY_LEN`-byte key in locked, guard-paged memory. The buffer wipes
-     *         itself when it is destroyed, so an exception on the caller's path still
-     *         clears the key.
-     * @throw std::runtime_error when `EVP_PBE_scrypt` fails, for example when the working
-     *        set cannot be allocated.
-     * @warning This function trusts @p kdf. Pass only parameters that were cap-checked.
+     * @param salt readable for cfg::SALT_LEN bytes.
+     * @param kdf must already pass acceptance caps.
+     * @return cfg::KEY_LEN bytes in guarded memory.
+     * @throw std::runtime_error on scrypt failure.
      */
     template <secure_password SecurePwd>
     [[nodiscard]] static LockedKeyBuffer deriveKey(const SecurePwd& pwd,
