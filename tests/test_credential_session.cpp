@@ -44,7 +44,7 @@ TEST(CredentialSessionTest, ReprotectsAfterScopeAndUnlocksAgain)
         ASSERT_TRUE(a1.ok());
         EXPECT_EQ(a1.password().size(), 6u);
     }
-    // Second unlock must still succeed (the first scope re-protected).
+    // second unlock must still succeed (the first scope re-protected).
     auto a2 = session.unlock();
     ASSERT_TRUE(a2.ok());
     EXPECT_EQ(a2.password().size(), 6u);
