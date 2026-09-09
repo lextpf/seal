@@ -20,7 +20,6 @@ TEST_F(EncryptDecryptLineTest, BasicRoundtrip)
     auto password = make_secure_string("test_password_123");
     std::string plaintext = "Hello, World!";
 
-    // Encrypt
     std::string hexOutput = seal::FileOperations::encryptLine(plaintext, password);
 
     EXPECT_FALSE(hexOutput.empty());
@@ -103,7 +102,7 @@ TEST_F(EncryptDecryptLineTest, UnicodeText)
 TEST_F(EncryptDecryptLineTest, LongText)
 {
     auto password = make_secure_string("test_password");
-    std::string longText(10000, 'A');  // 10KB of 'A'
+    std::string longText(10000, 'A');  // 10KB of 'a'
 
     std::string hexOutput = seal::FileOperations::encryptLine(longText, password);
 
@@ -152,7 +151,6 @@ TEST_F(FileOperationsTest, EncryptDecryptFileRoundtrip)
         seal::FileOperations::encryptFileTo(tempFile.string(), encFile.string(), password);
     EXPECT_TRUE(encryptSuccess);
 
-    // Encrypted bytes differ from the plaintext.
     std::ifstream in(encFile, std::ios::binary);
     std::vector<unsigned char> encryptedData((std::istreambuf_iterator<char>(in)),
                                              std::istreambuf_iterator<char>());
@@ -255,7 +253,6 @@ TEST_F(FileOperationsTest, DecryptCorruptedFileFails)
         seal::FileOperations::encryptFileTo(tempFile.string(), encFile.string(), password);
     EXPECT_TRUE(encryptSuccess);
 
-    // Flip a single byte at the midpoint of the ciphertext.
     {
         std::fstream file(encFile, std::ios::binary | std::ios::in | std::ios::out);
         file.seekg(0, std::ios::end);
