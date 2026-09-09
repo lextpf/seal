@@ -18,10 +18,7 @@ VaultListModel::VaultListModel(QObject* parent)
 {
 }
 
-// m_FilteredIndices maps visible row -> real m_Records index, so its size is the
-// row count: QML sees only the non-deleted, filter-matching subset while record
-// storage stays stable. The list is flat, so a valid parent asks for children
-// and has none.
+// Visible rows index m_FilteredIndices; a valid parent has no children.
 int VaultListModel::rowCount(const QModelIndex& parent) const
 {
     if (parent.isValid())
@@ -35,13 +32,10 @@ QVariant VaultListModel::data(const QModelIndex& index, int role) const
         return {};
     if (!m_Records)
         return {};
-    // The row->record map is stale once the owner mutates without a refresh().
-    // Report every row as empty rather than read a shifted record; refresh()
-    // re-syncs the snapshot and restores the rows.
+    // Stale generation invalidates every row until refresh rebuilds the map.
     if (m_OwnerGeneration && *m_OwnerGeneration != m_SnapshotGeneration)
         return {};
 
-    // Translate visible row -> real record index.
     int realIdx = m_FilteredIndices[index.row()];
     if (realIdx < 0 || realIdx >= (int)m_Records->size())
         return {};
@@ -63,9 +57,7 @@ QVariant VaultListModel::data(const QModelIndex& index, int role) const
             return seal::brand::resolveBrandIconPath(QString::fromUtf8(rec.platform.c_str()));
         case static_cast<int>(Roles::SiteBinding):
         {
-            // The chip needs only bindable/unbindable state. Duplicate
-            // detection belongs to the account dialog; doing it here would scan
-            // the record vector once per chip on every full model render.
+            // Duplicate detection here would scan all records per chip; the dialog owns it.
             const auto preview =
                 seal::previewSiteBinding(std::span<const seal::VaultRecord>{}, rec.platform);
             return QString::fromStdString(preview.m_Host);
@@ -111,8 +103,7 @@ void VaultListModel::setFilter(const QString& filter)
 
 void VaultListModel::setSortMode(int mode)
 {
-    // The mode arrives from QML as a plain int; anything outside the enum
-    // falls back to Alphabetical instead of producing an invalid SortMode.
+    // QML supplies an int; coerce invalid values to Alphabetical.
     SortMode coerced = SortMode::Alphabetical;
     if (mode == static_cast<int>(SortMode::ReverseAlpha))
     {
@@ -140,12 +131,10 @@ int VaultListModel::sortMode() const
 void VaultListModel::refresh()
 {
     int oldCount = (int)m_FilteredIndices.size();
-    // Sync the generation snapshot; the owner bumps before calling refresh().
+    // Snapshot after the owner bumps its generation.
     if (m_OwnerGeneration)
         m_SnapshotGeneration = *m_OwnerGeneration;
-    // The reset tells QML to discard cached state and re-query every row.
-    // Simpler than fine-grained insert/remove signals and fast enough at this
-    // data size.
+    // Reset invalidates cached QML rows.
     beginResetModel();
     rebuildFilteredIndices();
     endResetModel();
@@ -180,10 +169,7 @@ int VaultListModel::rowForRecordIndex(int recordIndex) const
     return -1;
 }
 
-// Collect non-deleted, filter-matching record indices into m_FilteredIndices
-// (the row->record map QML sees), then order them per m_SortMode. Alphabetical
-// sorts are case-insensitive; grouped-by-brand partitions on BrandIconResolver
-// and sorts alphabetically within each partition.
+// Build the row-to-record map, then sort its surviving indices.
 void VaultListModel::rebuildFilteredIndices()
 {
     m_FilteredIndices.clear();
