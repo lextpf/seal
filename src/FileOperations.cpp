@@ -23,8 +23,7 @@
 namespace
 {
 
-// FlushFileBuffers on a path so the subsequent rename + source-delete
-// cannot lose the destination across a crash.
+// attempt a durable data flush before renaming and deleting the source.
 bool flushFileToDisk(const std::string& path)
 {
     HANDLE h = CreateFileA(path.c_str(),
@@ -46,15 +45,12 @@ bool flushFileToDisk(const std::string& path)
 namespace seal
 {
 
-// Serialise a (service, user, password) triple into "service:user:pass".
-// Fields are UTF-16 (wchar_t) internally; convert to UTF-8 first.
 std::string FileOperations::tripleToUtf8(const seal::secure_triplet16_t& t)
 {
     auto to_utf8 = [](auto& w)
     {
         if (w.size() == 0)
             return std::string{};
-        // Query required size, then write.
         int need =
             WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
         std::string out(need, '\0');
@@ -64,7 +60,6 @@ std::string FileOperations::tripleToUtf8(const seal::secure_triplet16_t& t)
     };
     std::string s = to_utf8(t.primary), u = to_utf8(t.secondary), p = to_utf8(t.tertiary);
     std::string out;
-    // +2 for the two ':' delimiters.
     out.reserve(s.size() + u.size() + p.size() + 2);
     out.append(s).push_back(':');
     out.append(u).push_back(':');
@@ -77,7 +72,6 @@ bool FileOperations::encryptFileTo(const std::string& srcPath,
                                    const std::string& dstPath,
                                    const SecurePwd& pwd)
 {
-    // Stream large files (> FILE_CHUNK) instead of reading them whole.
     {
         std::error_code ec;
         auto fileSize = std::filesystem::file_size(srcPath, ec);
@@ -98,7 +92,6 @@ bool FileOperations::encryptFileTo(const std::string& srcPath,
     auto packet = seal::Cryptography::encryptPacket(std::span<const unsigned char>(plain), pwd);
     seal::Cryptography::cleanseString(plain);
 
-    // Atomic write via tmp + rename; source is never modified.
     std::string tmpPath = dstPath + ".tmp";
     std::ofstream out(tmpPath, std::ios::binary | std::ios::trunc);
     if (!out)
@@ -117,7 +110,6 @@ bool FileOperations::encryptFileTo(const std::string& srcPath,
     }
     out.close();
 
-    // Durable flush before the rename so a crash cannot lose the destination.
     flushFileToDisk(tmpPath);
 
     if (!MoveFileExA(tmpPath.c_str(), dstPath.c_str(), MOVEFILE_REPLACE_EXISTING))
@@ -134,10 +126,7 @@ bool FileOperations::decryptFileTo(const std::string& srcPath,
                                    const std::string& dstPath,
                                    const SecurePwd& pwd)
 {
-    // Stream large files (> FILE_CHUNK + framing) instead of reading them whole.
     {
-        // Minimum packet framing; the floor for the streaming-vs-in-memory
-        // threshold decision below.
         constexpr size_t kFramingOverhead =
             seal::cfg::HDR_LEN + seal::cfg::SALT_LEN + seal::cfg::IV_LEN + seal::cfg::TAG_LEN;
         std::error_code ec;
@@ -160,7 +149,6 @@ bool FileOperations::decryptFileTo(const std::string& srcPath,
     {
         auto plain = seal::Cryptography::decryptPacket(std::span<const unsigned char>(blob), pwd);
 
-        // Atomic write via tmp + rename; source is never modified.
         std::string tmpPath = dstPath + ".tmp";
         std::ofstream out(tmpPath, std::ios::binary | std::ios::trunc);
         if (!out)
@@ -198,8 +186,6 @@ bool FileOperations::decryptFileTo(const std::string& srcPath,
     }
 }
 
-// Encrypt a string and return hex(ciphertext). Hex makes the output
-// terminal-/log-safe to paste.
 template <secure_password SecurePwd>
 std::string FileOperations::encryptLine(const std::string& s, const SecurePwd& pwd)
 {
@@ -209,9 +195,6 @@ std::string FileOperations::encryptLine(const std::string& s, const SecurePwd& p
     return seal::utils::to_hex(packet);
 }
 
-// Inverse of encryptLine. Every whitespace character is stripped first, so
-// pasted hex may carry spaces, tabs or line breaks. Hex case is not
-// significant. The returned string holds raw bytes and may contain NULs.
 template <secure_password SecurePwd>
 seal::secure_string<seal::locked_allocator<char>> FileOperations::decryptLine(
     const std::string& rawHex, const SecurePwd& pwd)
@@ -221,7 +204,6 @@ seal::secure_string<seal::locked_allocator<char>> FileOperations::decryptLine(
     if (!seal::utils::from_hex(std::string_view{compact}, blob))
         throw std::runtime_error("Invalid hex input");
     auto bytes = seal::Cryptography::decryptPacket(std::span<const unsigned char>(blob), pwd);
-    // Move into a locked-allocator (non-pageable) string.
     seal::secure_string<seal::locked_allocator<char>> out;
     out.assign(reinterpret_cast<const char*>(bytes.data()),
                reinterpret_cast<const char*>(bytes.data()) + bytes.size());
@@ -229,12 +211,7 @@ seal::secure_string<seal::locked_allocator<char>> FileOperations::decryptLine(
     return out;
 }
 
-// Parse colon-delimited triples separated by ',', '\n' or '\r'.
-// Format: "svc1:user1:pass1,svc2:user2:pass2\n..."; each token must hold
-// two colons (three fields). Empty tokens are ignored; a malformed token
-// clears `out` and fails the whole parse. Service and user are trimmed
-// individually, the password is not, so leading and interior spaces stay
-// part of the password.
+// format: "svc1:user1:pass1,svc2:user2:pass2\n...".
 template <class A>
 bool FileOperations::parseTriples(std::string_view plain,
                                   std::vector<seal::secure_triplet16<A>>& out)
@@ -257,7 +234,6 @@ bool FileOperations::parseTriples(std::string_view plain,
         if (s.empty())
             return true;
 
-        // Two colons exactly: fewer = incomplete triple, more = ambiguous.
         const size_t c1 = s.find(':');
         const size_t c2 =
             (c1 == std::string_view::npos ? std::string_view::npos : s.find(':', c1 + 1));
@@ -289,9 +265,7 @@ bool FileOperations::parseTriples(std::string_view plain,
         return true;
     };
 
-    // ',' and '\n' both separate triples; one encrypted blob can carry
-    // many credentials. Walk via offsets so each token is a sub-view of
-    // the caller's locked buffer.
+    // offset views avoid another narrow secret copy.
     size_t start = 0;
     for (size_t i = 0; i < plain.size(); ++i)
     {
@@ -318,9 +292,7 @@ bool FileOperations::parseTriples(std::string_view plain,
 namespace
 {
 
-// Fixed-size worker pool for processDirectory: a bounded thread count
-// keeps a deep tree from spawning an unbounded number of OS threads.
-// The task queue is bounded too, so Submit() blocks when it is full.
+// bound workers and queued tasks; a full queue blocks submission.
 class WorkPool
 {
 public:
@@ -357,7 +329,6 @@ public:
         }
         m_TaskAvailable.notify_all();
         m_SpaceAvailable.notify_all();
-        // jthread destructors request stop and join automatically.
     }
 
     WorkPool(const WorkPool&) = delete;
@@ -395,19 +366,13 @@ private:
 
 WorkPool& GetPool()
 {
-    // Floor at 1: std::thread::hardware_concurrency() may return 0, and
-    // std::min(0u, 8u) == 0 would create a pool with no draining worker,
-    // wedging every directory operation on the first Submit().
+    // hardware_concurrency can return zero; keep one worker to drain submissions.
     static WorkPool pool(std::max(1u, std::min(std::thread::hardware_concurrency(), 8u)));
     return pool;
 }
 
 }  // namespace
 
-// Walk a directory; each file is en-/de-crypted per its .seal extension
-// (see processFilePath). Subdirectories recurse inline on the calling thread
-// and only leaf-file tasks go to the pool, so no pool worker can block
-// waiting on another pool task.
 template <secure_password SecurePwd>
 bool FileOperations::processDirectory(const std::string& dir,
                                       const SecurePwd& password,
@@ -422,17 +387,13 @@ bool FileOperations::processDirectory(const std::string& dir,
         return false;
     }
 
-    // Future-batch size. Independent of the pool's 32-slot queue: it bounds
-    // how many futures this frame holds before joining them.
+    // bound held futures independently of the 32-slot task queue.
     static constexpr size_t MAX_CONCURRENT = 8;
 
     uint64_t total = 0, ok = 0, fail = 0;
     std::vector<std::future<bool>> futures;
 
-    // Join every submitted file task. Pool tasks capture `password` by
-    // reference, so every return path must join them first. Tasks never throw
-    // (see the catch-all below), so get() never rethrows. This also drains the
-    // MAX_CONCURRENT batches.
+    // tasks borrow password; join on every exit. task exceptions are caught before get().
     auto drainAll = [&]()
     {
         for (auto& f : futures)
@@ -449,8 +410,7 @@ bool FileOperations::processDirectory(const std::string& dir,
         futures.clear();
     };
 
-    // Guarantees the drain and the FindClose even when an unexpected
-    // exception (for example bad_alloc in joinPath) unwinds the loop.
+    // drain tasks and close enumeration even if allocation throws.
     struct ScopeExit
     {
         std::function<void()> fn;
@@ -468,8 +428,7 @@ bool FileOperations::processDirectory(const std::string& dir,
         {
             continue;
         }
-        // Skip reparse points (symlinks, junctions, mounts): could escape
-        // the tree or loop forever on an upward junction.
+        // reparse points can escape the tree or loop upward.
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
         {
             continue;
@@ -485,9 +444,7 @@ bool FileOperations::processDirectory(const std::string& dir,
 
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
         {
-            // Recurse inline on this thread. The pool only ever runs leaf-file
-            // tasks, which never submit or block, so no pool worker can park
-            // waiting on another pool task.
+            // recurse on the caller so no worker waits for another pool task.
             if (recurse)
             {
                 if (processDirectory(full, password, true))
@@ -505,9 +462,7 @@ bool FileOperations::processDirectory(const std::string& dir,
         futures.push_back(GetPool().Submit(
             [full, &password]() -> bool
             {
-                // A file task must never throw past drainAll()/get(); a
-                // genuine file failure is reported as false, which matches
-                // the ok/fail accounting.
+                // report false so drainAll/get cannot rethrow.
                 try
                 {
                     return FileOperations::processFilePath(full, password);
@@ -526,8 +481,6 @@ bool FileOperations::processDirectory(const std::string& dir,
 
     } while (FindNextFileA(h, &fd));
 
-    // Drain remaining file tasks so the printed counts are complete before
-    // return (the ScopeExit re-drains harmlessly and closes the handle).
     drainAll();
 
     std::cout << "[dir] " << dir << ": " << ok << " ok, " << fail << " failed, " << total
@@ -535,23 +488,17 @@ bool FileOperations::processDirectory(const std::string& dir,
     return fail == 0;
 }
 
-// Single-path dispatch by extension: ".seal" -> decrypt (strip), else
-// encrypt (append). The source is removed with DeleteFileA (not shredded)
-// only after the destination is committed. Skipped names and directories
-// report true so processBatch does not fall through to text encryption.
 template <secure_password SecurePwd>
 bool FileOperations::processFilePath(const std::string& raw, const SecurePwd& password)
 {
     std::string t = seal::utils::stripQuotes(seal::utils::trim(raw));
 
-    // Strip control chars (clipboard paste residue).
     std::erase_if(t, [](unsigned char c) { return c < 32 || c == 127; });
 
     if (t.empty())
         return false;
 
-    // Drop a trailing separator so GetFileAttributesA accepts the path
-    // ("C:\folder\sub\" is rejected; "C:\" itself is preserved).
+    // GetFileAttributesA rejects trailing separators except on drive roots.
     while (t.size() > 1 && (t.back() == '\\' || t.back() == '/') && !(t.size() == 3 && t[1] == ':'))
     {
         t.pop_back();
@@ -564,7 +511,6 @@ bool FileOperations::processFilePath(const std::string& raw, const SecurePwd& pa
         return true;
     }
 
-    // "." expands to cwd so "seal ." processes everything in the cwd.
     if (_stricmp(t.c_str(), ".") == 0)
     {
         t = std::filesystem::current_path().string();
@@ -576,8 +522,7 @@ bool FileOperations::processFilePath(const std::string& raw, const SecurePwd& pa
         return true;  // recognized as a directory; never fall through to text encryption
     }
 
-    // Fallback: std::filesystem resolves paths GetFileAttributesA rejects
-    // (long paths, forward slashes, UNC edge cases).
+    // filesystem handles path forms the ANSI attribute query can reject.
     {
         std::error_code ec;
         if (std::filesystem::is_directory(t, ec))
@@ -590,7 +535,6 @@ bool FileOperations::processFilePath(const std::string& raw, const SecurePwd& pa
     if (!seal::utils::fileExistsA(t))
         return false;
 
-    // .seal present -> decrypt + strip; absent -> encrypt + append.
     const bool isPmg = seal::utils::endsWithCi(t, ".seal");
 
     if (isPmg)
@@ -619,16 +563,14 @@ bool FileOperations::processFilePath(const std::string& raw, const SecurePwd& pa
     }
 }
 
-// Maps a masked-view entry index to (hex token, intra-token triple index)
-// for on-demand re-decryption.
+// map each visible service to its token and intra-token index for deferred decryption.
 struct TokenMapping
 {
     size_t hexTokenIndex;     // index into the allHexTokens vector
     size_t intraTripleIndex;  // which triple within that token's decrypted output
 };
 
-// Decrypt a batch of hex tokens; keep only the service names + an index
-// map for re-decryption. Credentials are wiped immediately.
+// retain only service names and source indices after wiping credentials.
 template <secure_password SecurePwd>
 static void scanHexTokens(const std::vector<std::string>& hexTokens,
                           const SecurePwd& password,
@@ -653,13 +595,11 @@ static void scanHexTokens(const std::vector<std::string>& hexTokens,
                     serviceNames.emplace_back(ts[j].primary.data(), ts[j].primary.size());
                     indexMap.push_back({tokIdx, j});
                 }
-                // Wipe credentials; only service names are retained.
                 for (auto& t : ts)
                     seal::Cryptography::cleanseString(t.primary, t.secondary, t.tertiary);
             }
             else
             {
-                // Not a triple: copy raw plaintext to clipboard.
                 (void)seal::Clipboard::copyWithTTL(plain.view());
                 otherPlain.emplace_back(plain.data(), plain.size());
             }
@@ -672,7 +612,6 @@ static void scanHexTokens(const std::vector<std::string>& hexTokens,
     }
 }
 
-// Uncensored mode: re-decrypt every triple to stdout, then wipe.
 template <secure_password SecurePwd>
 static void displayTriplesUncensored(const std::vector<std::string>& allHexTokens,
                                      const std::vector<TokenMapping>& indexMap,
@@ -712,10 +651,6 @@ static void displayTriplesUncensored(const std::vector<std::string>& allHexToken
     seal::Cryptography::cleanseString(ossBuf);
 }
 
-// Three-tier line dispatch: (1) file/dir path - en-/de-crypt on disk (wins over
-// hex if both match); (2) hex tokens - decrypt and display/copy; (3) anything else
-// - encrypt to hex. Censored mode decrypts credentials on-demand at click time to
-// keep the plaintext exposure window minimal.
 template <secure_password SecurePwd>
 void FileOperations::processBatch(const std::vector<std::string>& lines,
                                   bool uncensored,
@@ -724,8 +659,6 @@ void FileOperations::processBatch(const std::vector<std::string>& lines,
     if (lines.empty())
         return;
 
-    // Service names + index map for on-demand re-decryption. Credentials
-    // are never held simultaneously.
     std::vector<std::string> allHexTokens;
     std::vector<std::wstring> serviceNames;
     std::vector<TokenMapping> indexMap;
@@ -734,11 +667,9 @@ void FileOperations::processBatch(const std::vector<std::string>& lines,
 
     for (const auto& L : lines)
     {
-        // Priority 1: file / dir path.
         if (processFilePath(L, password))
             continue;
 
-        // Priority 2: hex ciphertext.
         auto hexTokens = seal::utils::extractHexTokens(L);
         if (!hexTokens.empty())
         {
@@ -746,7 +677,6 @@ void FileOperations::processBatch(const std::vector<std::string>& lines,
             continue;
         }
 
-        // Priority 3: plaintext -> hex.
         try
         {
             encHex.emplace_back(encryptLine(L, password));
@@ -761,13 +691,10 @@ void FileOperations::processBatch(const std::vector<std::string>& lines,
     {
         if (uncensored)
         {
-            // Uncensored: re-decrypt all for stdout.
             displayTriplesUncensored(allHexTokens, indexMap, password);
         }
         else
         {
-            // Censored: only service names in memory; on-demand decrypt
-            // one credential per click.
             auto decryptCb =
                 [&allHexTokens, &indexMap, &password](size_t idx) -> seal::secure_triplet16_t
             {
@@ -802,16 +729,11 @@ void FileOperations::processBatch(const std::vector<std::string>& lines,
         std::cout << hex << "\n";
 }
 
-// Read all stdin, encrypt, write the raw packet to stdout. Intended for
-// shell pipes, but no CLI mode routes here (-e / --text-encrypt is the
-// hex/Base64 text mode). The caller must put stdin and stdout in binary
-// mode first; seal never calls _setmode.
 template <secure_password SecurePwd>
 bool FileOperations::streamEncrypt(const SecurePwd& password)
 {
     try
     {
-        // Read all of stdin (binary, no line buffering).
         std::vector<unsigned char> plaintext((std::istreambuf_iterator<char>(std::cin)),
                                              std::istreambuf_iterator<char>());
 
@@ -844,14 +766,11 @@ bool FileOperations::streamEncrypt(const SecurePwd& password)
     }
 }
 
-// Inverse of streamEncrypt; same binary-mode requirement and same lack of
-// a CLI route. Nothing is written until the GCM tag verifies.
 template <secure_password SecurePwd>
 bool FileOperations::streamDecrypt(const SecurePwd& password)
 {
     try
     {
-        // Read all of stdin (raw ciphertext).
         std::vector<unsigned char> packet((std::istreambuf_iterator<char>(std::cin)),
                                           std::istreambuf_iterator<char>());
 
@@ -886,11 +805,7 @@ bool FileOperations::streamDecrypt(const SecurePwd& password)
 
 bool FileOperations::shredFile(const std::string& path)
 {
-    // FILE_FLAG_WRITE_THROUGH bypasses the FS write cache so each pass
-    // reaches the device instead of being coalesced away. It cannot promise
-    // the same physical sectors: SSD wear levelling, copy-on-write
-    // filesystems and shadow copies can all retain the old contents.
-    // Share mode 0 takes the file exclusively for the duration.
+    // write-through cannot control SSD wear leveling, snapshots or copy-on-write placement.
     HANDLE hFile = CreateFileA(path.c_str(),
                                GENERIC_READ | GENERIC_WRITE,
                                0,
@@ -908,7 +823,6 @@ bool FileOperations::shredFile(const std::string& path)
     if (!GetFileSizeEx(hFile, &liSize) || std::bit_cast<long long>(liSize) <= 0)
     {
         CloseHandle(hFile);
-        // Empty / unreadable - just delete.
         return DeleteFileA(path.c_str()) != 0;
     }
 
@@ -916,7 +830,6 @@ bool FileOperations::shredFile(const std::string& path)
     constexpr size_t CHUNK = 65536;
     std::vector<unsigned char> buf(std::min(fileSize, CHUNK));
 
-    // Three overwrite passes: random, zeros, random.
     for (int pass = 0; pass < 3; ++pass)
     {
         LARGE_INTEGER zero{};
@@ -1001,9 +914,6 @@ std::string FileOperations::hashFile(const std::string& path)
     return seal::utils::to_hex(std::span<const unsigned char>(hash, hashLen));
 }
 
-// Streaming encrypt: cfg::FILE_CHUNK-sized reads -> EVP_EncryptUpdate ->
-// incremental write. Wire format matches encryptPacket
-// (AAD | salt | IV | ct | tag), so any decrypt path interoperates.
 template <secure_password SecurePwd>
 bool FileOperations::encryptFileStreaming(const std::string& srcPath,
                                           const std::string& dstPath,
@@ -1016,7 +926,6 @@ bool FileOperations::encryptFileStreaming(const std::string& srcPath,
         return false;
     }
 
-    // Generate salt and IV
     std::vector<unsigned char> salt(seal::cfg::SALT_LEN);
     seal::Cryptography::opensslCheck(RAND_bytes(salt.data(), (int)salt.size()),
                                      "RAND_bytes(salt) failed");
@@ -1024,7 +933,6 @@ bool FileOperations::encryptFileStreaming(const std::string& srcPath,
     seal::Cryptography::opensslCheck(RAND_bytes(iv.data(), (int)iv.size()),
                                      "RAND_bytes(iv) failed");
 
-    // Files carry the self-describing KDF header as AAD.
     const seal::Cryptography::PacketHeader header = seal::Cryptography::makeHeader();
     auto key = seal::Cryptography::deriveKey(pwd, std::span<const unsigned char>(salt), header.kdf);
 
@@ -1039,7 +947,6 @@ bool FileOperations::encryptFileStreaming(const std::string& srcPath,
         EVP_EncryptInit_ex(ctx.p, nullptr, nullptr, key.data(), iv.data()),
         "EncryptInit(key/iv) failed");
 
-    // Feed AAD
     std::span<const unsigned char> aad(header.bytes.data(), header.size);
     if (!aad.empty())
     {
@@ -1049,7 +956,6 @@ bool FileOperations::encryptFileStreaming(const std::string& srcPath,
             "EncryptUpdate(AAD) failed");
     }
 
-    // Open output via atomic tmp file
     std::string tmpPath = dstPath + ".tmp";
     std::ofstream out(tmpPath, std::ios::binary | std::ios::trunc);
     if (!out)
@@ -1059,7 +965,6 @@ bool FileOperations::encryptFileStreaming(const std::string& srcPath,
         return false;
     }
 
-    // Write header: AAD | salt | IV
     if (!aad.empty())
     {
         out.write(reinterpret_cast<const char*>(aad.data()), (std::streamsize)aad.size());
@@ -1067,7 +972,6 @@ bool FileOperations::encryptFileStreaming(const std::string& srcPath,
     out.write(reinterpret_cast<const char*>(salt.data()), (std::streamsize)salt.size());
     out.write(reinterpret_cast<const char*>(iv.data()), (std::streamsize)iv.size());
 
-    // Encrypt in chunks
     std::vector<unsigned char> plainBuf(seal::cfg::FILE_CHUNK);
     std::vector<unsigned char> ctBuf(seal::cfg::FILE_CHUNK + 16);  // block slop
     bool ioOk = true;
@@ -1097,7 +1001,6 @@ bool FileOperations::encryptFileStreaming(const std::string& srcPath,
 
     if (ioOk)
     {
-        // Finalize
         int fin = 0;
         seal::Cryptography::opensslCheck(EVP_EncryptFinal_ex(ctx.p, ctBuf.data(), &fin),
                                          "EncryptFinal failed");
@@ -1106,7 +1009,6 @@ bool FileOperations::encryptFileStreaming(const std::string& srcPath,
             out.write(reinterpret_cast<const char*>(ctBuf.data()), fin);
         }
 
-        // Write GCM tag
         std::vector<unsigned char> tag(seal::cfg::TAG_LEN);
         seal::Cryptography::opensslCheck(
             EVP_CIPHER_CTX_ctrl(ctx.p, EVP_CTRL_GCM_GET_TAG, (int)tag.size(), tag.data()),
@@ -1139,19 +1041,12 @@ bool FileOperations::encryptFileStreaming(const std::string& srcPath,
     return false;
 }
 
-// Two-pass streaming decrypt: the extra read guarantees tampered input never
-// yields recoverable plaintext on disk. Pass 1 streams the ciphertext through
-// GCM into a wiped scratch buffer to check the tag; nothing reaches disk and a
-// bad tag returns false with no output file. Pass 2 re-reads and decrypts to a
-// temp file, wipes the key, then flushes and renames. A last-write-time and
-// size re-stat between the passes rejects a source that changed, because pass 1
-// authenticated only the bytes it saw.
+// authenticate once without disk output, then re-read to commit plaintext; see the header flow.
 template <secure_password SecurePwd>
 bool FileOperations::decryptFileStreaming(const std::string& srcPath,
                                           const std::string& dstPath,
                                           const SecurePwd& pwd)
 {
-    // Snapshot the last-write time to detect a change between the two passes.
     WIN32_FILE_ATTRIBUTE_DATA fileAttrBefore{};
     if (!GetFileAttributesExA(srcPath.c_str(), GetFileExInfoStandard, &fileAttrBefore))
     {
@@ -1166,13 +1061,10 @@ bool FileOperations::decryptFileStreaming(const std::string& srcPath,
         return false;
     }
 
-    // Determine file size
     in.seekg(0, std::ios::end);
     auto fileSize = static_cast<size_t>(in.tellg());
     in.seekg(0, std::ios::beg);
 
-    // Read the 8-byte header and let parsePacketHeader validate it; it
-    // cap-validates the KDF params before any key derivation.
     std::array<unsigned char, 8> headBuf{};
     const size_t headRead = std::min<size_t>(headBuf.size(), fileSize);
     in.read(reinterpret_cast<char*>(headBuf.data()), (std::streamsize)headRead);
@@ -1196,10 +1088,8 @@ bool FileOperations::decryptFileStreaming(const std::string& srcPath,
         std::cerr << "(decrypt-stream) file too short: " << srcPath << "\n";
         return false;
     }
-    // Position the stream at the salt, just past the parsed header.
     in.seekg((std::streamoff)header.size, std::ios::beg);
 
-    // Read salt and IV
     std::vector<unsigned char> salt(seal::cfg::SALT_LEN);
     in.read(reinterpret_cast<char*>(salt.data()), (std::streamsize)salt.size());
     std::vector<unsigned char> iv(seal::cfg::IV_LEN);
@@ -1207,7 +1097,6 @@ bool FileOperations::decryptFileStreaming(const std::string& srcPath,
 
     size_t ctLen = fileSize - headerSize - seal::cfg::TAG_LEN;
 
-    // Read the GCM tag from the end of the file, then seek back to ciphertext start
     auto ctStartPos = in.tellg();
     in.seekg(-(std::streamoff)seal::cfg::TAG_LEN, std::ios::end);
     std::vector<unsigned char> tag(seal::cfg::TAG_LEN);
@@ -1219,7 +1108,6 @@ bool FileOperations::decryptFileStreaming(const std::string& srcPath,
         auto key =
             seal::Cryptography::deriveKey(pwd, std::span<const unsigned char>(salt), header.kdf);
 
-        // Helper: initialise a GCM decrypt context with the shared key/IV/AAD.
         auto initCtx = [&](seal::EvpCipherCtx& ctx)
         {
             seal::Cryptography::opensslCheck(
@@ -1241,11 +1129,10 @@ bool FileOperations::decryptFileStreaming(const std::string& srcPath,
             }
         };
 
-        // Reusable buffers for both passes.
         std::vector<unsigned char> ctBuf(seal::cfg::FILE_CHUNK);
         std::vector<unsigned char> plainBuf(seal::cfg::FILE_CHUNK + 16);
 
-        // --- Pass 1: verify GCM tag without writing plaintext to disk ---
+        // verify without writing plaintext to disk.
         {
             seal::EvpCipherCtx verifyCtx;
             initCtx(verifyCtx);
@@ -1290,8 +1177,7 @@ bool FileOperations::decryptFileStreaming(const std::string& srcPath,
             }
         }
 
-        // TOCTOU guard: if the file was modified between passes, the
-        // pass-1 authentication is void.
+        // reject size/time changes because the first pass authenticated earlier bytes.
         WIN32_FILE_ATTRIBUTE_DATA fileAttrAfter{};
         if (!GetFileAttributesExA(srcPath.c_str(), GetFileExInfoStandard, &fileAttrAfter) ||
             fileAttrBefore.ftLastWriteTime.dwLowDateTime !=
@@ -1308,7 +1194,7 @@ bool FileOperations::decryptFileStreaming(const std::string& srcPath,
             return false;
         }
 
-        // --- Pass 2: re-read and decrypt to disk (data is now authenticated) ---
+        // re-read authenticated input to write plaintext.
         in.clear();
         in.seekg(ctStartPos);
 
@@ -1364,9 +1250,7 @@ bool FileOperations::decryptFileStreaming(const std::string& srcPath,
             return false;
         }
 
-        // Finalize the write context. GCM is a stream mode, so Final emits no
-        // padding; the call exists to complete the context. Its result is
-        // ignored because pass 1 already verified this exact byte range.
+        // GCM adds no padding; pass one verified the tag, so this final result is ignored.
         seal::Cryptography::opensslCheck(
             EVP_CIPHER_CTX_ctrl(
                 writeCtx.p, EVP_CTRL_GCM_SET_TAG, (int)seal::cfg::TAG_LEN, tag.data()),
@@ -1416,8 +1300,6 @@ bool FileOperations::decryptFileStreaming(const std::string& srcPath,
 using SecNarrow = seal::secure_string<>;
 using SecWide = seal::basic_secure_string<wchar_t>;
 
-// Explicit instantiations for narrow + wide secure password types;
-// required for the linker to resolve template usage.
 template bool FileOperations::encryptFileTo(const std::string&,
                                             const std::string&,
                                             const SecNarrow&);
