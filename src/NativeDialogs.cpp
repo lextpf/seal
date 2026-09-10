@@ -19,8 +19,7 @@ QString OpenFileDialog(const QString& title, const QString& filter)
     std::wstring wTitle = title.toStdWString();
     std::wstring wFilter = filter.toStdWString();
 
-    // OPENFILENAME wants NUL-pair filters ("Desc\0*.ext\0\0"); caller
-    // sends '|'-separated, so substitute.
+    // convert pipe-separated filters to Win32 double-NUL form.
     for (auto& c : wFilter)
     {
         if (c == L'|')
@@ -36,8 +35,7 @@ QString OpenFileDialog(const QString& title, const QString& filter)
     ofn.lpstrFile = fileName;
     ofn.nMaxFile = MAX_PATH;
     ofn.lpstrTitle = wTitle.c_str();
-    // OFN_NOCHANGEDIR keeps process CWD stable; relative-path vault
-    // auto-discovery depends on it.
+    // preserve CWD for relative vault discovery.
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
 
     if (GetOpenFileNameW(&ofn))
@@ -49,8 +47,7 @@ QString OpenFileDialog(const QString& title, const QString& filter)
 
 QString SaveFileDialog(const QString& title, const QString& filter)
 {
-    // lpstrFile doubles as the initial file-name field, so seeding it with
-    // ".seal" opens the dialog with the extension already typed.
+    // lpstrFile also seeds the filename field.
     wchar_t fileName[MAX_PATH] = L".seal";
     std::wstring wTitle = title.toStdWString();
     std::wstring wFilter = filter.toStdWString();
@@ -81,8 +78,7 @@ QString SaveFileDialog(const QString& title, const QString& filter)
 
 QString OpenFolderDialog(const QString& title)
 {
-    // Needs COM on this thread; Qt initializes it for the GUI thread, which is
-    // the only thread that may call here.
+    // COM must be initialized on the GUI thread.
     IFileDialog* pfd = nullptr;
     HRESULT hr =
         CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pfd));
@@ -91,8 +87,7 @@ QString OpenFolderDialog(const QString& title)
         return {};
     }
 
-    // FOS_FORCEFILESYSTEM keeps virtual shell locations out of the picker, so
-    // SIGDN_FILESYSPATH below always yields a real path.
+    // exclude virtual shell locations so SIGDN_FILESYSPATH can return a path.
     DWORD opts = 0;
     pfd->GetOptions(&opts);
     pfd->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR);
