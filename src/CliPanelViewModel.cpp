@@ -20,8 +20,7 @@
 namespace seal
 {
 
-// CLI transcript trim policy: cap memory growth during long sessions while
-// keeping enough scrollback to stay useful.
+// Bound transcript growth while retaining recent output.
 namespace
 {
 constexpr int kCliMaxLines = 500;
@@ -79,7 +78,7 @@ void CliPanelViewModel::appendCliOutput(const QString& line)
     m_CliOutputText += line;
     ++m_CliLineCount;
 
-    // Trim oldest lines in batches to avoid an O(n) split on every append.
+    // Batch trimming avoids splitting the transcript on each append.
     if (m_CliLineCount > kCliMaxLines)
     {
         QStringList lines = m_CliOutputText.split(QChar('\n'));
@@ -114,10 +113,8 @@ void CliPanelViewModel::executeCliCommand(const QString& command)
     qCInfo(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
         {"event=cli.command.begin", seal::diag::kv("input_len", input.size())}));
 
-    // Echo the (masked) command into the transcript before any output.
     appendCliOutput(seal::CliEchoLine(trimmed));
 
-    // --- Built-in commands (no password needed) ---
     seal::CliCallbacks cb;
     cb.output = [this](const QString& s) { appendCliOutput(s); };
     cb.clearOutput = [this]() { clearCliOutput(); };
@@ -131,8 +128,6 @@ void CliPanelViewModel::executeCliCommand(const QString& command)
             seal::diag::joinFields({"event=cli.command.finish", "result=builtin"}));
         return;
     }
-
-    // --- Password-requiring commands ---
 
     if (!m_Gate.ensurePassword([this, command]() { executeCliCommand(command); }))
     {
@@ -150,11 +145,10 @@ void CliPanelViewModel::executeCliCommand(const QString& command)
         }
         std::string stripped = seal::utils::stripQuotes(seal::utils::trim(input));
 
-        // Strip control characters that may survive from clipboard paste.
+        // Remove control characters from pasted paths.
         std::erase_if(stripped, [](unsigned char c) { return c < 32 || c == 127; });
 
-        // Remove trailing path separators so GetFileAttributesA does not reject
-        // non-root directory paths like "C:\folder\sub\".
+        // Keep drive roots intact; trailing separators can break ANSI path checks.
         while (stripped.size() > 1 && (stripped.back() == '\\' || stripped.back() == '/') &&
                !(stripped.size() == 3 && stripped[1] == ':'))
         {
@@ -164,7 +158,6 @@ void CliPanelViewModel::executeCliCommand(const QString& command)
         seal::CliDispatchCallbacks dcb{.output = [this](const QString& s) { appendCliOutput(s); },
                                        .password = access.password()};
 
-        // Priority 1: file or directory path
         if (seal::utils::isDirectoryA(stripped))
         {
             qCInfo(logBackend).noquote() << QString::fromStdString(
@@ -186,7 +179,6 @@ void CliPanelViewModel::executeCliCommand(const QString& command)
             return;
         }
 
-        // Priority 2: hex token -> decrypt
         auto hexTokens = seal::utils::extractHexTokens(input);
         if (!hexTokens.empty())
         {
@@ -199,7 +191,6 @@ void CliPanelViewModel::executeCliCommand(const QString& command)
             return;
         }
 
-        // Priority 2b: base64-encoded ciphertext -> decrypt
         if (seal::utils::isBase64(input) && seal::CliDispatchBase64(input, dcb))
         {
             qCInfo(logBackend).noquote() << QString::fromStdString(
@@ -210,7 +201,6 @@ void CliPanelViewModel::executeCliCommand(const QString& command)
             return;
         }
 
-        // Priority 3: plain text -> encrypt (show both hex and base64)
         qCInfo(logBackend).noquote() << QString::fromStdString(
             seal::diag::joinFields({"event=cli.command.finish",
                                     "result=dispatch",
@@ -239,14 +229,12 @@ void CliPanelViewModel::handleQrResult(const QString& text)
                                 seal::diag::kv("payload_len", text.size()),
                                 "copied=true"}));
     seal::Cryptography::cleanseString(narrow);
-    // Mask QR text in the CLI - value lands on the clipboard (TTL-scrubbed).
+    // Copy QR text with a timed scrub; only a mask reaches QML.
     appendCliOutput(QString("(QR captured) %1  [copied]").arg(QString(text.size(), QChar('*'))));
 }
 
 void CliPanelViewModel::handleQrFailure()
 {
-    // Plain transcript line; nothing was captured, so nothing is copied to
-    // the clipboard.
     appendCliOutput(QStringLiteral("(QR capture failed or cancelled)"));
 }
 
