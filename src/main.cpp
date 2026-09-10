@@ -50,7 +50,6 @@
 #include <tuple>
 #include <vector>
 
-// Forward declaration; definition is in QmlMain.cpp.
 #ifdef USE_QT_UI
 int RunQMLMode(int argc, char* argv[]);
 #endif
@@ -58,7 +57,6 @@ int RunQMLMode(int argc, char* argv[]);
 namespace
 {
 
-// Discriminated program mode.
 enum class Mode
 {
     Gui,
@@ -101,8 +99,7 @@ void writeCliDiag(std::ostream& os,
                   std::string_view tag,
                   std::initializer_list<std::string> fields);
 
-// Set the program mode. Fails when a mode is already set, so two mode tokens
-// on one command line are rejected.
+// reject a second mode token, even if it names the same mode.
 static bool trySetMode(ProgramOptions& opts, Mode newMode)
 {
     if (opts.modeExplicit)
@@ -118,7 +115,6 @@ static bool trySetMode(ProgramOptions& opts, Mode newMode)
     return true;
 }
 
-// Short local name for the DPAPI unprotect guard used across this file.
 template <class GuardT>
 using ScopedUnprotect = seal::ScopedDpapiUnprotect<GuardT>;
 
@@ -215,10 +211,8 @@ static bool isOptionToken(const char* token)
     return token && token[0] == '-' && token[1] != '\0';
 }
 
-// Consume an optional <input> and optional <output> path starting after
-// argv[i], advancing i past what it takes. Returns false if no input path
-// follows. When only an input is given, `defaultOutput` (if non-null) becomes
-// the output path. Shared by parseRequiredPath and the import/export commands.
+// advance i over the following input and optional output. no input returns false.
+// if output is absent, use defaultOutput when non-null.
 static bool consumePathArgs(
     int argc, char* argv[], int& i, ProgramOptions& opts, const char* defaultOutput = nullptr)
 {
@@ -238,7 +232,6 @@ static bool consumePathArgs(
     return true;
 }
 
-// Parse a required path argument for a command. Returns false on missing arg.
 static bool parseRequiredPath(
     int argc, char* argv[], int& i, ProgramOptions& opts, const char* cmdName, const char* usage)
 {
@@ -257,16 +250,10 @@ static bool parseRequiredPath(
     return false;
 }
 
-// Returns -1 when parsing succeeded (continue), 0 when help or version was
-// printed (exit 0), 1 on error (exit 1). When a flag repeats, the last
-// occurrence wins for --user/--pass/--both, --ttl and --format. A second mode
-// token is rejected by trySetMode, and an unknown token fails the whole parse.
-//
-// Order is free except for --ttl and --format: both consume the next token
-// unconditionally, so they also swallow a following flag. A non-numeric --ttl
-// value falls back to 6 seconds without a diagnostic, and a trailing --ttl with
-// no value is ignored. A swallowed --format value fails later with
-// reason=unknown_format.
+// return -1 to dispatch, 0 after help/version, or 1 on error. repeated value flags use
+// the last value; multiple modes and unknown tokens fail.
+// --ttl and --format consume the next token even if it is a flag. non-numeric TTL
+// uses 6 s; a trailing --ttl is ignored. invalid format values fail during dispatch.
 static int parseArguments(int argc, char* argv[], ProgramOptions& opts)
 {
     for (int i = 1; i < argc; ++i)
@@ -519,23 +506,17 @@ static int parseArguments(int argc, char* argv[], ProgramOptions& opts)
             return 1;
         }
     }
-    // No post-validation needed: trySetMode() rejects conflicts at parse time.
+
     return -1;
 }
 
-// Apply the process-wide security mitigations in dependency order. Returns 0
-// on success, 1 when the process must not continue. The remote-session check
-// is the only path that returns 1: detectDebugger terminates the process
-// itself, and every other step is best-effort and only warns.
+// return 1 for remote sessions. debugger detection terminates directly; other failures warn.
 static int initializeSecurity(bool allowDynamicCode)
 {
-    // Order: debugger check first, to fail before any secret loads; process
-    // mitigations (CFG/DEP/ASLR/dynamic-code); the remote-session gate; heap
-    // and access hardening plus crash-dump suppression; SeLockMemoryPrivilege
-    // last but before any secure_string allocation reaches VirtualLock.
+    // check for a debugger before loading secrets. enable SeLockMemoryPrivilege before
+    // secure allocations call VirtualLock.
     seal::Cryptography::detectDebugger();
 
-    // Process mitigations are best-effort
     if (!seal::Cryptography::setSecureProcessMitigations(allowDynamicCode))
     {
         writeCliDiag(std::cerr,
@@ -576,13 +557,8 @@ static int initializeSecurity(bool allowDynamicCode)
     return 0;
 }
 
-// Resolve <data> that names a file (or "-" for stdin) into raw content.
-// Newlines are not normalized here: the CSV path needs the raw line structure,
-// and the platform:user:pass path normalizes for itself in handleImportMode.
-//
-// A value that does not name a readable file leaves importData unchanged, to
-// be parsed as inline entries. A file that opens but is empty replaces the
-// argument with an empty string, which fails later as reason=no_valid_entries.
+// read a file or stdin (`-`) without changing line endings; CSV needs the raw structure.
+// unreadable paths remain inline input. empty files become empty input and fail during parsing.
 static void readImportSource(std::string& importData)
 {
     std::string fileContent;
@@ -590,7 +566,6 @@ static void readImportSource(std::string& importData)
 
     if (importData == "-")
     {
-        // Read from stdin: pipes + paste (Ctrl+Z to end on Windows).
         fileContent.assign(std::istreambuf_iterator<char>(std::cin),
                            std::istreambuf_iterator<char>());
         writeCliDiag(std::cerr,
@@ -617,14 +592,9 @@ static void readImportSource(std::string& importData)
     importData = fileContent;
 }
 
-// Parse comma-separated "platform:user:pass" tokens into entries. Returns 0
-// when every token parsed, 1 on the first bad token (no colon, one colon, more
-// than two colons, or an empty field) with nothing imported. Empty tokens are
-// skipped without counting.
-//
-// The token is trimmed as a whole and platform and user are trimmed again, so
-// the password keeps its leading spaces but loses trailing ones. A comma
-// always ends a token, so a password cannot contain one.
+// parse comma-separated platform:user:pass entries atomically; skip empty tokens.
+// reject non-empty tokens with empty fields or other than two colons. token trimming
+// removes password trailing spaces but retains leading spaces. commas cannot occur in passwords.
 static int parseImportEntries(
     const std::string& importData,
     std::vector<std::tuple<std::string, std::string, std::string>>& entries)
@@ -670,7 +640,7 @@ static int parseImportEntries(
             return 1;
         }
 
-        // Reject >2 colons: ambiguous field boundaries break round-trip
+        // reject >2 colons: ambiguous field boundaries break round-trip
         // through export/import.
         if (token.find(':', secondColon + 1) != std::string::npos)
         {
@@ -713,7 +683,7 @@ static int handleImportMode(std::string& importData,
 {
     readImportSource(importData);
 
-    // Format selection: explicit --format wins; auto sniffs the header.
+    // format selection: explicit --format wins; auto sniffs the header.
     std::string effectiveFormat = format;
     if (effectiveFormat == "auto")
     {
@@ -814,9 +784,7 @@ static int handleImportMode(std::string& importData,
                       "reason=password_read_failed"});
         return 1;
     }
-    // DPAPIGuard keeps the master password CryptProtectMemory-encrypted while
-    // idle. ScopedUnprotect decrypts it in place for the loop; reprotect, or
-    // the destructor, re-encrypts it to keep the plaintext window short.
+    // unlock the master password only for the import loop.
     seal::DPAPIGuard<seal::basic_secure_string<wchar_t>> importDpapi(&masterPassword);
 
     std::vector<seal::VaultRecord> records;
@@ -829,7 +797,7 @@ static int handleImportMode(std::string& importData,
             auto secUser = seal::utils::utf8ToSecureWide(user);
             auto secPass = seal::utils::utf8ToSecureWide(pass);
             records.push_back(seal::encryptCredential(platform, secUser, secPass, masterPassword));
-            // VaultRecord now owns the encrypted data; wipe the plaintext copies.
+
             seal::Cryptography::cleanseString(secUser, secPass);
         }
 
@@ -839,7 +807,6 @@ static int handleImportMode(std::string& importData,
             outputPath += ".seal";
         }
 
-        // Original plaintext entries are now encrypted; wipe them.
         for (auto& [p, u, pw] : entries)
             seal::Cryptography::cleanseString(p, u, pw);
 
@@ -918,9 +885,7 @@ static int handleExportMode(const std::string& inputPath,
     }
     const bool csvFormat = (format == "csv");
 
-    // Plaintext gate: every export emits secrets in the clear, so it needs an
-    // explicit confirmation, or --force for scripts. The gate runs before the
-    // password prompt, so a refusal costs nothing.
+    // confirm plaintext export before prompting for the password; --force skips confirmation.
     const char* confirmPrompt = outputPath.empty()
                                     ? "Print ALL credentials in PLAINTEXT to this console?"
                                     : "Export ALL credentials in PLAINTEXT to a file?";
@@ -985,8 +950,7 @@ static int handleExportMode(const std::string& inputPath,
         return 0;
     }
 
-    // Stream credentials one at a time; never accumulate the whole vault
-    // in a plaintext heap buffer.
+    // stream one credential at a time to bound plaintext exposure.
     std::ofstream outFile;
     std::ostream* out = &std::cout;
     if (!outputPath.empty())
@@ -1026,9 +990,7 @@ static int handleExportMode(const std::string& inputPath,
             {
                 continue;
             }
-            // Export format is platform:username:password (2 colons). If
-            // platform or username contains ':', --import cannot round-trip.
-            // Warn so the user can fix the data.
+            // colons in platform or username prevent import round-tripping.
             if (!hasColonWarning && (rec.platform.find(':') != std::string::npos))
             {
                 writeCliDiag(std::cerr,
@@ -1057,8 +1019,7 @@ static int handleExportMode(const std::string& inputPath,
                               seal::diag::kv("username_len", user.size())});
                 hasColonWarning = true;
             }
-            // Write + cleanse per record so only one credential ever sits
-            // in pageable memory.
+            // wipe each record before processing the next.
             if (csvFormat)
             {
                 *out << seal::csv::WriteCsvRow({rec.platform, "", user, pass});
@@ -1123,7 +1084,7 @@ static void processSealFileBatch(seal::DPAPIGuard<seal::basic_secure_string<wcha
     std::cout << "\n";
 }
 
-// Re-read "seal" on Esc: a quick re-encrypt/re-decrypt shortcut on exit. It
+// Re-read "seal" on Esc: a quick re-encrypt/re-decrypt shortcut on exit. it
 // runs only when the file holds real paths, not raw hex.
 static bool handleEscSealFile(seal::DPAPIGuard<seal::basic_secure_string<wchar_t>>& dpapi,
                               seal::basic_secure_string<wchar_t>& password)
@@ -1205,31 +1166,16 @@ static int handleCliMode()
     return 0;
 }
 
-// Entry point. Parses argv into one Mode, applies the process-wide security
-// mitigations, then dispatches:
-// - -e / -d: text encrypt/decrypt, from an inline argument or stdin.
-// - encrypt / decrypt: the file equivalents.
-// - Vault subcommands: rekey, list, get, import, export; plus the
-//   browser-extension register/unregister pair.
-// - File and utility subcommands: gen, shred, hash, verify, wipe. None of them
-//   opens a vault: gen makes a password, shred/hash/verify act on any file, and
-//   wipe clears the clipboard and the console buffer.
-// - -c / --cli: interactive console.
-// - -u / --ui, or no argument at all: the Qt GUI. This is the default and the
-//   only mode that needs dynamic code, for the QML JIT.
-// -h/--help and -v/--version print and exit inside the parser.
+// dispatch one mode after security initialization. help/version exit in the parser.
 //
-// Process contract for script authors:
-//   0     success.
-//   1     parse error, missing or locked file, wrong password, refused
-//         confirmation, or a remote session.
-//   2     platform not found, or an ambiguous prefix. Only `get` returns it.
-//   57005 (0xDEAD) debugger detected. TerminateProcess runs before any mode
-//         handler, so the exit code is the only status a caller gets. The check
-//         does emit one stderr line first, because the message handler is
-//         installed before initializeSecurity().
-// stdout carries the command payload only. Prompts and diagnostics go to
-// stderr, so stdout stays pipe-clean.
+// | exit         | condition                                          |
+// |--------------|----------------------------------------------------|
+// | 0            | success                                            |
+// | 1            | argument, I/O, password, confirmation or RDP error |
+// | 2            | get: missing platform or ambiguous prefix          |
+// | 57005/0xDEAD | debugger detected; terminate before mode dispatch  |
+//
+// command payloads use stdout; prompts and diagnostics use stderr.
 int main(int argc, char* argv[])
 {
     ProgramOptions opts;
@@ -1238,26 +1184,21 @@ int main(int argc, char* argv[])
         return rc;
 
 #ifdef USE_QT_UI
-    // Install the structured handler before any security-init log line so
-    // early qCInfo(logCrypto) calls share the standard format.
+    // install before security checks so early diagnostics use the standard format.
     installSealMessageHandler();
 #endif
 
-    // Only GUI mode loads QML (V4 JIT needs RWX). Other modes keep the
-    // stricter PROCESS_MITIGATION_DYNAMIC_CODE_POLICY.
+    // QML JIT requires dynamic code; other modes retain the stricter mitigation.
     const bool allowDynamicCode = (opts.mode == Mode::Gui);
 
     rc = initializeSecurity(allowDynamicCode);
     if (rc != 0)
         return rc;
 
-    // Set OpenCV env vars while still single-threaded; captureQrFromWebcam()
-    // reads them via getenv on a worker thread, so this avoids racing on the
-    // process environment block.
+    // set OpenCV environment values before worker threads can read them.
     _putenv_s("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0");
 
-    // RAII guard joins the clipboard TTL thread before static destruction,
-    // avoiding a DLL-unload deadlock.
+    // join the clipboard thread before static destruction to avoid DLL-unload deadlock.
     struct ClipboardShutdownGuard
     {
         ~ClipboardShutdownGuard() { seal::Clipboard::shutdown(); }
