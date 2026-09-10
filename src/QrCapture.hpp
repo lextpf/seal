@@ -6,19 +6,17 @@ namespace seal
 {
 
 /**
- * @brief Launch the webcam and scan for a QR code, with cooperative cancellation.
- * @author Alex (https://github.com/lextpf)
+ * @fn secure_string<> captureQrFromWebcam(CancellationToken token = {})
+ * @brief Scan webcam QR text into locked memory with cooperative cancellation.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup QrCapture
  *
- * The decoded text is returned in locked, guard-paged memory (`seal::secure_string`). The whole
- * capture runs inline: the call selects and opens a camera, shows an OpenCV highgui window titled
- * `webcam`, and returns on decode, timeout, Escape, cancellation or camera failure. The camera is
- * released and every window it opened is destroyed before it returns.
+ * Blocks through camera selection, warm-up and detection; run off the GUI thread.
+ * Opens a `webcam` preview and releases the camera and windows before returning.
+ * Oversized detection frames or payloads skip that iteration. The detection timeout
+ * starts after camera selection and warm-up; it does not bound the entire call.
  *
- * An oversized frame or an oversized payload skips that iteration only; the loop keeps scanning
- * until an exit condition holds.
- *
- * ## :material-camera: Capture flow
+ * ### :material-camera: Capture flow
  *
  * ```mermaid
  * ---
@@ -32,41 +30,24 @@ namespace seal
  *     Select --> Warmup["Warmup\n(auto-exposure)"]
  *     Warmup --> Detect{"QR\ndetected?"}
  *     Detect -->|yes| Copy["Secure copy\n& wipe"]
- *     Detect -->|no / Esc| Cancel["Cancel"]
+ *     Detect -->|no| Detect
+ *     Detect -->|Esc / timeout / cancellation| Cancel["Cancel"]
  * ```
  *
- * PickBestCamera() selects the DirectShow device by priority scoring, a live preview window opens
- * while auto-exposure settles, and Escape cancels at any point. `SEAL_CAMERA_INDEX` forces one
- * camera index instead of auto-selection; CameraSelector.hpp documents the rest of the camera
- * environment variables.
+ * ### :material-shield-lock: Limits
  *
- * ## :material-shield-lock: Security measures
+ * | Limit              | Setting or constant        | Value                        |
+ * |--------------------|----------------------------|------------------------------|
+ * | Process memory     | `kCaptureMemoryLimitBytes` | 1 GiB                        |
+ * | Frame width/height | `kMaxFrameDimension`       | 3840 px                      |
+ * | Decoded payload    | `kMaxQrDataBytes`          | 4096 bytes                   |
+ * | Detection timeout  | `SEAL_CAPTURE_TIMEOUT_SEC` | 60 s default; clamp 5-300    |
+ * | Camera warm-up     | `SEAL_CAMERA_WARMUP_MS`    | 250 ms default; clamp 0-5000 |
  *
- * The numeric limits behind these guards are in the table further down.
+ * The Job Object attempts a process memory cap; capture continues if setup fails.
+ * Only the first concurrent call attempts the cap. Payload size is checked after
+ * OpenCV decodes it, so that check does not bound the decoder's temporary allocations.
  *
- * - **Job Object sandbox** - caps process memory while OpenCV is active, which stops a heap spray
- *   or a decompression bomb.
- * - **Frame validation** - an oversized frame is rejected so it cannot overflow an imgproc buffer.
- * - **Payload cap** - the limit sits just below the QR v40 binary-mode maximum of ~4296 bytes, so
- *   a larger payload is anomalous.
- * - **Timeout** - the detection loop auto-cancels rather than holding the camera.
- *
- * The build does not reduce OpenCV. This file calls only core, imgproc, objdetect, videoio and
- * highgui, but CMakeLists.txt links `${OpenCV_LIBS}` whole, and vcpkg installs opencv4 with its
- * default features, so imgcodecs, dnn and the jpeg/png/tiff/webp codecs are linked in as well.
- *
- * @par Security caps
- * | Guard                 | Source                     | Value                        |
- * |-----------------------|----------------------------|------------------------------|
- * | Process memory cap    | `kCaptureMemoryLimitBytes` | 1 GiB (`1ULL << 30`)         |
- * | Max frame dimension   | `kMaxFrameDimension`       | 3840 px (width or height)    |
- * | Max decoded payload   | `kMaxQrDataBytes`          | 4096 bytes                   |
- * | Detection timeout     | `SEAL_CAPTURE_TIMEOUT_SEC` | 60 s default, clamp 5-300    |
- * | Auto-exposure warm-up | `SEAL_CAMERA_WARMUP_MS`    | 250 ms default, clamp 0-5000 |
- *
- * @par Plaintext exposure window
- * The decoded text lives in a pageable OpenCV `std::string` for exactly one copy before it reaches
- * locked pages and the pageable copy is wiped:
  * @verbatim
  * webcam frame (BGR cv::Mat, pageable)
  *      | cvtColor BGR->GRAY, resize to <= 480 px wide
@@ -74,7 +55,7 @@ namespace seal
  * grayscale cv::Mat
  *      | QRCodeDetector::detectAndDecode (retried once on inverted image)
  *      v
- * std::string data   <-- pageable plaintext: the one unlocked window
+ * std::string data   <-- pageable decoded text; OpenCV also owns frame buffers
  *      | result.assign(begin, end)   copy into locked, guard-paged storage
  *      v
  * secure_string<> result
@@ -83,28 +64,12 @@ namespace seal
  * returned secret
  * @endverbatim
  *
- * @par Cancellation
- * Polling starts at the warm-up loop: @p token is read once per warm-up iteration and once per
- * detection iteration, so the caller can cancel through `AsyncHandle::cancel()` instead of the
- * Escape key. PickBestCamera() takes no token, so a cancel raised while cameras are enumerated,
- * probed and opened is not observed until that phase ends; CameraSelector.hpp documents that phase
- * as possibly several seconds. The default token is never cancelled, which makes a no-arg call a
- * plain blocking capture.
- *
- * @par Threading
- * The call blocks for the camera probe, then the warm-up, then up to the configured detection
- * timeout, so run it off the GUI thread (see AsyncRunner).
- *
- * @param token Cancellation token read once per warm-up iteration and once per detection
- *              iteration. Camera selection runs before the first read.
- * @return Decoded QR text in a secure string. Empty when no QR code is detected before the
- *         timeout, when the user presses Escape, when the token is cancelled, or when camera
- *         initialisation fails.
- *
- * @note Not reentrant. Only the first concurrent call installs the 1 GiB Job Object cap; a
- *       second runs uncapped, and both compete for the same camera and window.
- *
- * @see seal::PickBestCamera, seal::EnvIntOrDefault, seal::CancellationToken
+ * @param token Polled per warm-up and detection iteration. Camera selection can
+ *              take seconds and does not observe cancellation. In-progress driver
+ *              and decoder calls are not interrupted.
+ * @return Decoded text; empty on timeout, Escape, cancellation or camera failure.
+ * @note Not reentrant: concurrent calls also compete for the camera and preview.
+ * @see seal::PickBestCamera
  */
 secure_string<> captureQrFromWebcam(CancellationToken token = {});
 
