@@ -11,7 +11,7 @@ AsyncRunner::AsyncRunner(QObject* parent)
 
 AsyncRunner::~AsyncRunner()
 {
-    // Cooperative cancel of everything still in flight, then a clean join - no terminate().
+    // request cancellation before joining workers.
     for (const auto& flag : m_LiveFlags)
     {
         flag->store(true, std::memory_order_release);
