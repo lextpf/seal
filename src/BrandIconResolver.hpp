@@ -1,17 +1,11 @@
 #pragma once
 
 /**
- * @brief Look up brand icons by free-form platform name.
- * @author Alex (https://github.com/lextpf)
+ * @brief Resolve platform labels to bundled brand icons.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Utilities
  *
- * Records carry a free-form platform label (`"GitHub"`, `"Twitter, Inc."`,
- * `"google.com"`, `"My Personal X account"`) and the UI shows the matching
- * brand SVG beside each one. This header turns the label into an SVG asset
- * slug: normalize the label, then try four lookups in order and stop at the
- * first hit.
- *
- * ## :material-vector-link: Resolution Pipeline
+ * ### :material-vector-link: Resolution
  *
  * ```mermaid
  * ---
@@ -44,12 +38,7 @@
  *     TOKEN -->|no| NONE
  * ```
  *
- * @note @ref resolveBrandIconSlug takes a `lookupAsset` closure instead of
- *       reading the filesystem, so the resolution logic stays independent of
- *       Qt resources and `tests/test_brand_icon_resolver.cpp` can stub the
- *       asset index without a `QResource` tree. The Qt wrapper
- *       @ref resolveBrandIconPath supplies the predicate over the compiled-in
- *       asset set.
+ * The lookup callback keeps slug resolution independent of Qt resources.
  */
 
 #include <functional>
@@ -65,99 +54,56 @@ namespace brand
 {
 
 /**
- * @brief Normalize a free-form platform name to a lower-case alphanumeric slug.
+ * @fn std::string normalizeSlug(const std::string& platformName)
+ * @brief Keep lowercase alphanumeric bytes; discard punctuation and spacing.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup BrandIcon
  *
- * Keeps the alphanumeric bytes, lower-cased, and drops everything else: spaces,
- * punctuation, dots, hyphens, and (in the default C locale) every non-ASCII
- * byte. Nothing is inserted, so the dots of a host disappear without splitting
- * it: `"github.com"` becomes `"githubcom"`, not `"github"`. This is the
- * canonical key shape for the asset index, so an index key never holds a hyphen
- * even when the asset filename does.
+ * Uses the C locale: non-ASCII bytes are discarded in the default locale.
+ * `github.com` becomes `githubcom`; `Twitter, Inc.` becomes `twitterinc`.
  *
- * @param platformName Free-form platform string, such as `"Twitter, Inc."`.
- * @return Normalized slug, such as `"twitterinc"`. Empty when the input holds no
- *         alphanumeric character.
+ * @return Normalized index key; empty when no alphanumeric byte remains.
  */
 std::string normalizeSlug(const std::string& platformName);
 
 /**
- * @brief Resolve a platform name to a brand-asset slug (without the `.svg` suffix).
+ * @fn std::string resolveBrandIconSlug(const std::string& platformName, const
+ *     std::function<std::string(const std::string&)>& lookupAsset)
+ * @brief Return the first matching asset slug from the resolution pipeline.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup BrandIcon
  *
- * Applies, in order, and returns the first hit:
- *   1. Join the input's alphanumeric tokens - the string `normalizeSlug`
- *      produces
- *   2. Direct match of the joined slug against the supplied asset index
- *   3. Curated alias table (e.g. `"x"` -> `"x-twitter"`, `"signal"` -> `"signal-messenger"`)
- *   4. Trailing-TLD strip (`"github.com"` -> `"github"`) then direct/alias retry
- *   5. Per-token retry for multi-word labels (`"Twitter, Inc."` -> `"twitter"`,
- *      which then aliases to `"x-twitter"`). A token equal to the joined slug
- *      is skipped, so a single-word label adds no probe here.
+ * Probes use normalized keys, including aliases: `x-twitter` is probed as
+ * `xtwitter`. Returned asset names retain hyphens and omit `.svg`.
  *
- * @par Slug shape the predicate sees
- * Every probe is a normalized slug: lower-case, alphanumeric only, never a
- * hyphen or a dot. Alias targets are re-normalized before the probe, so the
- * alias `"x-twitter"` is looked up as `"xtwitter"`. An index keyed by raw
- * filenames will therefore never match.
+ * Suffix stripping tries `com`, `io`, `net`, `org`, `app`, `tld`, `tv`, `ai` only
+ * when the slug is longer. It is not hostname parsing: `Cash App` retries as
+ * `cash`. Per-token fallback maps `Twitter, Inc.` through `twitter` to
+ * `x-twitter`; a token equal to the joined slug is skipped.
  *
- * @par Trailing-TLD strip
- * Step 4 strips a fixed suffix (`com`, `io`, `net`, `org`, `app`, `tld`, `tv`,
- * `ai`) off the joined slug, and only when the slug is longer than the suffix.
- * It parses no hostname, so a brand whose slug ends in one of those groups is
- * stripped too: `"Cash App"` joins to `"cashapp"` and retries as `"cash"`. A
- * wrong strip is harmless: the failed retry falls through to the next
- * candidate.
+ * Each candidate costs one lookup, plus an alias lookup after a direct miss.
+ * Input without alphanumeric bytes costs none.
  *
- * @par Cost
- * One predicate call per candidate, plus a second call for the alias target
- * when the candidate is in the alias table and the direct probe missed. Keep
- * the predicate cheap and free of side effects. A label with no alphanumeric
- * character costs no call at all.
- *
- * @pre @p lookupAsset is callable; it is invoked without an empty check.
- * @param platformName Free-form platform string.
- * @param lookupAsset  Maps a normalized slug to the real asset filename
- *                     (without `.svg`), or returns an empty string on a miss.
- * @return Real asset slug, hyphens included (`"x-twitter"`), or an empty string
- *         when no candidate matches or @p platformName has no alphanumeric
- *         character.
+ * @param lookupAsset Callable mapping normalized keys to asset slugs; empty means
+ *                    miss. Keep it cheap and free of side effects.
+ * @return Empty when no candidate matches.
+ * @pre The callback is callable; no empty check is made.
  */
 std::string resolveBrandIconSlug(const std::string& platformName,
                                  const std::function<std::string(const std::string&)>& lookupAsset);
 
 #ifdef USE_QT_UI
 /**
- * @brief Resolve a platform name to a qrc path under `assets/brands/`.
+ * @fn QString resolveBrandIconPath(const QString& platformName)
+ * @brief Resolve against the compiled SVG resource index.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup BrandIcon
  *
- * Wraps @ref resolveBrandIconSlug with the compiled-in asset set as the lookup
- * source.
+ * First use enumerates files directly under `:/qt/qml/seal/assets/brands` once,
+ * with thread-safe initialization. Keep filenames ASCII and distinct after
+ * normalization: `x-twitter.svg` maps `xtwitter` to `x-twitter`; later collisions win.
  *
- * @par Index build
- * Built once on first call by enumerating `*.svg` directly under
- * `:/qt/qml/seal/assets/brands` (no recursion), then cached for the process
- * lifetime. `std::call_once` guards construction, so concurrent first calls are
- * safe. The index is never rebuilt, so a brand SVG added later is not seen.
- *
- * @par Keys
- * Each entry maps the file base name, reduced to its lower-case letters and
- * digits, to that base name: `x-twitter.svg` is indexed as
- * `xtwitter` -> `x-twitter`. Two files that reduce to the same key collide and
- * the later one wins, so keep brand filenames distinct after normalization.
- * Keep brand filenames ASCII as well: the index key keeps every Unicode letter
- * or digit, but every probe comes from @ref normalizeSlug, which keeps ASCII
- * alphanumerics only, so a non-ASCII base name is indexed under a key no
- * platform label can produce and that icon never resolves.
- *
- * @par Empty asset tree
- * Brand assets are optional at build time. With none in the resource tree the
- * index is empty and every call returns an empty `QString`; the account chip
- * draws its monogram circle instead of a broken image.
- *
- * @param platformName Free-form platform string.
- * @return `qrc:/qt/qml/seal/assets/brands/<slug>.svg` on a match, empty
- *         `QString` on a miss.
+ * @return `qrc:/qt/qml/seal/assets/brands/<slug>.svg`, or empty on a miss or absent assets.
  */
 QString resolveBrandIconPath(const QString& platformName);
 #endif
