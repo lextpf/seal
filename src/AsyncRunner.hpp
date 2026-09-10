@@ -19,27 +19,23 @@ namespace seal
 {
 /**
  * @class AsyncHandle
- * @brief Handle to one async task; lets the caller cooperatively cancel it.
- * @author Alex (https://github.com/lextpf)
+ * @brief Share a task cancellation flag across handles and threads.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup ViewModel
  *
- * Returned by AsyncRunner::run() and AsyncRunner::runCancellable(). Cheap to copy: every copy
- * shares one cancellation flag, so cancel() works from any copy on any thread. A
- * default-constructed handle is not valid() and cancel() on it does nothing.
- *
- * The handle carries no completion state and stays valid() after the task has finished.
- *
- * @warning cancel() only raises a flag. A run() body receives no CancellationToken and never
- * reads that flag, so cancelling such a handle does not stop the work. Only a runCancellable()
- * body can act on it.
+ * Default handles are invalid; completed tasks retain valid handles. Cancellation
+ * only requests a stop and requires a `runCancellable()` body that polls its token.
  */
 class AsyncHandle
 {
 public:
     AsyncHandle() = default;
 
-    /// @brief Request cancellation; the work body must poll its CancellationToken.
-    /// The flag is set with release ordering and is never cleared again.
+    /**
+     * @fn void cancel()
+     * @brief Request cancellation with release ordering; the flag never resets.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     void cancel()
     {
         if (m_Flag)
@@ -48,7 +44,13 @@ public:
         }
     }
 
-    /// @brief Whether this handle refers to a (possibly already-finished) task.
+    /**
+     * @fn bool valid() const noexcept
+     * @brief Report whether this handle holds a task cancellation flag.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * @return True for submitted tasks, including those that have already completed.
+     */
     bool valid() const noexcept { return static_cast<bool>(m_Flag); }
 
 private:
@@ -62,72 +64,59 @@ private:
 
 /**
  * @class AsyncRunner
- * @brief Runs background work on a private thread pool and delivers each result on the
- *        receiver's thread.
- * @author Alex (https://github.com/lextpf)
+ * @brief Run work on a private pool and deliver results on the receiver thread.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup ViewModel
  *
- * run() and runCancellable() launch the work body on the pool, then invoke `onDone(result)` on
- * `receiver`'s thread (the GUI thread at every call site) through a per-call QFutureWatcher.
+ * Destroying the receiver skips completion; its flag and watcher remain until
+ * runner destruction. Receiver destruction does not cancel the worker. Calls and
+ * receivers must share the runner thread because task bookkeeping has no lock.
  *
- * @par Marshalling flow
+ * Work and completion callables must be copyable, and results must not be void.
+ * Capture secrets in shared locked buffers, cleanse them in the worker, and
+ * return non-secret results. Workers must own everything they access after submission;
+ * a receiver pointer in a capture does not keep that receiver alive.
+ *
  * @verbatim
- *   GUI thread                          |  worker pool (m_Pool)
- *   ------------------------------------+--------------------
- *   run(receiver, work, onDone)         |
- *     makeFlag(), m_LiveFlags.push      |
- *     QtConcurrent::run(&m_Pool, work) -+--->  work()  --.
- *     return AsyncHandle(flag)          |                |
- *                                       |                | result (QFuture<T>)
- *     QFutureWatcher::finished  <-------+----------------'
- *     (runs on receiver's thread)       |
- *       onDone(future.takeResult())     |
- *       erase(m_LiveFlags, flag)        |
- *       watcher->deleteLater()          |
+ *   Runner and receiver thread                 Worker pool
+ *   run(receiver, work, onDone)
+ *     create flag and watcher
+ *     submit work ----------------------------> work()
+ *     return handle                               |
+ *                                                 | result
+ *     watcher finished <--------------------------'
+ *       onDone(result), if receiver is alive
+ *       remove flag; schedule watcher deletion
  * @endverbatim
- * The completion connection binds to `receiver`. If `receiver` dies first, `onDone` is skipped,
- * the flag stays in m_LiveFlags, and the watcher (parented to this runner) dies with the runner.
- *
- * @par Threading contract
- * run() and runCancellable() append to m_LiveFlags without a lock, so call both from the thread
- * that owns this AsyncRunner. The completion lambda erases the flag on `receiver`'s thread, so
- * `receiver` must have the same thread affinity: a receiver on another thread races run() and the
- * destructor on the unlocked vector. The pool is free-threaded; only the bookkeeping is not.
- *
- * @note The result type must not be `void`: the completion lambda calls `QFuture<T>::takeResult()`,
- *       which `QFuture<void>` does not provide. A body with nothing to report must return a
- *       placeholder value.
- *
- * @warning `QtConcurrent::run` decay-copies the callable, so the work body and `onDone` must be
- * copyable. Capture a secret as `std::shared_ptr<SecureWide>`, never a moved SecureWide. The work
- * body cleanses the secret itself and returns only a non-secret result.
  */
 class AsyncRunner : public QObject
 {
     Q_OBJECT
 
 public:
-    /// @brief Construct an idle runner that owns a private QThreadPool.
     explicit AsyncRunner(QObject* parent = nullptr);
 
-    /// @brief Cancel every live task, then block until the pool is idle - a clean join, never a
-    /// `terminate()`. A body that polls no token still runs to completion, and the destructor
-    /// waits for it. `onDone` never runs for a task still in flight: no event loop runs during
-    /// the join, and the watchers die with this runner. State that teardown must restore cannot
-    /// live in `onDone` alone.
+    /**
+     * @fn ~AsyncRunner()
+     * @brief Request cancellation and block until all workers finish.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Completion callbacks for in-flight tasks do not run during this join. Required
+     * teardown must not depend on them; uncooperative workers delay destruction.
+     */
     ~AsyncRunner() override;
 
     /**
-     * @brief Run @p work on the pool, then deliver its result on @p receiver's thread.
+     * @fn AsyncHandle run(QObject* receiver, Work&& work, OnDone&& onDone)
+     * @brief Run work without a cancellation token.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * @p work gets no CancellationToken here; use runCancellable() when the body must stop early.
+     * Cancelling the returned handle neither interrupts work nor suppresses completion.
      *
-     * @param receiver Context object whose thread runs `onDone`; destroying it skips delivery.
-     *                 It must have the same thread affinity as this AsyncRunner.
-     * @param work     Copyable nullary callable. Its deduced result type must not be `void`.
-     * @param onDone   Copyable callable invoked as `onDone(result)` when @p work completes.
-     * @return A handle whose cancel() flag only the destructor reads, because a run() body
-     *         polls nothing.
+     * @param receiver Non-null; same thread affinity as this runner; destruction skips delivery.
+     * @param work Copyable callable with a non-void result.
+     * @param onDone Copyable result callback.
+     * @return A valid handle for the task; its cancellation flag is not read by this worker.
      */
     template <typename Work, typename OnDone>
     AsyncHandle run(QObject* receiver, Work&& work, OnDone&& onDone)
@@ -140,25 +129,24 @@ public:
     }
 
     /**
-     * @brief As run(), but @p work receives a read-only CancellationToken it must poll.
+     * @fn AsyncHandle runCancellable(QObject* receiver, Work&& work, OnDone&& onDone)
+     * @brief Pass a cancellation token to the worker.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * The token is copied into the pool task, so it stays valid for the whole run even when the
-     * returned handle is discarded. `onDone` still runs after a cancelled body returns, so the
-     * body must report the cancellation in its result value.
+     * The token survives discarded handles. Completion still runs after cancellation;
+     * the result must distinguish cancellation from success.
      *
-     * @param receiver Context object whose thread runs `onDone`; destroying it skips delivery.
-     *                 It must have the same thread affinity as this AsyncRunner.
-     * @param work     Copyable callable taking the CancellationToken. It polls the token and
-     *                 returns early once cancellation is requested. Its result must not be `void`.
-     * @param onDone   Copyable callable invoked as `onDone(result)` when @p work completes.
-     * @return A handle whose cancel() sets the token @p work polls.
+     * @param receiver Non-null; same thread affinity as this runner; destruction skips delivery.
+     * @param work Copyable callable that polls its token and returns a non-void result.
+     * @param onDone Copyable result callback.
+     * @return A handle that requests cooperative cancellation; discarding it does not cancel.
      */
     template <typename Work, typename OnDone>
     AsyncHandle runCancellable(QObject* receiver, Work&& work, OnDone&& onDone)
     {
         using T = std::invoke_result_t<Work, CancellationToken>;
         auto flag = makeFlag();
-        CancellationToken token(flag);  // shared_ptr<atomic> -> shared_ptr<const atomic> (implicit)
+        CancellationToken token(flag);
         QFuture<T> future = QtConcurrent::run(
             &m_Pool, [work = std::forward<Work>(work), token]() mutable { return work(token); });
         watch<T>(receiver, future, std::forward<OnDone>(onDone), flag);
@@ -169,7 +157,7 @@ private:
     std::shared_ptr<std::atomic<bool>> makeFlag()
     {
         auto flag = std::make_shared<std::atomic<bool>>(false);
-        m_LiveFlags.push_back(flag);  // runner thread only; no lock
+        m_LiveFlags.push_back(flag);
         return flag;
     }
 
@@ -186,15 +174,14 @@ private:
                          [this, watcher, flag, onDone = std::forward<OnDone>(onDone)]() mutable
                          {
                              onDone(watcher->future().takeResult());
-                             std::erase(m_LiveFlags, flag);  // prune; runner thread only
+                             std::erase(m_LiveFlags, flag);
                              watcher->deleteLater();
                          });
         watcher->setFuture(future);
     }
 
     QThreadPool m_Pool;  ///< Private worker pool; the destructor joins it via waitForDone().
-    /// Live per-task cancellation flags, pruned on completion. Touched only on the runner's own
-    /// thread (the GUI thread at every call site), so it needs no lock.
+    /// Runner-thread bookkeeping; completion removes finished flags.
     std::vector<std::shared_ptr<std::atomic<bool>>> m_LiveFlags;
 };
 }  // namespace seal
