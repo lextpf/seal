@@ -7,44 +7,44 @@ namespace seal
 {
 /**
  * @class CancellationToken
- * @brief Read-only cooperative-cancellation flag polled by a background work body.
- * @author Alex (https://github.com/lextpf)
+ * @brief Shared read-only cancellation state for background work.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Utilities
  *
- * The owning AsyncRunner holds the writable `std::shared_ptr<std::atomic<bool>>`; the work body
- * gets this read-only view and polls cancelled(). A default-constructed token is never cancelled,
- * which is what a task without cancellation support uses.
- *
- * Every copy shares the flag, so a token can be passed by value into a decay-copied
- * `QtConcurrent::run` body. Holding a token keeps the flag alive, so polling stays safe after the
- * AsyncRunner that created it is gone.
- *
- * cancelled() is safe on any thread; its acquire load pairs with the release store in
- * AsyncHandle::cancel().
- *
- * @see AsyncHandle, AsyncRunner
+ * Copies keep the flag alive after AsyncRunner destruction. A default token never cancels.
+ * `cancelled()` is thread-safe; its acquire load pairs with the handle's release store.
+ * Cancellation does not interrupt blocking calls. Workers must check the token between
+ * operations and release owned resources before returning.
  */
 class CancellationToken
 {
 public:
-    /// @brief Construct a never-cancelled token.
+    /**
+     * @fn CancellationToken()
+     * @brief Construct a never-cancelled token.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     CancellationToken() = default;
 
     /**
-     * @brief Construct a token over a shared cancellation flag (read-only).
+     * @fn CancellationToken(std::shared_ptr<const std::atomic<bool>> flag)
+     * @brief Share the cancellation flag without write access.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * A `std::shared_ptr<std::atomic<bool>>` converts implicitly to the const-qualified
-     * parameter, so the caller keeps the only writable view of the flag.
-     *
-     * @param flag Shared flag set by the owning AsyncRunner or AsyncHandle. A null pointer
-     *             yields a token that is never cancelled.
+     * @param flag `nullptr` yields a token that never cancels.
      */
     explicit CancellationToken(std::shared_ptr<const std::atomic<bool>> flag)
         : m_Flag(std::move(flag))
     {
     }
 
-    /// @brief Whether cancellation has been requested. Returns `false` when no flag is held.
+    /**
+     * @fn bool cancelled() const noexcept
+     * @brief Check whether cancellation has been requested.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * @return False when no flag is held; otherwise the shared flag value.
+     */
     bool cancelled() const noexcept { return m_Flag && m_Flag->load(std::memory_order_acquire); }
 
 private:
