@@ -36,7 +36,7 @@ void writeCliDiag(seal::console::Tone tone, std::initializer_list<std::string> f
     seal::console::writeTagged(std::cerr, tone, "CLI", seal::diag::joinFields(fields));
 }
 
-// Resolve an explicit-or-default vault path; empty result means not found.
+// resolve an explicit-or-default vault path; empty result means not found.
 std::filesystem::path resolveVaultPath(const std::string& vaultPathArg)
 {
     if (!vaultPathArg.empty())
@@ -51,11 +51,7 @@ std::filesystem::path resolveVaultPath(const std::string& vaultPathArg)
     return seal::findDefaultVault();
 }
 
-// Shared body for HandleFileEncrypt/HandleFileDecrypt: existence check, password
-// prompt, begin/finish diagnostics, the crypto op, source deletion on success,
-// and cleanse on every non-throw path. `op` is encryptFileTo/decryptFileTo;
-// `computeDest` derives the output path; `eventBase` is e.g. "cli.file_encrypt";
-// `opScope` seeds nextOpId; `failReason` is the op-failure reason token.
+// delete the source only after a successful destination write; scrub on non-throwing exits.
 int handleFileCrypt(const std::string& inputPath,
                     const std::string& outputPath,
                     const char* opScope,
@@ -131,9 +127,7 @@ int handleFileCrypt(const std::string& inputPath,
     }
 }
 
-// Load a vault index, unprotecting `guard` only for the load (re-protected on
-// return). Shared by the CLI read commands; the caller owns password + guard so
-// the password can be reused after the index is loaded.
+// unlock only for the index load; the caller retains the password and guard for later use.
 std::vector<seal::VaultRecord> loadIndexUnprotected(
     seal::DPAPIGuard<seal::basic_secure_string<wchar_t>>& guard,
     const seal::basic_secure_string<wchar_t>& password,
@@ -256,8 +250,7 @@ int HandleVerifyMode(const std::string& path)
                                         std::istreambuf_iterator<char>());
         in.close();
 
-        // verifyPacket streams 64 KB chunks; peak memory ~n (blob) instead
-        // of ~2n (blob + plaintext).
+        // verifyPacket discards 64 KiB plaintext chunks; only the packet stays buffered.
         seal::Cryptography::verifyPacket(std::span<const unsigned char>(blob), password);
         seal::Cryptography::cleanseString(password);
 
@@ -312,7 +305,7 @@ int HandleFileDecrypt(const std::string& inputPath, const std::string& outputPat
                            &seal::FileOperations::decryptFileTo<seal::basic_secure_string<wchar_t>>,
                            [](const std::string& in, const std::string& out) -> std::string
                            {
-                               // Default: strip ".seal"; else append ".decrypted".
+                               // default: strip ".seal"; else append ".decrypted".
                                std::string dest = out;
                                if (dest.empty())
                                {
@@ -326,8 +319,6 @@ int HandleFileDecrypt(const std::string& inputPath, const std::string& outputPat
                            });
 }
 
-// Text <-> hex/base64. Reads inline arg or stdin; prompt is on stderr so
-// piping works.
 int HandleStringMode(bool encryptMode, const std::string& inlineData)
 {
     try
@@ -381,9 +372,7 @@ int HandleStringMode(bool encryptMode, const std::string& inlineData)
         }
         else
         {
-            // Auto-detect: hex first (stricter even length + xdigit only),
-            // then Base64. Hex chars are a Base64 subset, so this order
-            // makes the more specific test win.
+            // hex is a base64 subset, so test the stricter encoding first.
             bool looksHex = (input.size() % 2 == 0) && input.size() >= 4 &&
                             std::all_of(input.begin(),
                                         input.end(),
@@ -440,14 +429,11 @@ namespace
 
 constexpr std::string_view kHostNameAscii = "com.seal.fill";
 
-// Deterministic Chrome extension ID from the RSA "key" in
-// extensions/browser/manifest.json: first 16 bytes of SHA-256(SPKI DER),
-// each nibble 0..15 -> a..p. Hardcoded so allowed_origins needs no manual JSON
-// edit. Regenerating the manifest "key" invalidates this constant: update it
-// here and in the host's argv[1] origin gate together.
+// extension ID: first 16 bytes of SHA-256(SPKI DER), with nibbles 0..15 mapped to a..p.
+// changing manifest.json key requires updating this ID and the host origin gate together.
 constexpr std::string_view kSealExtensionIdAscii = "dfjclelhkideboildnjihgildihjjmdo";
 
-// Best-effort UTF-16 -> clipboard. Silent failure when locked elsewhere.
+// best-effort UTF-16 -> clipboard. Silent failure when locked elsewhere.
 bool copyTextToClipboard(const std::wstring& text)
 {
     if (!OpenClipboard(nullptr))
@@ -486,7 +472,7 @@ bool copyTextToClipboard(const std::wstring& text)
     return ok;
 }
 
-// Absolute dir containing seal.exe (no trailing separator).
+// absolute dir containing seal.exe (no trailing separator).
 std::filesystem::path executableDirectory()
 {
     std::wstring buffer(MAX_PATH, L'\0');
@@ -658,7 +644,7 @@ std::string escapeJson(std::string_view text)
     return out;
 }
 
-// UTF-16 -> UTF-8 with WideCharToMultiByte. Returns empty on failure.
+// UTF-16 -> UTF-8 with WideCharToMultiByte. returns empty on failure.
 std::string toUtf8(const std::wstring& wide)
 {
     if (wide.empty())
@@ -683,7 +669,6 @@ std::string toUtf8(const std::wstring& wide)
     return out;
 }
 
-// Write the Chromium-flavoured native-messaging manifest. Returns true on success.
 bool writeChromeManifest(const std::filesystem::path& manifestPath,
                          const std::filesystem::path& hostExePath)
 {
@@ -699,8 +684,7 @@ bool writeChromeManifest(const std::filesystem::path& manifestPath,
     json << "  \"description\": \"seal credential manager bridge\",\n";
     json << "  \"path\": \"" << escapeJson(hostPathUtf8) << "\",\n";
     json << "  \"type\": \"stdio\",\n";
-    // Pre-fill allowed_origins with the deterministic sideload ID, so no
-    // post-install JSON editing is needed.
+
     json << "  \"allowed_origins\": [\n";
     json << "    \"chrome-extension://" << kSealExtensionIdAscii << "/\"\n";
     json << "  ]\n";
@@ -716,10 +700,9 @@ bool writeChromeManifest(const std::filesystem::path& manifestPath,
     return static_cast<bool>(out);
 }
 
-// No Gecko manifest is written: Gecko needs a different `allowed_extensions`
-// shape, and seal ships no Firefox extension.
+// Gecko requires allowed_extensions; seal supplies no compatible native-host manifest.
 
-// Write the (default) value of HKCU\<subKey> to point at the manifest file.
+// write the (default) value of HKCU\<subKey> to point at the manifest file.
 bool writeRegistryString(std::wstring_view subKey, const std::wstring& valueData)
 {
     const std::wstring subKeyOwned(subKey);
@@ -740,7 +723,7 @@ enum class RegistryDeleteOutcome
     Failed,
 };
 
-// Delete HKCU\<subKey>'s default value while preserving absent vs failure.
+// delete HKCU\<subKey>'s default value while preserving absent vs failure.
 RegistryDeleteOutcome deleteRegistryValue(std::wstring_view subKey)
 {
     const std::wstring subKeyOwned(subKey);
@@ -1030,9 +1013,7 @@ int installBrowserExtensionInternal(std::string* outMessage,
                                         copyTextToClipboard(report.m_ExtensionDirectory.wstring());
     report.m_Success = true;
 
-    // Progress goes to stdout even for the GUI caller: these lines are the
-    // CLI's stdout contract. The GUI reads the structured report and the
-    // detailed formatter instead.
+    // stdout progress is part of the CLI contract, including when the GUI calls this helper.
     std::cout << "Native-messaging host registered for " << installedCount << " browser(s).\n";
     std::cout << "Manifest: " << report.m_ManifestPath.string() << "\n";
     if (report.m_ExtensionDirectoryFound)
@@ -1143,8 +1124,6 @@ int uninstallBrowserExtensionInternal(std::string* outMessage,
     }
     report.m_Success = missed == 0;
 
-    // Leave the generated manifest in place so a follow-up install only needs
-    // to restore registry entries.
     writeCliDiag(report.m_Success ? seal::console::Tone::Success : seal::console::Tone::Error,
                  {"event=cli.uninstall-extension.finish",
                   report.m_Success ? "result=ok" : "result=fail",
@@ -1273,7 +1252,7 @@ int HandleGetMode(const std::string& platformQuery,
 
         std::vector<seal::VaultRecord> records = loadIndexUnprotected(guard, password, vaultPath);
 
-        // Blank (not remove) deleted entries so indices stay aligned.
+        // blank (not remove) deleted entries so indices stay aligned.
         std::vector<std::string> names;
         names.reserve(records.size());
         for (const auto& rec : records)
@@ -1415,8 +1394,7 @@ int HandleRekeyMode(const std::string& path)
             return 1;
         }
 
-        // Constant-time confirmation compare over the raw wide bytes
-        // (ctEqual's byte_like concept excludes wchar_t containers).
+        // ctEqual excludes wchar_t containers; compare the raw wide bytes.
         bool pwMatch = newPw.size() == confirmPw.size();
         if (pwMatch)
         {
