@@ -13,7 +13,6 @@
 
 #include <iostream>
 
-// Bare category strings: a log filter matches "bridge.*", not "seal.bridge.*".
 Q_LOGGING_CATEGORY(logBackend, "backend")
 Q_LOGGING_CATEGORY(logVault, "vault")
 Q_LOGGING_CATEGORY(logCrypto, "crypto")
@@ -24,8 +23,6 @@ Q_LOGGING_CATEGORY(logCamera, "camera")
 Q_LOGGING_CATEGORY(logQr, "qr")
 Q_LOGGING_CATEGORY(logBridge, "bridge")
 
-// Qt message handler. Format: "[HH:mm:ss.zzz] [LVL] [cat] [tid=N] text"
-// on stderr; fatal messages abort after printing.
 static void sealMessageHandler(QtMsgType type, const QMessageLogContext& ctx, const QString& msg)
 {
     const char* lvl = "???";
