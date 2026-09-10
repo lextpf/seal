@@ -138,7 +138,7 @@ TEST_F(BrandIconResolverTest, ResolveUnknownReturnsEmpty)
 
 TEST_F(BrandIconResolverTest, ResolveAliasOnlyWhenAssetExists)
 {
-    // Empty lookup -> every alias miss returns empty.
+    // empty lookup -> every alias miss returns empty.
     auto emptyLookup = [](const std::string&) -> std::string { return {}; };
     EXPECT_EQ(seal::brand::resolveBrandIconSlug("X", emptyLookup), "");
     EXPECT_EQ(seal::brand::resolveBrandIconSlug("GitHub", emptyLookup), "");
