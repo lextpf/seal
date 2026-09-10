@@ -5,9 +5,7 @@
 namespace
 {
 
-// RAII for CoTaskMem-allocated credential buffers. Wipes plaintext with
-// SecureZeroMemory before CoTaskMemFree; otherwise CredUI output lingers
-// in the process heap.
+// wipe packed credentials before releasing the COM allocation.
 struct CoTaskMemGuard
 {
     LPVOID ptr = nullptr;
@@ -19,7 +17,6 @@ struct CoTaskMemGuard
     {
         if (ptr && size)
         {
-            // Non-optimizable wipe of credential bytes.
             SecureZeroMemory(ptr, size);
         }
         if (ptr)
@@ -32,8 +29,7 @@ struct CoTaskMemGuard
     CoTaskMemGuard& operator=(const CoTaskMemGuard&) = delete;
 };
 
-// RAII wchar buffer that wipes on scope exit. Stack-allocated for the
-// user/domain/password fields unpacked from CredUI output.
+// wipe unpacked credential fields on scope exit.
 template <size_t N>
 struct SecureWCharBuffer
 {
@@ -61,7 +57,6 @@ constexpr int kExtendedKey2 = 224;
 namespace seal
 {
 
-// Shared layout setup for both constructors.
 static void initConsoleLayout(HANDLE output, SHORT& width, int& showCount, size_t entryCount)
 {
     CONSOLE_SCREEN_BUFFER_INFO info{};
@@ -112,7 +107,6 @@ void MaskedCredentialView::render()
         startY = winTop;
     }
 
-    // Clear the display area
     std::string blank(static_cast<size_t>(m_Width), ' ');
     for (SHORT r = startY; r < startY + needed && r <= winBot; ++r)
     {
@@ -122,7 +116,6 @@ void MaskedCredentialView::render()
         WriteConsoleA(m_Output, blank.c_str(), static_cast<DWORD>(blank.size()), &written, nullptr);
     }
 
-    // Header line
     SetConsoleCursorPosition(m_Output, {0, startY});
     DWORD written;
     WriteConsoleA(m_Output,
@@ -132,9 +125,6 @@ void MaskedCredentialView::render()
                   nullptr);
     SetConsoleCursorPosition(m_Output, {0, static_cast<SHORT>(startY + 1)});
 
-    // Build hit regions: "N) ServiceName:********:********". The two
-    // masked spans become click zones for (username, password). Console
-    // (col, row) coords let handleClick match mouse events.
     m_Regions.clear();
     m_Regions.reserve(static_cast<size_t>(m_ShowCount));
 
@@ -161,7 +151,6 @@ void MaskedCredentialView::render()
             svc.assign(entry.primary.data(), entry.primary.size());
         }
 
-        // Truncate long service names with ellipsis
         if (static_cast<int>(svc.size()) > maxService)
         {
             if (maxService >= 1)
@@ -182,7 +171,7 @@ void MaskedCredentialView::render()
         WriteConsoleW(m_Output, line.c_str(), static_cast<DWORD>(line.size()), &written, nullptr);
         SetConsoleCursorPosition(m_Output, {0, static_cast<SHORT>(y + 1)});
 
-        // Map column ranges to the two masked fields on this row:
+        // map column ranges to the two masked fields on this row:
         //   [u0..u1] = first "********" (username)
         //   [p0..p1] = second "********" (password), separated by ':'
         SHORT u0 = static_cast<SHORT>(prefix.size());
@@ -195,7 +184,6 @@ void MaskedCredentialView::render()
     GetConsoleScreenBufferInfo(m_Output, &info);
     m_StatusRow = info.dwCursorPosition.Y;
 
-    // Show overflow indicator if not all entries fit
     size_t totalEntries = m_OnDemandMode ? m_ServiceNames.size() : m_pEntries->size();
     if (static_cast<size_t>(m_ShowCount) < totalEntries)
     {
@@ -239,7 +227,6 @@ void MaskedCredentialView::handleClick(SHORT x, SHORT y)
             continue;
         }
 
-        // Resolve the service name for status display.
         std::wstring svc;
         if (m_OnDemandMode)
         {
@@ -251,7 +238,6 @@ void MaskedCredentialView::handleClick(SHORT x, SHORT y)
             svc.assign(entry.primary.data(), entry.primary.size());
         }
 
-        // Determine which field the user clicked.
         bool isUsername = (x >= m_Regions[i].usernameStart && x <= m_Regions[i].usernameEnd);
         bool isPassword = (x >= m_Regions[i].passwordStart && x <= m_Regions[i].passwordEnd);
         if (!isUsername && !isPassword)
@@ -259,8 +245,7 @@ void MaskedCredentialView::handleClick(SHORT x, SHORT y)
 
         const char* fieldLabel = isUsername ? "USERNAME" : "PASSWORD";
 
-        // Countdown so the user can alt-tab to the target before
-        // typeSecret sends keystrokes.
+        // allow time to focus the target before typing.
         for (int s = COUNTDOWN_SEC; s >= 1; --s)
         {
             setStatus(std::string("Focus target field; typing ") + fieldLabel + " in " +
@@ -270,8 +255,6 @@ void MaskedCredentialView::handleClick(SHORT x, SHORT y)
 
         if (m_OnDemandMode)
         {
-            // On-demand: decrypt just this entry, type, then auto-wipe
-            // via ~secure_triplet16_t.
             seal::secure_triplet16_t triple = m_DecryptEntry(i);
             if (isUsername)
             {
@@ -283,11 +266,9 @@ void MaskedCredentialView::handleClick(SHORT x, SHORT y)
                 (void)seal::typeSecret(
                     triple.tertiary.data(), static_cast<int>(triple.tertiary.size()), 0);
             }
-            // ~secure_triplet16_t wipes credentials here
         }
         else
         {
-            // Pre-decrypted path: the credential is already in memory.
             const auto& entry = (*m_pEntries)[i];
             if (isUsername)
             {
@@ -309,10 +290,7 @@ void MaskedCredentialView::handleClick(SHORT x, SHORT y)
 
 void MaskedCredentialView::run()
 {
-    // Enable mouse input for click detection on masked fields. Quick-edit mode
-    // is cleared as well: it consumes left-button presses for text selection,
-    // so the hit regions would never see a click. The clear needs
-    // ENABLE_EXTENDED_FLAGS in the same call, otherwise the console ignores it.
+    // quick-edit consumes clicks; clearing it also requires ENABLE_EXTENDED_FLAGS.
     DWORD oldMode = 0;
     GetConsoleMode(m_Input, &oldMode);
     DWORD newMode =
@@ -343,7 +321,6 @@ void MaskedCredentialView::run()
         }
     }
 
-    // Move cursor below the status line for subsequent output
     SetConsoleCursorPosition(m_Output, {0, static_cast<SHORT>(m_StatusRow + 1)});
 }
 
@@ -385,12 +362,11 @@ std::pair<std::vector<std::string>, bool> readBulkLinesDualFrom(std::istream& in
     return {std::move(lines), uncensored};
 }
 
-// Returns: 1 = terminator found (break), 0 = line handled (continue)
+// return 1 for a terminator, 0 for a handled line.
 static int handleNewline(std::string& cur, std::vector<std::string>& lines, bool& uncensored)
 {
     std::string t = seal::utils::trim(cur);
 
-    // Terminator: '?' for censored, '!' for uncensored output
     if (t == "?" || t == "!")
     {
         uncensored = (t == "!");
@@ -398,7 +374,6 @@ static int handleNewline(std::string& cur, std::vector<std::string>& lines, bool
         return 1;
     }
 
-    // Console commands
     if (t == ":open" || t == ":o" || t == ":edit")
     {
         if (!seal::openInputInNotepad())
@@ -457,7 +432,6 @@ bool readBulkLinesDualOrEsc(std::pair<std::vector<std::string>, bool>& out)
             continue;
         }
 
-        // Backspace
         if (ch == kBackspace)
         {
             if (!cur.empty())
@@ -468,16 +442,14 @@ bool readBulkLinesDualOrEsc(std::pair<std::vector<std::string>, bool>& out)
             continue;
         }
 
-        // Skip extended key sequences (arrow keys, function keys, etc.)
+        // consume both bytes of an extended key.
         if (ch == kExtendedKey1 || ch == kExtendedKey2)
         {
             (void)_getch();
             continue;
         }
 
-        // Drop remaining control characters (e.g. Ctrl+V = 0x16 injected by
-        // some console hosts during paste) so they don't silently corrupt
-        // paths or other input.
+        // discard paste control bytes so they cannot enter a path.
         if (ch < 32 || ch == 127)
             continue;
 
@@ -499,9 +471,7 @@ seal::basic_secure_string<wchar_t> readPasswordSecureDesktop(const wchar_t* capt
     ui.pszCaptionText = caption;
     ui.pszMessageText = message;
 
-    // CredPackAuthenticationBufferW builds a serialised credential blob.
-    // Empty user/pass -> blank dialog fields. First call queries size,
-    // second fills (standard Win32 "size then convert" pattern).
+    // pack empty credentials to leave the dialog fields blank.
     DWORD inLen = 0;
     wchar_t userPrefill[] = L"";
     wchar_t passEmpty[] = L"";
@@ -513,15 +483,10 @@ seal::basic_secure_string<wchar_t> readPasswordSecureDesktop(const wchar_t* capt
         throw std::runtime_error("CredPackAuthenticationBufferW failed");
     }
 
-    // Show the Windows Credentials dialog
     DWORD authPkg = 0;
     CoTaskMemGuard cred;
 
-    // CREDUIWIN_ENUMERATE_CURRENT_USER pre-selects the logged-in account so the
-    // user types only the password; seal ignores the username field.
-    // secureDesktop adds CREDUIWIN_SECURE_PROMPT, which moves the dialog onto
-    // Windows' dimmed secure desktop, out of reach of user-session software
-    // keyloggers and hooks. OS policy can refuse it, so it is best-effort.
+    // preselect the current account; only its password is used.
     DWORD flags = CREDUIWIN_ENUMERATE_CURRENT_USER;
     if (secureDesktop)
     {
@@ -536,13 +501,11 @@ seal::basic_secure_string<wchar_t> readPasswordSecureDesktop(const wchar_t* capt
         throw std::runtime_error("User canceled");
     }
 
-    // Unpack the credential buffer into separate fields (RAII-wiped on scope exit)
     SecureWCharBuffer<256> user;
     SecureWCharBuffer<256> dom;
     SecureWCharBuffer<512> pass;
 
-    // CRED_PACK_PROTECTED_CREDENTIALS keeps the password encrypted in the
-    // buffer until this call reads it out.
+    // keep the packed password protected until unpacking.
     BOOL ok = CredUnPackAuthenticationBufferW(CRED_PACK_PROTECTED_CREDENTIALS,
                                               cred.ptr,
                                               cred.size,
@@ -553,14 +516,13 @@ seal::basic_secure_string<wchar_t> readPasswordSecureDesktop(const wchar_t* capt
                                               pass.data,
                                               &pass.count);
 
-    // Fallback for older Windows / domain configs that return
-    // ERROR_NOT_CAPABLE: retry with flag 0 (unprotected).
+    // retry without protection flags when the provider cannot unpack protected credentials.
     if (!ok)
     {
         DWORD err = GetLastError();
         if (err == ERROR_NOT_CAPABLE || err == ERROR_NOT_SUPPORTED)
         {
-            // Reset counts - CredUnPackAuthenticationBufferW may have clobbered them.
+            // the failed unpack call can change the buffer counts.
             user.count = static_cast<DWORD>(256);
             dom.count = static_cast<DWORD>(256);
             pass.count = static_cast<DWORD>(512);
@@ -581,9 +543,7 @@ seal::basic_secure_string<wchar_t> readPasswordSecureDesktop(const wchar_t* capt
         throw std::runtime_error("CredUnPackAuthenticationBufferW failed");
     }
 
-    // Copy the password into a locked-page secure_string. pass.count is
-    // the buffer capacity, not the string length, so use wcsnlen. Element
-    // copy avoids std::wstring temporaries.
+    // pass.count is capacity, so measure the length before copying into locked memory.
     size_t passLen = wcsnlen(pass.data, pass.count);
     seal::basic_secure_string<wchar_t> out;
     out.resize(passLen);
@@ -593,16 +553,14 @@ seal::basic_secure_string<wchar_t> readPasswordSecureDesktop(const wchar_t* capt
     }
 
     return out;
-    // ~SecureWCharBuffer zeros user/dom/pass, ~CoTaskMemGuard zeros+frees the cred blob
 }
 
 seal::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt)
 {
-    // Prompt + echo on stderr so they don't mix into piped stdout.
+    // keep prompts and echo out of piped stdout.
     std::cerr << prompt << std::flush;
 
-    // _getch returns one byte at a time in the console codepage; accumulate
-    // into a VirtualLock'd secure_string, widen to wchar_t once at the end.
+    // accumulate codepage bytes in locked memory before widening.
     seal::secure_string<> narrow;
 
     for (;;)
@@ -620,7 +578,6 @@ seal::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt)
         if (ch == kCtrlC)  // Ctrl+C
             throw std::runtime_error("Interrupted");
 
-        // Backspace
         if (ch == kBackspace)
         {
             if (!narrow.empty())
@@ -631,7 +588,7 @@ seal::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt)
             continue;
         }
 
-        // Skip extended key sequences (arrow keys, function keys)
+        // consume both bytes of an extended key.
         if (ch == kExtendedKey1 || ch == kExtendedKey2)
         {
             (void)_getch();
@@ -642,9 +599,7 @@ seal::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt)
         std::cerr << '*' << std::flush;
     }
 
-    // Widen with the active console codepage (often Windows-1252), never
-    // CP_UTF8: UTF-8 would garble non-ASCII passwords and break key
-    // derivation.
+    // use the console codepage; UTF-8 decoding would change non-ASCII password keys.
     seal::basic_secure_string<wchar_t> result;
     if (!narrow.empty())
     {
@@ -656,7 +611,7 @@ seal::basic_secure_string<wchar_t> readPasswordConsole(const char* prompt)
             MultiByteToWideChar(cp, 0, narrow.data(), (int)narrow.size(), result.data(), need);
         }
     }
-    // narrow auto-wipes on scope exit
+
     return result;
 }
 
