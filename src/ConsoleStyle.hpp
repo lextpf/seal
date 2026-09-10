@@ -7,122 +7,72 @@ namespace seal
 {
 /**
  * @namespace seal::console
- * @brief ANSI-coloured console output primitives for diagnostics and logs.
+ * @brief console output with semantic ANSI colours.
  * @author Alex (https://github.com/lextpf)
  * @ingroup Logging
  *
- * Thin layer over `std::ostream` that emits semantic tone-coloured text on
- * Windows consoles. The first write to each stream tries to set
- * `ENABLE_VIRTUAL_TERMINAL_PROCESSING` on that stream's standard handle and
- * caches the outcome; later writes pay only a `std::call_once` fast path.
- *
- * Colour counts as available when the handle is a console, that is when
- * `GetConsoleMode` succeeds. Redirected output (file or pipe) fails that test
- * and falls back to plain text, so callers never branch on terminal
- * capability. The VT bit is not re-tested after the attempt, so a console host
- * that refuses VT processing still receives escape sequences.
- *
- * @note Only `std::cout` and `std::cerr` are tracked; state lookup treats any
- *       other stream as `std::cerr`.
- *
- * @note Each function writes one line through several stream insertions and
- *       takes no lock. Two threads writing to the same stream can interleave
- *       inside a line; serialising them is the caller's job.
+ * the first write attempts ENABLE_VIRTUAL_TERMINAL_PROCESSING and caches console detection.
+ * redirected output is plain text. if a console rejects the VT flag, it still receives escapes.
+ * only std::cout and std::cerr have separate state; other streams use stderr's state.
+ * calls do not lock complete lines. callers must serialize concurrent writes.
  */
 namespace console
 {
 
 /**
  * @enum Tone
- * @brief Semantic colour categories for console output.
+ * @brief semantic output colours.
  * @ingroup Logging
- *
- * Each tone maps to a fixed ANSI colour code. Callers pick the tone by message meaning (success,
- * warning, step progress), not a raw colour, so the palette can be retuned in one place.
- *
- * @par Palette (SGR foreground code)
- * | Tone      | SGR  | Colour              |
- * |-----------|------|---------------------|
- * | `Plain`   | none | (uncoloured)        |
- * | `Debug`   | `90` | bright black / grey |
- * | `Info`    | `36` | cyan                |
- * | `Step`    | `94` | bright blue         |
- * | `Success` | `92` | bright green        |
- * | `Warning` | `93` | bright yellow       |
- * | `Error`   | `91` | bright red          |
- * | `Summary` | `95` | bright magenta      |
- * | `Banner`  | `96` | bright cyan         |
  */
 enum class Tone
 {
-    Plain,    ///< No colour - emit text unchanged.
-    Debug,    ///< Bright black / grey - low-signal trace output.
-    Info,     ///< Cyan - informational status.
-    Step,     ///< Bright blue - progress step in a multi-phase operation.
-    Success,  ///< Bright green - successful completion.
-    Warning,  ///< Bright yellow - recoverable anomaly.
-    Error,    ///< Bright red - failure.
-    Summary,  ///< Bright magenta - end-of-run aggregate output.
-    Banner    ///< Bright cyan - headers and section dividers.
+    Plain,    ///< no colour - emit text unchanged.
+    Debug,    ///< bright black / grey - low-signal trace output.
+    Info,     ///< cyan - informational status.
+    Step,     ///< bright blue - progress step in a multi-phase operation.
+    Success,  ///< bright green - successful completion.
+    Warning,  ///< bright yellow - recoverable anomaly.
+    Error,    ///< bright red - failure.
+    Summary,  ///< bright magenta - end-of-run aggregate output.
+    Banner    ///< bright cyan - headers and section dividers.
 };
 
 /**
- * @brief Write a tone-coloured line terminated with `'\n'`.
+ * @brief append a newline and reset any applied ANSI colour.
  * @ingroup Logging
  *
- * When colour is available and @p tone is not Plain, the text is wrapped in the tone's ANSI escape
- * and a reset sequence. Otherwise the raw text is written.
- *
- * @param os   Destination stream (typically `std::cout` or `std::cerr`).
- * @param tone Semantic colour category; `Tone::Plain` emits no escape sequence.
- * @param text Line contents; the trailing newline is appended for you.
+ * Tone::Plain and redirected output use no escape sequences.
  */
 void writeLine(std::ostream& os, Tone tone, std::string_view text);
 
 /**
- * @brief Write a bracketed tag in colour followed by plain body text.
+ * @brief colour only the bracketed tag and append a newline.
  * @ingroup Logging
  *
- * Emits `[tag] text\n`, with the tone colour on the bracketed tag only. The CLI uses it for
- * subsystem-prefixed diagnostics, e.g. `[CAM] event=probe ok=true`.
- *
- * @param os   Destination stream (typically `std::cout` or `std::cerr`).
- * @param tone Colour applied to the `[tag]` prefix.
- * @param tag  Short subsystem label, rendered inside square brackets.
- * @param text Message body; when empty, only the tag is written.
+ * output is `[tag] text`; an empty body emits only the tag.
  */
 void writeTagged(std::ostream& os, Tone tone, std::string_view tag, std::string_view text);
 
 /**
- * @brief Interactive y/N gate for destructive or plaintext-emitting actions.
+ * @brief confirm an action with one input line.
  * @ingroup CLI
  *
- * Prints `<prompt> [y/N]: ` to @p err and reads one line from @p in. Only
- * `y`/`Y` confirms; everything else, EOF and a closed stdin included, refuses.
- * Leading and trailing ASCII whitespace is trimmed first, so `" y "` confirms
- * while `"yes"` and a blank line refuse. One line is consumed, so the caller
- * can keep reading @p in afterwards.
- *
- * @param force  Skip the prompt (e.g. `--force`) and return `true` at once,
- *               reading nothing from @p in and writing nothing to @p err.
- * @param in     Input stream: stdin in production, a stringstream in tests.
- * @param err    Stream for the prompt; stderr keeps stdout pipe-clean.
- * @param prompt Question to display, without the trailing `[y/N]`.
- * @return `true` when the action is confirmed.
+ * only `y` or `Y`, after trimming ASCII whitespace, confirms. EOF and all other input refuse.
+ * @param force skip all I/O and return true.
+ * @param err receives the prompt; use stderr to keep stdout available for piped output.
  */
 bool ConfirmDestructive(bool force, std::istream& in, std::ostream& err, const char* prompt);
 
 /**
  * @struct LogSegments
- * @brief Pre-parsed segments of a Qt log line for `writeLogLine`.
+ * @brief borrowed segments of a diagnostic line.
  * @ingroup Logging
  *
- * Every view must stay valid for the duration of the `writeLogLine` call. Each field carries its
- * own emphasis: timestamp and thread dimmed, category tinted, level coloured by severity.
+ * all views must remain valid until writeLogLine() returns.
  */
 struct LogSegments
 {
-    std::string_view timestamp;  ///< Formatted wall-clock timestamp (e.g. `HH:mm:ss.zzz`).
+    std::string_view timestamp;  ///< formatted wall-clock timestamp (e.g. `HH:mm:ss.zzz`).
     std::string_view level;      ///< Severity token (e.g. `DBG`, `WRN`, `FTL`).
     std::string_view category;   ///< Qt logging category, bare/no prefix (e.g. `vault`).
     std::string_view threadId;   ///< Originating thread identifier.
@@ -130,41 +80,16 @@ struct LogSegments
 };
 
 /**
- * @brief Write a fully formatted multi-segment log line.
+ * @brief write a diagnostic line with separate colours for each segment.
  * @ingroup Logging
  *
- * Renders as `[timestamp] [level] [category] [tid=threadId] message\n`.
+ * append a newline. unknown categories use bright magenta; Tone::Warning and Tone::Error also tint
+ * the message body. segments are emitted verbatim.
  *
- * Timestamp and thread-id brackets are dimmed. The category gets a
- * per-category tint, so `[vault]` and `[bridge]` stay distinguishable at a
- * glance even though they sit in the same column on every line; an
- * unrecognised category falls back to bright magenta. The level bracket uses
- * @p levelTone. Warning and Error also tint the message body, so the whole
- * line reads as one alert; other tones leave it in the default colour.
- *
- * @par Segment emphasis
  * @verbatim
  * [timestamp] [level] [category] [tid=threadId] message
  *    dim       tone     accent        dim       default (tinted on Warn/Error)
  * @endverbatim
- *
- * @par Category accent (SGR foreground code)
- * | Category  | SGR  | Colour         |
- * |-----------|------|----------------|
- * | `backend` | `95` | bright magenta |
- * | `vault`   | `93` | bright yellow  |
- * | `crypto`  | `92` | bright green   |
- * | `fill`    | `94` | bright blue    |
- * | `bridge`  | `33` | yellow (dark)  |
- * | `file`    | `36` | cyan           |
- * | `app`     | `97` | bright white   |
- * | `camera`  | `91` | bright red     |
- * | `qr`      | `35` | magenta (dark) |
- * | (other)   | `95` | bright magenta |
- *
- * @param os        Destination stream (typically `std::cerr`).
- * @param levelTone Colour for the `[level]` bracket and warn/error messages.
- * @param segs      Pre-parsed segments; fields are rendered verbatim.
  */
 void writeLogLine(std::ostream& os, Tone levelTone, const LogSegments& segs);
 
