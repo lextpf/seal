@@ -55,10 +55,7 @@ void initialize(StreamState& state)
         (void)SetConsoleMode(state.handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
     }
 
-    // Colour is enabled when the handle is still a console after the attempt.
-    // The VT bit in verifyMode is not tested, so a console host that refuses
-    // ENABLE_VIRTUAL_TERMINAL_PROCESSING still receives escape sequences;
-    // redirected output fails GetConsoleMode and falls back to plain text.
+    // console detection does not verify the VT bit; a rejecting console still receives escapes.
     DWORD verifyMode = 0;
     state.colorEnabled = GetConsoleMode(state.handle, &verifyMode) != 0;
 }
@@ -90,9 +87,6 @@ const char* codeFor(seal::console::Tone tone)
     }
 }
 
-// Per-category ANSI foreground colour so the 9 subsystems are distinguishable
-// at a glance in a tail. An unknown category, including one from a non-seal
-// caller, falls back to bright magenta.
 const char* categoryColor(std::string_view cat)
 {
     if (cat == "backend")
@@ -131,7 +125,7 @@ const char* categoryColor(std::string_view cat)
     {
         return "\x1b[35m";  // dark magenta - QR capture
     }
-    return "\x1b[95m";  // default: bright magenta (pre-change behaviour)
+    return "\x1b[95m";
 }
 
 }  // namespace
@@ -182,7 +176,7 @@ void writeLogLine(std::ostream& os, Tone levelTone, const LogSegments& segs)
 
     const bool color = state.colorEnabled;
     const char* dim = color ? "\x1b[90m" : "";
-    // Per-category accent colour; unknown categories -> bright magenta.
+
     const char* accent = color ? categoryColor(segs.category) : "";
     const char* lvl = color ? codeFor(levelTone) : "";
     const char* reset = color ? "\x1b[0m" : "";
@@ -216,7 +210,7 @@ bool ConfirmDestructive(bool force, std::istream& in, std::ostream& err, const c
         err << "\n";
         return false;
     }
-    // Trim ASCII whitespace; only an explicit y/Y confirms.
+
     const auto first = line.find_first_not_of(" \t\r\n");
     if (first == std::string::npos)
     {
