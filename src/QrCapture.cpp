@@ -28,32 +28,27 @@
 
 namespace
 {
-// Route diagnostics through Qt logging for the unified prefix.
 void writeQrDiag(seal::console::Tone tone, std::initializer_list<std::string> fields)
 {
     writeToneLine(logQr(), tone, fields);
 }
 
-// Maximum time the QR detection loop can run before auto-cancelling.
+// detection timeout in seconds.
 constexpr int kDefaultCaptureTimeoutSec = 60;
 
-// Reject an oversized frame that could overflow an imgproc buffer.
+// bound dimensions before imgproc operations.
 constexpr int kMaxFrameDimension = 3840;
 
-// QR v40 max is ~4296 bytes; anything larger is anomalous.
+// bound decoded plaintext allocation.
 constexpr size_t kMaxQrDataBytes = 4096;
 
-// 1 GiB process memory cap that blocks a heap spray or a decompression bomb.
+// process-wide allocation ceiling during OpenCV capture.
 constexpr SIZE_T kCaptureMemoryLimitBytes = 1ULL << 30;
 
-// At most one CaptureJobGuard is active process-wide; a second destructor would
-// clear the cap mid-capture and disable the sandbox.
+// only one guard may own the cap; another destructor could clear it mid-capture.
 std::atomic<bool> g_CaptureJobActive{false};
 
-// RAII Job Object that caps process memory while OpenCV decodes frames. A
-// malicious virtual-camera driver or a decompression bomb can trigger unbounded
-// allocation, and the 1 GiB ceiling fails fast instead. The destructor clears
-// the limit so the rest of seal runs unconstrained.
+// limit allocations during decoding; destruction removes the process memory cap.
 struct CaptureJobGuard
 {
     HANDLE hJob = nullptr;
@@ -61,7 +56,6 @@ struct CaptureJobGuard
 
     explicit CaptureJobGuard(SIZE_T memoryLimitBytes)
     {
-        // Single-instance: skip setup when another guard is active.
         bool expected = false;
         if (!g_CaptureJobActive.compare_exchange_strong(expected, true))
             return;
@@ -84,7 +78,7 @@ struct CaptureJobGuard
 
         if (!AssignProcessToJobObject(hJob, GetCurrentProcess()))
         {
-            // Non-fatal: a non-nestable Job on older Windows, or access denied.
+            // continue if the process cannot join this Job Object.
             CloseHandle(hJob);
             hJob = nullptr;
         }
@@ -94,7 +88,6 @@ struct CaptureJobGuard
     {
         if (hJob)
         {
-            // Lift the memory cap so the rest of seal runs unconstrained.
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION info = {};
             (void)SetInformationJobObject(
                 hJob, JobObjectExtendedLimitInformation, &info, sizeof(info));
@@ -114,7 +107,6 @@ seal::secure_string<> seal::captureQrFromWebcam(seal::CancellationToken token)
 {
     seal::secure_string<> result;
 
-    // Memory cap while OpenCV is active.
     CaptureJobGuard jobGuard(kCaptureMemoryLimitBytes);
 
     cv::VideoCapture cap;
@@ -167,7 +159,6 @@ seal::secure_string<> seal::captureQrFromWebcam(seal::CancellationToken token)
 
     while (true)
     {
-        // Poll the cancellation token before any camera work.
         if (token.cancelled())
         {
             writeQrDiag(seal::console::Tone::Warning,
@@ -175,7 +166,6 @@ seal::secure_string<> seal::captureQrFromWebcam(seal::CancellationToken token)
             break;
         }
 
-        // Enforce capture timeout.
         {
             auto elapsed = std::chrono::steady_clock::now() - captureStart;
             if (elapsed > std::chrono::seconds(captureTimeoutSec))
