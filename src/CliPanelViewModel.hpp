@@ -14,22 +14,12 @@ namespace seal
 
 /**
  * @class CliPanelViewModel
- * @brief QML-facing ViewModel for the embedded interactive CLI panel.
- * @author Alex (https://github.com/lextpf)
+ * @brief Own the embedded terminal transcript and expose it as Cli in QML.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup ViewModel
  *
- * Holds the whole embedded-terminal concern in one object: CLI mode toggle,
- * command dispatch, transcript ownership and trim policy, and QR-into-CLI
- * routing. `RunQMLMode` registers it as the `Cli` QML context property.
- *
- * @par Collaborators
- * It reaches everything else through injected seams: vault state via
- * @ref CredentialWorkspace, password-requiring commands via
- * @ref IPasswordGate, auto-fill via @ref IFillControl. All CLI feedback goes to
- * the transcript (cliOutputText), so this class needs no error or info dialog
- * channel: the injected @ref IUiFeedback is stored but is currently unused.
- *
- * @see AppViewModel, CredentialWorkspace
+ * Vault, password and fill operations use borrowed collaborators. Feedback stays
+ * in the transcript; the stored IUiFeedback reference is unused.
  */
 class CliPanelViewModel : public QObject
 {
@@ -40,15 +30,10 @@ class CliPanelViewModel : public QObject
 
 public:
     /**
-     * @brief Construct the CLI panel ViewModel over the shared seams.
-     *
-     * All four references are borrowed and must outlive this object.
-     *
-     * @param ws     Qt-free core that owns the records and the session.
-     * @param ui     Status feedback sink. Stored but currently unused.
-     * @param gate   Defers commands that need the master password.
-     * @param fill   Auto-fill control used by the `:fill` builtin.
-     * @param parent Optional QObject parent.
+     * @fn CliPanelViewModel(seal::CredentialWorkspace& ws, seal::IUiFeedback& ui,
+     *     seal::IPasswordGate& gate, seal::IFillControl& fill, QObject* parent = nullptr)
+     * @brief All four collaborator references are borrowed and must outlive this object.
+     * @author Alex (<https://github.com/lextpf>)
      */
     CliPanelViewModel(seal::CredentialWorkspace& ws,
                       seal::IUiFeedback& ui,
@@ -56,20 +41,17 @@ public:
                       seal::IFillControl& fill,
                       QObject* parent = nullptr);
 
-    /// @brief Check whether the CLI panel is active.
     bool isCliMode() const;
 
-    /// @brief Full CLI transcript text for the embedded terminal view.
     QString cliOutputText() const;
 
     /**
-     * @brief Execute a command in the embedded CLI panel.
-     *
-     * The input is tried against each form in order; @ref HandleCliBuiltin owns
-     * the built-in command set.
+     * @fn void executeCliCommand(const QString& command)
+     * @brief Dispatch terminal input in precedence order.
+     * @author Alex (<https://github.com/lextpf>)
      *
      * @verbatim
-     *   input (trimmed, then echoed to the transcript)
+     *   Input (trimmed, then passed through CliEchoLine for a masked echo)
      *     |-- built-in command?    -> handled, return             (no master password)
      *     |== master-password gate: defer via IPasswordGate if the password is unset ==
      *     |-- directory path?      -> encrypt / decrypt the whole folder tree
@@ -79,71 +61,40 @@ public:
      *     `-- otherwise plain text -> encrypt -> emit hex + base64
      * @endverbatim
      *
-     * The directory branch is recursive and works in place.
-     * @ref CliDispatchDirectory walks the whole subtree, replaces each file with
-     * its transformed copy, deletes the source, and asks for no confirmation. It
-     * skips `*.exe`, entries named `seal`, and reparse points.
+     * Path dispatch transforms files in place and deletes sources without confirmation.
+     * It skips executables, `seal` entries and reparse points. Path input loses quotes,
+     * control characters and trailing separators except drive-root separators.
+     * Crypto input keeps its trimmed spelling, including quotes.
      *
-     * While the master password is unset, a command that needs it is deferred
-     * through the password gate. The gate raises the password dialog and, once
-     * the password arrives, re-runs this method with the same argument, echo
-     * line included, so a deferred command appears twice in the transcript.
+     * Deferral repeats the masked echo after a password arrives. Empty input emits
+     * nothing. Dispatch exceptions become transcript errors. Deferred input remains
+     * captured as a QString until the password gate runs or discards the action.
      *
-     * @par Two forms of the input
-     * The path branches use a sanitised copy: quotes stripped, control
-     * characters (below 0x20, plus 0x7F) removed, and trailing separators
-     * dropped so `GetFileAttributesA` accepts a non-root folder path. A bare
-     * drive root such as `C:\` keeps its separator.
-     *
-     * The hex, base64 and plaintext branches use the trimmed input unchanged,
-     * so quoting a secret changes what gets encrypted.
-     *
-     * @note The path branches are ANSI-only. The command is converted to UTF-8
-     *       and passed to the -A Win32 APIs, which decode it in the process
-     *       code page. A path with characters outside that code page fails both
-     *       existence tests and falls through to the plaintext branch, where it
-     *       is encrypted as text.
-     *
-     * @param command Command text entered by the user. An empty or
-     *        whitespace-only string returns immediately, with no echo.
-     *
-     * @warning The dispatch below the gate runs to completion on the GUI thread: no
-     *          AsyncRunner, no loading overlay, no cancel. Each packet or file costs
-     *          one scrypt derivation (64 MiB), so the window stays unresponsive for
-     *          the whole operation, and the directory branch pays that cost once per
-     *          file in the tree. One CredentialSession::Access window spans the
-     *          dispatch, so the master key is plaintext throughout.
-     *
-     * @note Any exception raised below the gate is caught and appended as an
-     *       `Error: <what>` transcript line; it is never propagated to QML.
+     * @warning Dispatch blocks the GUI without cancellation or a loading cover. One
+     *          session access window spans all per-packet scrypt derivations.
+     * @note Path dispatch passes UTF-8 to ANSI Win32 APIs. Unrepresentable paths can
+     *       fail existence checks and fall through to plaintext encryption.
      */
     Q_INVOKABLE void executeCliCommand(const QString& command);
 
     /**
-     * @brief Toggle CLI mode (replaces vault UI with embedded terminal).
-     *
-     * The first activation also appends the four-line welcome banner. The
-     * banner appears once per object lifetime, so later toggles only flip the
-     * flag and emit cliModeChanged().
+     * @fn void toggleCliMode()
+     * @brief First activation adds the welcome banner; later toggles preserve the transcript.
+     * @author Alex (<https://github.com/lextpf>)
      */
     Q_INVOKABLE void toggleCliMode();
 
     /**
-     * @brief Route a successful QR capture into the CLI transcript.
-     *
-     * Copies the captured text to the clipboard with the default 6-second
-     * scrub and appends `(QR captured) ****  [copied]`, one asterisk per
-     * captured character. The text itself never enters the transcript.
-     * AppViewModel's QR completion path calls this when isCliMode() is true.
+     * @fn void handleQrResult(const QString& text)
+     * @brief Copy QR text with a 6 s scrub; transcript output has one asterisk per character.
+     * @author Alex (<https://github.com/lextpf>)
      */
     void handleQrResult(const QString& text);
 
     /**
-     * @brief Route a failed/cancelled QR capture into the CLI transcript.
-     *
-     * Appends a plain transcript line; nothing was captured, so nothing is
-     * copied to the clipboard. AppViewModel's QR completion path calls this
-     * when isCliMode() is true.
+     * @fn void handleQrFailure()
+     * @brief Report failure or cancellation without changing the clipboard.
+     * @author Alex (<https://github.com/lextpf>)
      */
     void handleQrFailure();
 
@@ -152,41 +103,35 @@ signals:
     void cliOutputTextChanged();  ///< CLI transcript text updated (line appended or cleared).
 
     /**
-     * @brief The `:qr` builtin requested a webcam QR capture.
-     *
-     * The QR worker lives on AppViewModel. The composition root connects this
-     * signal to AppViewModel::requestQrCapture, which runs the capture and
-     * routes the result back through handleQrResult or handleQrFailure while
-     * isCliMode() holds.
+     * @fn void qrCaptureRequested()
+     * @brief RunQMLMode routes this to AppViewModel capture, then routes its result back here.
+     * @author Alex (<https://github.com/lextpf>)
      */
     void qrCaptureRequested();
 
 private:
     /**
-     * @brief Append one line to the CLI transcript and notify QML.
+     * @fn void appendCliOutput(const QString& line)
+     * @brief Append a line and emit a transcript change.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Owns the trim policy: past kCliMaxLines (500) the oldest lines are
-     * dropped in one batch down to kCliTrimTarget (400). That bounds the
-     * transcript in a long session and pays the split cost once per 100 lines
-     * instead of once per append.
+     * Above 500 lines, remove oldest lines down to 400 in one batch.
      *
-     * Every call emits cliOutputTextChanged(), so the bound QML view rebuilds
-     * on each line.
-     *
-     * @param line Output line, without a trailing newline. An empty line is
-     *        kept, and is how the welcome banner ends with a blank row.
+     * @param line No trailing newline; empty lines are retained.
      */
     void appendCliOutput(const QString& line);
 
-    /// @brief Clear the CLI transcript and notify QML.
-    /// When the transcript is already empty the call returns without emitting
-    /// cliOutputTextChanged().
+    /**
+     * @fn void clearCliOutput()
+     * @brief Emit only if the transcript was non-empty.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     void clearCliOutput();
 
-    seal::CredentialWorkspace& m_Workspace;  ///< Qt-free core: records, session.
-    seal::IUiFeedback& m_Ui;                 ///< Status feedback sink; stored, never called.
-    seal::IPasswordGate& m_Gate;             ///< Defers password-requiring commands.
-    seal::IFillControl& m_Fill;              ///< Auto-fill control for the `:fill` builtin.
+    seal::CredentialWorkspace& m_Workspace;
+    seal::IUiFeedback& m_Ui;  ///< Status feedback sink; stored, never called.
+    seal::IPasswordGate& m_Gate;
+    seal::IFillControl& m_Fill;
 
     bool m_CliMode = false;          ///< CLI panel active.
     bool m_CliWelcomeShown = false;  ///< Welcome banner shown once.
