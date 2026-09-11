@@ -13,7 +13,7 @@ namespace seal
 namespace
 {
 
-// Shared by password and username scans. Order is first-match-wins.
+// first matching property wins in both hint scans.
 const std::array<StringPropertyProbe, 9> kHintPropertyProbes = {{
     {UIA_AutomationIdPropertyId, "AutomationId"},
     {UIA_NamePropertyId, "Name"},
@@ -65,8 +65,6 @@ bool containsPasswordHint(const QString& rawText)
     if (text.isEmpty())
         return false;
 
-    // Substring-match against lowercased UIA property values. English and
-    // German keywords only; all entries are ASCII.
     static const std::array<QStringView, 6> kPasswordHints = {
         QStringView{u"password"},
         QStringView{u"passwd"},
@@ -91,10 +89,7 @@ bool containsUsernameHint(const QString& rawText)
     if (text.isEmpty())
         return false;
 
-    // Bare "user" is absent: it would false-positive on user-agent,
-    // user-profile-pic, etc. Only the four user-stem entries are compounds; the
-    // rest are standalone words matched as unanchored substrings, so a
-    // container named "account-menu" also hits. English and German only.
+    // exclude bare user to avoid user-agent; standalone terms still use substring matching.
     static const std::array<QStringView, 15> kUsernameHints = {
         QStringView{u"username"},
         QStringView{u"user-name"},
@@ -319,9 +314,8 @@ UiaHintObservation inspectElementPasswordState(IUIAutomationElement* element,
 
 UiaHintObservation inspectElementUsernameState(IUIAutomationElement* element)
 {
-    // No UIA IsUsername property - metadata-keyword-only. Permissive
-    // control type because form callers may pass non-Edit wrappers.
-    return inspectUsernameHintMetadata(element, /*skipControlTypeGate=*/true);
+    // skip the control-type gate because form callers may supply wrappers.
+    return inspectUsernameHintMetadata(element, true);
 }
 
 QString describeAutomationElement(IUIAutomationElement* element)
@@ -427,9 +421,6 @@ bool searchDescendantsForPassword(IUIAutomationTreeWalker* walker,
     return false;
 }
 
-// Walk up from `start` for a form-like container: an ancestor with >=2 direct
-// Edit/Custom children and a bounding rect <= half the primary monitor (the
-// cap prevents landing on <body> for short pages). Caller owns the result.
 IUIAutomationElement* findFormAncestor(IUIAutomationTreeWalker* walker, IUIAutomationElement* start)
 {
     if (!walker || !start)
@@ -468,7 +459,6 @@ IUIAutomationElement* findFormAncestor(IUIAutomationTreeWalker* walker, IUIAutom
             }
         }
 
-        // Count Edit/Custom children at one level (cheap).
         int peerCount = 0;
         IUIAutomationElement* child = nullptr;
         if (SUCCEEDED(walker->GetFirstChildElement(parent, &child)) && child)
@@ -500,8 +490,6 @@ IUIAutomationElement* findFormAncestor(IUIAutomationTreeWalker* walker, IUIAutom
     return nullptr;
 }
 
-// Bounded DFS collecting Edit/Custom controls under `root`. Each entry in
-// `out` is AddRef'd; caller Releases every element.
 void enumerateFormInputs(IUIAutomationTreeWalker* walker,
                          IUIAutomationElement* root,
                          std::vector<IUIAutomationElement*>& out)
@@ -529,7 +517,7 @@ void enumerateFormInputs(IUIAutomationTreeWalker* walker,
         Frame f = stack.back();
         stack.pop_back();
 
-        // Push sibling first so the stack DFS stays depth-first.
+        // push siblings first so children are visited first by the stack.
         IUIAutomationElement* sibling = nullptr;
         walker->GetNextSiblingElement(f.elem, &sibling);
         if (sibling)
@@ -553,7 +541,7 @@ void enumerateFormInputs(IUIAutomationTreeWalker* walker,
         f.elem->Release();
     }
 
-    // Release remaining frames when the budget cap ended the walk early.
+    // release queued references when a traversal limit stops the walk.
     for (Frame& f : stack)
         f.elem->Release();
 }
