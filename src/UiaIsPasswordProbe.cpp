@@ -54,8 +54,8 @@ ProbeResult UiaIsPasswordProbe::run(const ProbeContext& ctx)
     ProbeResult result;
     result.m_ProbeName = name();
 
-    // Phase 1: MSAA via AccessibleObjectFromPoint. This sends WM_GETOBJECT,
-    // which triggers Chromium-based browsers' lazy a11y tree build; without
+    // phase 1: MSAA via AccessibleObjectFromPoint. this sends WM_GETOBJECT,
+    // which triggers chromium-based browsers' lazy a11y tree build; without
     // it, UIA's ElementFromPoint returns a generic renderer pane. MSAA's
     // STATE_SYSTEM_PROTECTED identifies password fields directly.
     const POINT pt = ctx.m_ClickPoint;
@@ -83,12 +83,12 @@ ProbeResult UiaIsPasswordProbe::run(const ProbeContext& ctx)
         }
 
         // accName / accDescription hint matching belongs to
-        // UiaMetadataProbe (Tier-2); intentionally skipped here.
+        // UiaMetadataProbe (tier-2); intentionally skipped here.
         msaa->Release();
     }
     VariantClear(&varChild);
 
-    // Phase 2: UIA IsPassword / LegacyState. The MSAA call warmed the a11y
+    // phase 2: UIA IsPassword / LegacyState. the MSAA call warmed the a11y
     // tree so ElementFromPoint should now return the real input even in
     // browsers with lazy UIA providers.
     if (!m_Impl->ensureInitialized())
@@ -110,10 +110,9 @@ ProbeResult UiaIsPasswordProbe::run(const ProbeContext& ctx)
     }
 
     // inspectElementPasswordState reports m_Source "IsPassword" or
-    // "LegacyState" for the strong UIA signals. Only those two count here;
+    // "LegacyState" for the strong UIA signals. only those two count here;
     // its weaker metadata fallback belongs to UiaMetadataProbe.
-    const UiaHintObservation obs =
-        inspectElementPasswordState(element, /*skipControlTypeGate=*/true);
+    const UiaHintObservation obs = inspectElementPasswordState(element, true);
     element->Release();
 
     if (obs.m_Matched && obs.m_Source == QStringLiteral("IsPassword"))
@@ -131,7 +130,7 @@ ProbeResult UiaIsPasswordProbe::run(const ProbeContext& ctx)
         return result;
     }
 
-    // No Tier-1 signal; leave Unknown for FusionDecider + UiaMetadataProbe.
+    // no tier-1 signal; leave Unknown for FusionDecider + UiaMetadataProbe.
     return result;
 }
 
