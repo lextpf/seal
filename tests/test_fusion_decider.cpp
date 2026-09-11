@@ -84,7 +84,7 @@ TEST_F(FusionDeciderTest, TwoTier1DisagreeingFallsToVote)
         mk(Verdict::Password, 0.96F, "uia_is_password"),
         mk(Verdict::Username, 0.97F, "win32_es_password"),
     };
-    // Both Tier-1 hits but disagreeing -> fall to Tier-2 vote on all probes.
+    // both Tier-1 hits but disagreeing -> fall to Tier-2 vote on all probes.
     //   score(Password) = 0.96 * 0.85 = 0.816
     //   score(Username) = 0.97 * 0.70 = 0.679
     //   diff 0.137 < 0.7 margin -> Unknown
@@ -123,7 +123,7 @@ TEST_F(FusionDeciderTest, UnknownVerdictsIgnoredInVote)
         mk(Verdict::Password, 0.9F, "uia_metadata"),
         mk(Verdict::Unknown, 0.9F, "win32_es_password"),
     };
-    // Only metadata contributes: 0.9 * 0.6 = 0.54 < 0.7 margin -> Unknown.
+    // only metadata contributes: 0.9 * 0.6 = 0.54 < 0.7 margin -> Unknown.
     EXPECT_EQ(decider.decide(results), Verdict::Unknown);
 }
 
@@ -133,11 +133,11 @@ TEST_F(FusionDeciderTest, UnknownProbeNameIgnored)
     const std::vector<ProbeResult> results = {
         mk(Verdict::Password, 0.96F, "some_unknown_probe"),
     };
-    // No registered profile; contributes nothing to Tier-1 or Tier-2.
+    // no registered profile; contributes nothing to Tier-1 or Tier-2.
     EXPECT_EQ(decider.decide(results), Verdict::Unknown);
 }
 
-// M5: bridge alone at Tier-1 threshold must NOT short-circuit. Falls
+// M5: bridge alone at Tier-1 threshold must not short-circuit. falls
 // through to Tier-2 where weight 0.9 is still high, but a single
 // disagreeing probe can pull the score under the 0.7 margin.
 TEST_F(FusionDeciderTest, BridgeAloneAtTier1ThresholdFallsToVote)
@@ -171,7 +171,7 @@ TEST_F(FusionDeciderTest, BridgePlusUiaAgreeingShortCircuits)
         mk(Verdict::Password, 0.97F, "browser_extension"),
         mk(Verdict::Password, 0.96F, "uia_is_password"),
     };
-    // Two Tier-1 hits agreeing; M5 gate is satisfied (bridge not alone),
+    // two Tier-1 hits agreeing; M5 gate is satisfied (bridge not alone),
     // short-circuit fires.
     EXPECT_EQ(decider.decide(results), Verdict::Password);
 }
@@ -184,14 +184,12 @@ TEST_F(FusionDeciderTest, BridgeAgreesWithWin32ButUiaDisagrees)
         mk(Verdict::Password, 0.97F, "win32_es_password"),  // 0.679
         mk(Verdict::Username, 0.97F, "uia_is_password"),    // 0.825
     };
-    // Three Tier-1 hits but disagreement -> bypass short-circuit, vote:
+    // three Tier-1 hits but disagreement -> bypass short-circuit, vote:
     //   score(Password) = 0.873 + 0.679 = 1.552
     //   score(Username) = 0.825
     //   diff = 0.727 >= 0.7 -> Password.
     EXPECT_EQ(decider.decide(results), Verdict::Password);
 }
-
-// --- decideDetailed: the flags the zero-gesture auto-fill path gates on. ---
 
 // Bridge + an on-disk Tier-1 probe agree: short-circuit fires AND the bridge
 // is corroborated -> the auto path is allowed to release the secret.
@@ -209,7 +207,7 @@ TEST_F(FusionDeciderTest, DetailedBridgePlusUiaAgreeIsCorroborated)
 }
 
 // Bridge ALONE still yields a verdict via the Tier-2 vote (0.873 >= margin),
-// but neither flag is set -> the auto path MUST refuse. This is the M5 hole
+// but neither flag is set -> the auto path must refuse. this is the M5 hole
 // that decideDetailed exists to expose (decide() alone cannot distinguish it).
 TEST_F(FusionDeciderTest, DetailedBridgeAloneIsNotCorroborated)
 {
@@ -238,7 +236,7 @@ TEST_F(FusionDeciderTest, DetailedBridgeOverTextFieldNotCorroborated)
     EXPECT_FALSE(out.m_BridgeCorroborated);
 }
 
-// Two on-disk probes agree with no bridge in play: short-circuit fires, but
+// two on-disk probes agree with no bridge in play: short-circuit fires, but
 // there is no bridge hit to corroborate, so m_BridgeCorroborated stays false.
 TEST_F(FusionDeciderTest, DetailedOnDiskOnlyIsNotBridgeCorroborated)
 {
