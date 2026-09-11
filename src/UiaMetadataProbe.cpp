@@ -20,14 +20,12 @@ namespace seal
 namespace
 {
 
-// Tier-1 sources owned by UiaIsPasswordProbe. Ignored here so the
-// FusionDecider Tier-1 short-circuit stays the sole owner of those signals.
+// hit and ancestor scans exclude explicit flags owned by UiaIsPasswordProbe.
 bool isTier1Source(const QString& source)
 {
     return source == QStringLiteral("IsPassword") || source == QStringLiteral("LegacyState");
 }
 
-// MSAA accName / accDescription fast-path. true = matched and populated.
 bool runMsaaHintPath(POINT pt, ProbeResult& result)
 {
     IAccessible* msaa = nullptr;
@@ -85,9 +83,7 @@ bool runMsaaHintPath(POINT pt, ProbeResult& result)
     return matched;
 }
 
-// Form-context peer inference. Sets Password/Username at confidence 0.4. The
-// result stays Unknown when an argument is null, no form-like ancestor is found,
-// fewer than two inputs are enumerated, or no clicked peer is identified.
+// infer at confidence 0.4 only with a form, two inputs, and an identified clicked peer.
 void runFormContextPath(IUIAutomation* automation,
                         IUIAutomationTreeWalker* walker,
                         IUIAutomationElement* hit,
@@ -129,8 +125,7 @@ void runFormContextPath(IUIAutomation* automation,
 
     for (size_t i = 0; i < peers.size(); ++i)
     {
-        classes[i].m_Pwd =
-            inspectElementPasswordState(peers[i], /*skipControlTypeGate=*/true).m_Matched;
+        classes[i].m_Pwd = inspectElementPasswordState(peers[i], true).m_Matched;
         classes[i].m_Usr = inspectElementUsernameState(peers[i]).m_Matched;
 
         BOOL same = FALSE;
@@ -140,8 +135,7 @@ void runFormContextPath(IUIAutomation* automation,
         }
     }
 
-    // Geometric fallback: when `hit` is a wrapper not in the enumeration,
-    // pick the peer whose bounding rect contains the click point.
+    // wrappers may be absent from the peer list; use the first containing rectangle.
     int clickedIdx = -1;
     for (size_t i = 0; i < classes.size(); ++i)
     {
@@ -219,7 +213,6 @@ void runFormContextPath(IUIAutomation* automation,
             }
         }
     }
-    // clickedIdx < 0 -> nothing to infer; leave result Unknown.
 
     for (auto* peer : peers)
     {
@@ -273,15 +266,11 @@ ProbeResult UiaMetadataProbe::run(const ProbeContext& ctx)
     const LONG x = pt.x;
     const LONG y = pt.y;
 
-    // Phase 1: MSAA accName / accDescription hint match. The sibling
-    // UiaIsPasswordProbe already warmed the a11y tree and handled
-    // STATE_SYSTEM_PROTECTED; this phase covers name/description metadata.
     if (runMsaaHintPath(pt, result))
     {
         return result;
     }
 
-    // Phase 2: UIA metadata + tree-walk + form-context.
     if (!m_Impl->ensureInitialized())
     {
         result.m_Evidence = "uia_init_failed";
@@ -300,11 +289,8 @@ ProbeResult UiaMetadataProbe::run(const ProbeContext& ctx)
         return result;
     }
 
-    // Phase 2a: hit-element metadata. Filter out Tier-1 sources
-    // ("IsPassword", "LegacyState") - those belong to UiaIsPasswordProbe.
     {
-        const UiaHintObservation passwordObs =
-            inspectElementPasswordState(element, /*skipControlTypeGate=*/true);
+        const UiaHintObservation passwordObs = inspectElementPasswordState(element, true);
         if (passwordObs.m_Matched && !isTier1Source(passwordObs.m_Source))
         {
             result.m_Verdict = Verdict::Password;
@@ -340,9 +326,7 @@ ProbeResult UiaMetadataProbe::run(const ProbeContext& ctx)
         return result;
     }
 
-    // Phase 2b: ancestor walk. Browser hits often land on placeholder text
-    // or a renderer wrapper; walk up parents whose rect still contains the
-    // click point and probe them.
+    // a browser hit may be placeholder text or a wrapper; inspect containing ancestors.
     {
         IUIAutomationElement* current = element;
         current->AddRef();
@@ -365,8 +349,7 @@ ProbeResult UiaMetadataProbe::run(const ProbeContext& ctx)
                 continue;
             }
 
-            const UiaHintObservation passwordObs =
-                inspectElementPasswordState(parent, /*skipControlTypeGate=*/true);
+            const UiaHintObservation passwordObs = inspectElementPasswordState(parent, true);
             if (passwordObs.m_Matched && !isTier1Source(passwordObs.m_Source))
             {
                 result.m_Verdict = Verdict::Password;
@@ -402,7 +385,6 @@ ProbeResult UiaMetadataProbe::run(const ProbeContext& ctx)
         }
     }
 
-    // Phase 2c: bounded descendant DFS for a marked password descendant.
     {
         int nodesRemaining = kMaxUiaDescendantNodes;
         bool descendantObservedAny = false;
@@ -419,8 +401,6 @@ ProbeResult UiaMetadataProbe::run(const ProbeContext& ctx)
         }
     }
 
-    // Phase 2d: form-context peer inference. Reuses the Impl's cached UIA
-    // singleton so CompareElements has a usable handle.
     runFormContextPath(m_Impl->m_Automation.Get(), rawWalker, element, x, y, result);
 
     rawWalker->Release();
