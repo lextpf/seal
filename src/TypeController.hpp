@@ -17,37 +17,23 @@ class FillController;
 
 /**
  * @class TypeController
- * @brief QML-facing auto-type surface that drives the borrowed FillController
- *        engine and owns the typing worker.
- * @author Alex (https://github.com/lextpf)
+ * @brief Expose fill state and typing commands through the Fill QML context property.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup ViewModel
  *
- * Exposes the auto-fill state (armed, status, countdown) as Q_PROPERTY values
- * and the typing commands as Q_INVOKABLE methods, so QML binds to a dedicated
- * `Fill` context property rather than the broad application view model. The
- * three properties are pure relays: they read the engine and re-emit its change
- * signals, so this class holds no fill state of its own.
+ * Properties relay FillController state. Immediate typing snapshots the record and
+ * key on the GUI thread; workers never read the workspace and cleanse their key copy.
  *
- * It implements seal::IFillControl so the application view model can arm and
- * cancel the engine through a narrow seam without referencing FillController
- * directly. The master key is cloned on the GUI thread inside a tight
- * `unlock()` window; the worker thread touches only that snapshot and cleanses
- * it on exit, so it never reads the workspace off-thread.
+ * | Path                     | Target checks                                   |
+ * |--------------------------|-------------------------------------------------|
+ * | typeLogin / typePassword | 3 s countdown; current focus; no binding checks |
+ * | armFor                   | Click-selected field; engine probes and binding |
  *
- * @par Two separate typing paths
- * Neither path shares typing state with the other, but each refuses to start
- * while the other runs: the immediate path returns early when the engine is
- * armed, and the engine path returns early while the busy flag is set.
- * - typeLogin() / typePassword() - the immediate path. A 3 s countdown, then a
- *   worker types into whatever window happens to be focused. No hooks, no
- *   click, no field detection, no site binding. No `qml/` file calls either
- *   method today, so this path is API surface rather than a reachable gesture.
- * - armFor() - the engine path. Global hooks are installed and the user picks
- *   the field by clicking it, so the engine's probe and URL-binding gates apply.
+ * Immediate typing refuses an armed engine; engine arming refuses busy state.
+ * Once submitted, immediate typing runs to completion without cancellation. Destroying
+ * this controller suppresses result delivery but does not stop that worker.
  *
- * @warning Every reference member is borrowed from the composition root and
- *          must outlive this object. Call every public method on the GUI
- *          thread; only the typing worker body runs off it.
+ * @pre Borrowed collaborators outlive this object. Call methods on the GUI thread.
  */
 class TypeController : public QObject, public seal::IFillControl
 {
@@ -60,27 +46,14 @@ class TypeController : public QObject, public seal::IFillControl
 
 public:
     /**
-     * @brief Construct the controller and relay the engine's fill signals.
+     * @fn TypeController(seal::CredentialWorkspace& workspace, seal::IUiFeedback& ui,
+     *     seal::IPasswordGate& gate, seal::FillController& engine, seal::AsyncRunner& asyncRunner,
+     *     QObject* parent = nullptr)
+     * @brief Relay engine state and outcomes to QML and the status sink.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * The engine's armed, status and countdown signals pass straight through to
-     * this object's own. Its outcome signals map onto the status sink: a
-     * completed or cancelled fill only writes a status line, while
-     * seal::FillController::fillError also emits @ref errorOccurred and
-     * restores, raises and activates every top-level window. Staying minimised
-     * on success keeps focus in the application that was just filled.
-     *
-     * The engine is shared with seal::StagingController, so these handlers also
-     * run for the staged zero-gesture path, which this object never arms. A staged
-     * refusal that emits seal::FillController::fillError therefore raises and
-     * activates the seal windows over the browser the user is typing in. Staged
-     * gates that keep the engine armed emit nothing and stay invisible.
-     *
-     * @param workspace   Qt-free core that owns the records and the session.
-     * @param ui          Status sink for busy, countdown and status feedback.
-     * @param gate        Defers arming until the master password is set.
-     * @param engine      Fill engine owned by the composition root, borrowed here.
-     * @param asyncRunner Runs the typing worker off the GUI thread.
-     * @param parent      Optional QObject parent.
+     * Success and cancellation keep seal minimized. Fill errors restore and activate
+     * all top-level windows, including errors from StagingController's shared engine.
      */
     TypeController(seal::CredentialWorkspace& workspace,
                    seal::IUiFeedback& ui,
@@ -89,24 +62,31 @@ public:
                    seal::AsyncRunner& asyncRunner,
                    QObject* parent = nullptr);
 
-    /// @brief Whether a credential is bound and waiting for the completing
-    /// click. Relays seal::FillController::isArmed, so it stays false during a
-    /// diagnose dry run even though hooks are installed then.
+    /**
+     * @fn bool isFillArmed() const
+     * @brief False during diagnosis even though input hooks are installed.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     bool isFillArmed() const;
 
-    /// @brief The auto-fill status message. Empty while the engine is idle.
+    /**
+     * @fn QString fillStatusText() const
+     * @brief Empty while the engine is idle.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     QString fillStatusText() const;
 
-    /// @brief Seconds remaining before auto-fill times out. It counts down in
-    /// the manual and diagnose states only; a staged arm holds the value.
+    /**
+     * @fn int fillCountdownSeconds() const
+     * @brief Seconds; manual and diagnosis count down, staged arms hold the value.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     int fillCountdownSeconds() const;
 
     /**
-     * @brief Auto-type the full login sequence into the focused window.
-     *
-     * A 3-second countdown gives the user time to focus the target field. A
-     * worker then decrypts the credential on demand, types the username via
-     * synthesised keystrokes (`SendInput`), sends Tab, and types the password.
+     * @fn void typeLogin(int index)
+     * @brief Type a login after a countdown using a worker snapshot.
+     * @author Alex (<https://github.com/lextpf>)
      *
      * @verbatim
      *   t = 0      3 s countdown (QTimer, 1 s ticks) - focus the target field
@@ -117,95 +97,60 @@ public:
      *              type password      (SendInput UNICODE)
      * @endverbatim
      *
-     * typePassword() shares the 3 s countdown but types the password only, with
-     * no username and no Tab.
+     * Invalid index, busy state or an armed engine makes this a silent no-op. A missing
+     * password defers the entire call and repeats those checks.
      *
-     * @warning There is no field detection and no site binding here: the
-     *          keystrokes go to whatever window holds focus when the countdown
-     *          ends. There is also no soft-delete check, so a record that
-     *          deleteAccount() hid is still typed until saveVault() erases it.
-     *          Use armFor() when the target must be verified.
-     *
-     * The call is dropped without feedback when @p index is out of range, when
-     * a background operation is busy, or when the fill engine is armed. Without
-     * the master password the whole call is enqueued on the password gate and
-     * replayed unchanged, so all three checks run again at that later point.
-     *
-     * @param index Record index into the workspace record vector, as returned by
-     *              VaultListModel::recordIndexForRow() - not a filtered row.
+     * @param index Full workspace record index, not a filtered row.
+     * @warning No field, host or soft-delete checks. Keystrokes go to current focus;
+     *          use `armFor()` when the target requires verification.
      */
     Q_INVOKABLE void typeLogin(int index);
 
     /**
-     * @brief Auto-type only the password into the focused window.
+     * @fn void typePassword(int index)
+     * @brief Type only the password after the shared gate and countdown.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Decrypts the credential on demand and types the password field via
-     * synthesised keystrokes (`SendInput`). Unlike typeLogin() it types no
-     * username and sends no Tab key. Same 3 s countdown, same password-gate
-     * deferral, the same range, busy and armed refusals, and the same warning:
-     * no field detection, no site binding and no soft-delete check.
-     *
-     * @param index Record index into the workspace record vector, as returned by
-     *              VaultListModel::recordIndexForRow() - not a filtered row.
+     * @param index Full workspace record index.
+     * @warning The same unchecked-target and soft-delete behavior as `typeLogin()` applies.
      */
     Q_INVOKABLE void typePassword(int index);
 
     /**
-     * @brief Cancel an active auto-fill operation.
-     *
-     * Removes the global hooks and resets the fill engine to idle.
-     * Unconditional: unlike cancelIfArmed() it also ends a diagnose dry run. It
-     * does not stop a countdown the immediate typing path has already started.
+     * @fn void cancelFill()
+     * @brief Remove fill hooks, including diagnosis; leave an immediate typing countdown running.
+     * @author Alex (<https://github.com/lextpf>)
      */
     Q_INVOKABLE void cancelFill();
 
     /**
-     * @brief Arm auto-fill hooks for one credential (seal::IFillControl).
+     * @fn void armFor(int recordIndex)
+     * @brief Arm Ctrl+Click filling after password gating and minimize visible windows.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Self-gating: when the master password is not yet set the arm is deferred
-     * through the password gate, otherwise the engine arms at once. It installs
-     * global mouse and keyboard hooks; each Ctrl+Click in an external window
-     * then runs the probe pipeline on the field under the cursor and types
-     * whichever credential fits, in either order, until both are filled.
-     * Ctrl+Shift+Click forces the password and Ctrl+Alt+Click forces the
-     * username when the detection needs overriding.
+     * Ctrl+Shift+Click forces password; Ctrl+Alt+Click forces username. Restore occurs
+     * only on fill error. Invalid index or busy state is ignored; deferred arming
+     * re-enters `doArm()` without repeating the password gate.
      *
-     * @par Side effect
-     * A successful arm minimises every visible top-level window so the target
-     * application is reachable, and the status line becomes the Ctrl+Click
-     * prompt. The window is restored only if the fill later fails.
-     *
-     * Ignored without feedback when @p recordIndex is out of range or a
-     * background operation is already busy. The deferred continuation re-enters
-     * at doArm(), not here, so the password gate is consulted once per request.
-     *
-     * @param recordIndex Position in the full record list, not the filtered row.
+     * @param recordIndex Full workspace record index.
      */
     void armFor(int recordIndex) override;
 
     /**
-     * @brief Cancel any active auto-fill operation (seal::IFillControl).
-     *
-     * A no-op unless seal::FillController::isArmed is true, so it cancels the
-     * manual and staged paths but leaves a diagnose dry run alone. Use
-     * cancelFill() to cancel unconditionally.
+     * @fn void cancelIfArmed()
+     * @brief Cancel only manual/staged arms; use cancelFill() to also cancel diagnosis.
+     * @author Alex (<https://github.com/lextpf>)
      */
     void cancelIfArmed() override;
 
 signals:
-    void fillArmedChanged();             ///< Auto-fill armed state toggled.
-    void fillStatusTextChanged();        ///< Auto-fill status message updated.
-    void fillCountdownSecondsChanged();  ///< Auto-fill countdown tick.
+    void fillArmedChanged();
+    void fillStatusTextChanged();
+    void fillCountdownSecondsChanged();
 
-    /**
-     * @brief A fill error occurred that should be shown to the user.
-     * @param title   Dialog title.
-     * @param message Error description.
-     */
     void errorOccurred(const QString& title, const QString& message);
 
 private:
-    /// @brief Typing mode for scheduleTypingAction.
     enum class TypingMode
     {
         Login,    ///< Username, Tab, then password.
@@ -213,48 +158,33 @@ private:
     };
 
     /**
-     * @brief Start a 3-second countdown, then run a typing action.
+     * @fn void scheduleTypingAction(int index, TypingMode mode, const QString& label)
+     * @brief Hold busy through a 3 s countdown and the typing worker.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Shared implementation of typeLogin() and typePassword(). It sets the busy
-     * flag immediately, which is what keeps a second request out for the whole
-     * countdown; the worker's completion callback or one of the two late aborts
-     * clears it again.
+     * After countdown, copy the record and clone the key in a GUI-thread access window.
+     * The copyable worker holds its key in shared locked memory and cleanses it on exit.
+     * Invalidated index or failed unlock aborts and clears busy; completion also clears it.
      *
-     * At the end of the countdown it snapshots the record and clones the master
-     * password inside a GUI-thread `unlock()` window, then hands both to the
-     * worker, so the worker never reads the workspace. The clone lives in locked
-     * memory behind a shared_ptr, because the async runner decay-copies the work
-     * body, and the worker cleanses it on exit.
-     *
-     * Two late aborts clear busy and type nothing: the record index no longer
-     * being in range when the countdown ends, and a failed session unlock.
-     *
-     * @pre The caller already checked the busy flag; this function asserts it.
-     *
-     * @param index Record index to type.
-     * @param mode  Whether to type login (username, Tab, password) or password only.
-     * @param label Status label, for example "Login" or "Password".
+     * @pre The caller has checked busy state.
      */
     void scheduleTypingAction(int index, TypingMode mode, const QString& label);
 
     /**
-     * @brief Arm the engine for @p recordIndex once the password is available.
+     * @fn void doArm(int recordIndex)
+     * @brief Validate and arm against workspace records, session and generation.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Validates the index, ignores the request while busy, logs the arm, and
-     * arms the engine against the workspace records, session and generation. A
-     * successful arm writes the Ctrl+Click prompt to the status sink and
-     * minimises every visible top-level window; a refused arm logs
-     * `reason=controller_rejected` and changes no UI state.
-     *
-     * @param recordIndex Position in the full record list, not the filtered row.
+     * Invalid index or busy state does nothing. Success updates status and minimizes
+     * windows; rejection logs `reason=controller_rejected` without changing UI state.
      */
     void doArm(int recordIndex);
 
-    seal::CredentialWorkspace& m_Workspace;  ///< Qt-free core: records, session.
-    seal::IUiFeedback& m_Ui;                 ///< Status/busy/countdown sink.
-    seal::IPasswordGate& m_Gate;             ///< Defers arming until password set.
-    seal::FillController& m_Engine;          ///< Borrowed auto-fill engine.
-    seal::AsyncRunner& m_Async;              ///< Runs the typing sequence on a worker thread.
+    seal::CredentialWorkspace& m_Workspace;
+    seal::IUiFeedback& m_Ui;
+    seal::IPasswordGate& m_Gate;
+    seal::FillController& m_Engine;  ///< Borrowed auto-fill engine.
+    seal::AsyncRunner& m_Async;
 };
 
 }  // namespace seal
