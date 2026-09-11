@@ -20,40 +20,18 @@ class IUiFeedback;
 
 /**
  * @class StagingController
- * @brief Zero-gesture staged auto-fill: arm a record on matching navigation.
- * @author Alex (https://github.com/lextpf)
+ * @brief Auto-arm a unique host-bound record from navigation reports.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup FillController
  *
- * Owned collaborator, not a QML context property. Polls the bridge's latest
- * navigation snapshot on the GUI thread. When the navigated host uniquely
- * matches a vault record (@ref resolveStageRecord, fail closed), it auto-arms
- * that record through @ref FillController::armAuto. A later plain click into a
- * bridge-classified login field completes the fill through FillController's own
- * auto gates.
+ * GUI thread only; not reentrant. Workspace, engine, and ui are borrowed and must
+ * outlive this controller. Locked vaults are skipped without password prompts.
+ * This controller holds no secrets; FillController owns decrypt and release.
  *
- * @par Once per page visit
- * @ref StageVisitTracker bounds one document lifetime: the username is injected
- * at most once, the password click-filled at most once. After the password fill
- * the visit is inert until a reload or reopen mints a fresh token in content.js.
+ * StageVisitTracker permits one username injection and one password fill per
+ * remembered document, then leaves the visit inactive. Its bounded history can evict
+ * old tokens; see `StageVisitTracker` for the retry and eviction rules.
  *
- * @par Secrets
- * This class holds none. It reads cleartext platform labels and the non-secret
- * navigation host; every decrypt belongs to FillController. The password is
- * typed locally with SendInput and never crosses the bridge. The username is
- * pushed to the extension as a just-in-time decrypted directive
- * (@ref FillController::injectUsername), which is why that half is strictly
- * host-bound.
- *
- * @par Locked vault
- * Staging needs an unlocked vault (CredentialWorkspace::isPasswordSet). A
- * locked session is skipped silently and never raises a master-password prompt.
- *
- * @par Threading and lifetime
- * GUI thread only. The poll, the engine calls and the visit tracker are
- * single-threaded and not reentrant. `workspace`, `engine` and `ui` are
- * borrowed and must outlive this object; QmlMain declares them first.
- *
- * @par Staging flow
  * @verbatim
  *  Per page visit (one document lifetime; content.js mints the visit token):
  *
@@ -73,13 +51,11 @@ class IUiFeedback;
  *                                 |        |
  *                                 |        v
  *                                 |  notePasswordFilled --> visit inert
- *                                 |  (no re-arm / re-inject until next page load)
+ *                                 |  (while its token remains in the tracker)
  *                                 |
  *                                 +--> injectUsername(idx) [once per visit, then
  *                                                          noteUsernameInjected]
  * @endverbatim
- *
- * @see FillController, AutoStagePolicy.hpp, AutoLockController
  */
 class StagingController : public QObject
 {
@@ -87,87 +63,85 @@ class StagingController : public QObject
 
 public:
     /**
-     * @brief Read the master switch, then wire the poll and the engine's fill
-     *        signals.
+     * @fn StagingController(CredentialWorkspace& workspace, FillController& engine, IUiFeedback&
+     *     ui, QObject* parent = nullptr)
+     * @brief Load the master switch and connect polling and fill completion.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Reads `bridge/autostage` (default false) once and starts the 100 ms poll
-     * when it is set, so staging is live before QML loads. fillCompleted,
-     * fillCancelled and fillError all drop arm ownership. fillCompleted also
-     * latches the visit inert, but only while this controller owns the arm: an
-     * auto fill is by construction the password, while a manual Ctrl+Click fill
-     * must not spend the visit.
+     * The `bridge/autostage` setting defaults to false; enabling starts a 100 ms poll.
+     * Completion latches a visit only while this controller owns the arm.
+     * Completion, cancellation, and errors clear ownership.
      *
-     * @param workspace Records, session and generation; must outlive this object.
-     * @param engine    Fill engine that owns the bridge and does the arming.
-     * @param ui        Status sink for non-secret hints.
-     * @param parent    Owning QObject, or nullptr for a stack-owned instance
-     *                  (QmlMain uses the stack).
+     * @param workspace Must outlive this controller.
+     * @param engine Must outlive this controller.
+     * @param ui Must outlive this controller.
+     * @param parent Nullable for stack ownership.
      */
     StagingController(CredentialWorkspace& workspace,
                       FillController& engine,
                       IUiFeedback& ui,
                       QObject* parent = nullptr);
 
+    /**
+     * @fn ~StagingController()
+     * @brief Stop polling and disconnect callbacks.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Destruction does not cancel the shared engine. Call `cancelActive()` first if
+     * the engine will remain alive and its staged fill must end.
+     */
     ~StagingController() override;
 
     /**
-     * @brief Enable or disable the feature (master switch).
+     * @fn void setEnabled(bool enabled)
+     * @brief Start or stop polling and cancel owned auto-arms when disabled.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * A no-op when the value is unchanged. The setter persists nothing:
-     * BridgeViewModel writes the `bridge/autostage` key and QmlMain relays its
-     * change signal here.
-     *
-     * Enabling replays nothing, because the nav cursor only moves forward. An
-     * already-open page stages only while its report is unconsumed and inside
-     * the bridge's 10 s freshness window; otherwise staging resumes on the next
-     * navigation.
-     *
-     * @param enabled true starts the poll; false stops it and drops an auto-arm
-     *                this controller placed.
+     * No-op if unchanged. Does not persist settings. Enabling can consume only an
+     * unseen report within the 10 s bridge TTL; consumed reports are never replayed.
      */
     void setEnabled(bool enabled);
 
-    /// @brief Whether the feature is currently enabled.
+    /**
+     * @fn bool isEnabled() const
+     * @brief Whether the feature is currently enabled.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     bool isEnabled() const;
 
     /**
-     * @brief Drop an auto-arm this controller placed.
+     * @fn void cancelActive()
+     * @brief Clear arm ownership and cancel only an owned AutoArmed session.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * The engine is cancelled only when this controller owns the arm and the
-     * engine is still in FillController::State::AutoArmed, so a manual
-     * Ctrl+Click arm is never disturbed. Arm ownership (visit token and record
-     * index) is cleared in every case. Called on M8 bridge-disable, on
-     * navigating away, on an ambiguous match, on a spent visit, and when the
-     * master switch goes off.
+     * Manual arms remain active. Arm ownership clears in every case; completed-visit
+     * latches and the navigation cursor remain, so cancellation does not replay a visit.
      */
     void cancelActive();
 
 signals:
     /**
-     * @brief A record was just auto-armed; @p recordIndex should be
-     *        highlighted and @p platform surfaced as a non-secret hint.
+     * @fn void autoArmedForRecord(int recordIndex, const QString& platform)
+     * @brief Notify a successful new auto-arm for account highlighting.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Emitted only when FillController::armAuto succeeded, so a page without a
-     * password field (an email-first screen) injects the username without
-     * emitting anything. A re-report of the already staged visit and record
-     * emits nothing either.
+     * Username-only pages and duplicate reports emit nothing.
      *
-     * @param recordIndex Index into the vault record vector, not a QML list
-     *                    row; AppViewModel maps it to a row before selecting.
-     * @param platform    Stored cleartext platform label, not a secret, so the
-     *                    status bar may show it.
+     * @param recordIndex Vault-vector index; the UI must map it to a list row.
+     * @param platform Cleartext display label suitable for status hints.
      */
     void autoArmedForRecord(int recordIndex, const QString& platform);
 
 private slots:
     /**
-     * @brief 100 ms poll: consume a fresh nav snapshot and run the staging
-     *        state machine (all gates fail closed).
+     * @fn void onNavPollTick()
+     * @brief Consume a fresh navigation and apply fail-closed staging gates.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Every gate is a silent skip, not an error. Gates 1 to 5 return before the
-     * snapshot is consumed, so a report that arrives while the vault is locked
-     * or the UI is busy still stages on a later tick, as long as it stays inside
-     * the bridge's 10 s nav freshness window.
+     * Gates 1-5 leave the report unconsumed for a later poll within its 10 s TTL.
+     * Only manual arms are protected; Diagnose may be cancelled by staging.
+     * An already-armed visit/record does not reinstall hooks. Username injection also
+     * checks navShouldInjectUsername.
      *
      * @verbatim
      *   1 enabled?            no  -> return        master switch off
@@ -183,52 +157,35 @@ private slots:
      *  11 password field?     yes -> armAuto       skipped on an email-first screen
      *  12 username not done?  yes -> injectUsername
      * @endverbatim
-     *
-     * @par Gate notes
-     * - Gate 5 reads FillController::isArmed, which is false in
-     *   FillController::State::Diagnose, so gate 11 tears a running diagnose
-     *   session down. Only a manual Ctrl+Click arm is protected.
-     * - Gate 11 is skipped when the same visit and record are already armed, so
-     *   a re-report installs no hooks again.
-     * - Gate 12 also evaluates @ref navShouldInjectUsername, which gate 7 has
-     *   already satisfied; the predicate stays as defense in depth.
      */
     void onNavPollTick();
 
 private:
     /**
-     * @brief Whether the optional per-site allow-list posture is on (the
-     *        `bridge/navAutostagePerSite` QSettings toggle, default false).
+     * @fn bool perSiteEnabled() const
+     * @brief Read bridge/navAutostagePerSite for each consumed navigation.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Nothing in the app writes this key; it is a hand-set hardening posture,
-     * re-read for each consumed navigation, so an edit takes effect without a
-     * restart.
-     *
-     * @return true when the allow-list must authorize the host before staging.
+     * Defaults to false. The app provides no writer for this optional setting.
      */
     bool perSiteEnabled() const;
 
     /**
-     * @brief Whether @p hostKey is on the user's per-site allow-list.
+     * @fn bool siteAllowed(const std::string& hostKey) const
+     * @brief Read bridge/navAllow/<hostKey> for one normalized host.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Reads the QSettings key `bridge/navAllow/<hostKey>`, default false. An
-     * entry authorizes one exact host ("accounts.google.com"), not a
-     * registrable domain and not its subdomains. Nothing writes these keys
-     * either, so turning the posture on without hand-adding entries stops
-     * staging completely.
-     *
-     * @param hostKey Normalised host from @ref seal::url::extractHost.
-     * @return true when the key exists and is true; false for an empty
-     *         @p hostKey and for a host with no entry.
+     * Default false. Entries authorize exact hosts, never subdomains. Enabling the
+     * posture without manually adding entries prevents all staging.
      */
     bool siteAllowed(const std::string& hostKey) const;
 
     /**
-     * @brief Forget which visit and record the live auto-arm belonged to (fill
-     *        finished, cancelled, errored, or ownership dropped).
+     * @fn void dropArmOwnership()
+     * @brief Clear visit and record bookkeeping without changing the engine.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Bookkeeping only: it never touches the engine. A caller that must also
-     * tear the arm down goes through @ref cancelActive.
+     * @see cancelActive
      */
     void dropArmOwnership();
 
@@ -237,8 +194,10 @@ private:
     IUiFeedback& m_Ui;                 ///< Borrowed status sink.
 
     QTimer m_NavPoll;  ///< GUI-thread poll (100 ms, repeating).
-    /// Cursor into the bridge's global nav sequence; only ever moves forward,
-    /// so a consumed report is never delivered twice.
+    /**
+     * Cursor into the bridge's global nav sequence; only ever moves forward,
+     * so a consumed report is never delivered twice.
+     */
     std::uint64_t m_LastSeenSeq = 0;
     bool m_Enabled = false;    ///< Master switch (mirrors bridge/autostage).
     bool m_AutoArmed = false;  ///< True while this controller holds an auto-arm.
