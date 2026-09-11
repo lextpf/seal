@@ -10,20 +10,14 @@ namespace seal
 
 /**
  * @class Clipboard
- * @brief Windows clipboard writes that scrub themselves after a time-to-live.
- * @author Alex (https://github.com/lextpf)
+ * @brief Clipboard writes with a background TTL scrub.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup IO_Clipboard
  *
- * A static facade over the Win32 clipboard API. An anonymous-namespace RAII
- * guard (`ClipboardLock`) owns the `OpenClipboard` / `CloseClipboard` pair.
- *
- * ## :material-clipboard-text: Text placement
- *
- * setText() converts a UTF-8 `std::string` to UTF-16 and places it as
- * `CF_UNICODETEXT`. The clipboard is emptied before the write, so stale data
- * from another application is never left behind.
- *
- * ## :material-timer-sand: TTL scrubbing
+ * One process-wide thread checks the clipboard after the TTL and clears matching content.
+ * Each successful copy replaces the scrub thread and joins the previous one. The mutex
+ * protects timer replacement and shutdown, not the initial clipboard write. Serialize
+ * callers when write order must match timer ownership.
  *
  * ```mermaid
  * ---
@@ -39,32 +33,8 @@ namespace seal
  *     Compare -->|no| Skip["leave clipboard"]
  * ```
  *
- * copyWithTTL() writes the value, then a background thread waits out the TTL
- * (default 6 s) and empties the clipboard only when a constant-time compare
- * (`Cryptography::ctEqual`) shows it still holds that value. Content another
- * application has since placed there is left alone.
- *
- * @warning The value is placed as a plain `CF_UNICODETEXT` item. seal registers
- *          none of the exclusion formats
- *          (`ExcludeClipboardContentFromMonitorProcessing`,
- *          `CanIncludeInClipboardHistory`, `CanUploadToCloudClipboard`), so
- *          Windows Clipboard History and Cloud Clipboard can keep their own
- *          copy. `EmptyClipboard()` does not remove those copies: the TTL
- *          bounds the live clipboard only.
- *
- * @par Single scrub thread
- * One scrub thread exists process-wide, held in a file-static
- * `std::unique_ptr<std::jthread>` behind a mutex. A second copyWithTTL() starts
- * its own thread and, as the `unique_ptr` is reassigned, stops and joins the
- * pending one. The earlier value then keeps no timer, which is safe because the
- * new call has already overwritten the clipboard. The mutex is held across that
- * join, so a concurrent copyWithTTL() or shutdown() blocks until it completes.
- * shutdown() performs the same stop-and-join and runs before static destruction.
- *
- * ## :material-file-lock: Input-file helper
- *
- * copyInputFile() reads the `seal` binary input file into memory and delegates
- * to copyWithTTL(), giving CLI users a one-shot read-and-scrub workflow.
+ * @warning The TTL covers only the live clipboard. No history or cloud exclusion formats are set;
+ *          Windows may retain other copies after EmptyClipboard().
  */
 class Clipboard
 {
@@ -74,16 +44,15 @@ public:
     Clipboard& operator=(const Clipboard&) = delete;
 
     /**
-     * @brief Copy a byte buffer to the clipboard and auto-scrub after a timeout.
+     * @fn bool copyWithTTL(const char* data, size_t n, DWORD ttl_ms = 6000)
+     * @brief Copy UTF-8 text and schedule one scrub attempt.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Writes @p n bytes of UTF-8 data through setText(), then runs the scrub
-     * described above on a `std::jthread`.
+     * Internal copies are cleansed. The caller retains and wipes `data`.
+     * Stop is checked between 100 ms sleeps; cancellation leaves the clipboard intact.
+     * The scrub compares text, not clipboard ownership: an identical replacement also clears.
+     * Failed writes leave the previous scrub thread running.
      *
-     * Both internal copies of the secret - the locked buffer handed to the scrub
-     * thread and the short-lived `std::string` setText() needs - are cleansed.
-     * The caller's @p data buffer is never touched; the caller wipes it.
-     *
-     * @par Scrub timeline
      * @verbatim
      * t=0        setText(value); wipe the temp UTF-8 copy; spawn jthread
      *  |         poll: test stop_requested, then sleep 100 ms, repeat
@@ -93,37 +62,24 @@ public:
      *            ctEqual(clipboard, value) ? EmptyClipboard : leave intact
      *            cleanse(value) + trimWorkingSet
      * @endverbatim
-     * Stop is observed only between sleeps, so a cancel takes up to 100 ms to
-     * land, and a cancelled scrub leaves the clipboard as it is.
      *
-     * @param data   Raw UTF-8 byte buffer, copied before the call returns.
-     * @param n      Length of @p data in bytes. Zero fails, because setText()
-     *               rejects an empty conversion.
-     * @param ttl_ms Milliseconds before the clipboard is scrubbed.
-     * @return `true` when the initial clipboard set succeeded. On `false` no
-     *         scrub thread is started, and the clipboard is already empty
-     *         whenever setText() got as far as opening it.
-     *
-     * @pre @p data is readable for @p n bytes.
-     * @post A background thread, joined by shutdown(), clears the clipboard
-     *       after @p ttl_ms, unless another application replaced the content or
-     *       the clipboard cannot be opened at the deadline. The scrub runs once
-     *       and is not retried, so in the second case the value stays on the
-     *       clipboard.
-     * @post A scrub still pending from an earlier call is stopped and joined;
-     *       only the newest value keeps a timer.
-     *
-     * @see setText, shutdown, Cryptography::ctEqual
+     * @param data Non-null UTF-8 buffer readable for `n` bytes; copied before return.
+     *             Embedded nulls prevent the scrub comparison from matching the copied text.
+     * @param n Byte count; zero fails.
+     * @param ttl_ms Milliseconds before the scrub attempt.
+     * @return True if the initial write succeeds. False starts no thread; if the clipboard opened,
+     *         it is already empty.
+     * @post Only the newest copy keeps a timer. Unchanged content remains if the clipboard cannot
+     *       open at the deadline; there is no retry.
      */
     [[nodiscard]] static bool copyWithTTL(const char* data, size_t n, DWORD ttl_ms = 6000);
 
     /**
-     * @brief Copy a contiguous `char` range to the clipboard with TTL scrub.
+     * @fn bool copyWithTTL(const S& s, DWORD ttl_ms = 6000)
+     * @brief Apply the byte-buffer contract to a contiguous char range.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Delegates to the `(const char*, size_t)` overload. Accepts any contiguous
-     * range whose value type decays to `char` (e.g. `std::string`,
-     * `std::string_view`, `secure_string`). An empty range fails, like any empty
-     * input.
+     * @return False for an empty range.
      */
     template <std::ranges::contiguous_range S>
         requires std::same_as<std::remove_cv_t<std::ranges::range_value_t<S>>, char>
@@ -133,10 +89,11 @@ public:
     }
 
     /**
-     * @brief Copy a fixed-size `char` array to the clipboard with TTL scrub.
+     * @fn bool copyWithTTL(const char (&s)[N], DWORD ttl_ms = 6000)
+     * @brief Exclude the final array element from the copy.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Overload for string literals and `char[N]` arrays. @p N counts the null
-     * terminator, which is excluded from the copied content.
+     * @pre The last element is the null terminator.
      */
     template <size_t N>
     [[nodiscard]] static bool copyWithTTL(const char (&s)[N], DWORD ttl_ms = 6000)
@@ -146,82 +103,63 @@ public:
     }
 
     /**
-     * @brief Copy a null-terminated C string to the clipboard with TTL scrub.
+     * @fn bool copyWithTTL(const char* s, DWORD ttl_ms = 6000)
+     * @brief Copy null-terminated UTF-8 text.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * @p s is a null-terminated UTF-8 string. A null pointer becomes an empty
-     * string, which the clipboard write rejects, so it returns `false`.
+     * @return False for a null pointer or empty string.
      */
     [[nodiscard]] static bool copyWithTTL(const char* s, DWORD ttl_ms = 6000);
 
     /**
-     * @brief Read the `seal` input file and copy its contents to the clipboard.
+     * @fn bool copyInputFile()
+     * @brief Copy the file named seal from the current directory with a 6000 ms TTL.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Reads the file named `seal` in the current working directory via
-     * `utils::read_bin`, then delegates to copyWithTTL() with the default
-     * 6000 ms TTL. The heap buffer holding the file is cleansed before
-     * returning; it is pageable memory while the read is in flight.
+     * The file buffer is pageable and is cleansed before return.
      *
-     * @return `true` when the file was read and the clipboard was set. An empty
-     *         file returns `false`.
-     *
-     * @see copyWithTTL, seal::utils::read_bin
+     * @return False if the read or clipboard write fails, including an empty file.
      */
     [[nodiscard]] static bool copyInputFile();
 
     /**
-     * @brief Explicitly join the TTL scrub thread before static destruction.
+     * @fn void shutdown()
+     * @brief Stop and join the scrub thread before static destruction.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Call this from `main()`, or from an RAII guard on the stack of `main`, so
-     * the thread joins while the process is still fully initialised. Left to
-     * static destruction, the `jthread` destructor can run after a DLL unload
-     * has invalidated the clipboard API entry points and deadlock the join.
-     *
-     * Stopping the thread cancels the pending scrub: a value copied less than
-     * one TTL ago stays on the clipboard after the process exits, and only the
-     * user or the next clipboard writer removes it. The call is idempotent, safe
-     * with no scrub pending, and blocks for up to one 100 ms poll interval. A
-     * later copyWithTTL() starts a fresh thread.
+     * Call from main() while clipboard DLL entry points remain valid. Cancellation leaves the live
+     * clipboard intact. Repeated calls are safe; a later copy starts a new thread.
+     * The join can wait for a 100 ms poll interval.
      */
     static void shutdown();
 
 private:
     /**
-     * @brief Set UTF-8 text on the Windows clipboard, converting to UTF-16.
+     * @fn bool setText(const std::string& text)
+     * @brief Replace the clipboard with UTF-16 text.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * The conversion passes `MB_ERR_INVALID_CHARS`, so malformed UTF-8 fails
-     * instead of being substituted. The block handed to Windows is
-     * `GMEM_MOVEABLE` and `SetClipboardData` takes ownership of it; it is not
-     * locked memory and seal does not wipe it.
+     * Windows owns the pageable GMEM_MOVEABLE buffer after SetClipboardData succeeds; seal cannot
+     * wipe it. Invalid UTF-8 is rejected.
      *
-     * @param text UTF-8 string to place on the clipboard. An empty string fails,
-     *             because the conversion then yields no code units.
-     * @return `true` when the text was set. `false` when the clipboard cannot be
-     *         opened, when @p text is empty, longer than `INT_MAX` or not valid
-     *         UTF-8, or when the global allocation or `SetClipboardData` fails.
-     *
-     * @pre No other process holds the clipboard open.
-     * @post Once the open succeeded the clipboard has been emptied, so every
-     *       later failure leaves it empty rather than holding its previous
-     *       content.
+     * @return False for open, conversion, allocation or placement failure; also for empty text or
+     *         more than INT_MAX bytes.
+     * @post A successful open empties the clipboard, including on subsequent failure.
      */
     [[nodiscard]] static bool setText(const std::string& text);
 };
 
 /**
- * @brief Type a UTF-16 string into the active window using `SendInput`.
+ * @fn bool typeSecret(const wchar_t* bytes, int len, DWORD delay_ms = 4000)
+ * @brief Inject UTF-16 code units into the focused window.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup IO_Clipboard
  *
- * Waits @p delay_ms milliseconds so the user can switch focus, then synthesizes
- * `KEYEVENTF_UNICODE` key-down and key-up pairs for each wide character.
+ * Each down/up pair uses one SendInput call, then waits `30 + (t % 16)` ms, where `t` is the tick
+ * count. This 30..45 ms pacing prevents dropped or transposed input in Windows 11 text stacks.
+ * The INPUT buffer is pageable and contains the UTF-16 code units until it is wiped.
+ * The caller retains ownership of the source buffer throughout the blocking call.
  *
- * Both events of one character travel in a single `SendInput` call, and a delay follows every
- * pair. Windows 11 text stacks (modern Notepad, TSF-based editors) drop or transpose
- * characters when the events arrive faster or split across separate calls.
- *
- * The `INPUT` sequence is wiped with `SecureZeroMemory` before the function returns. The
- * plaintext is read straight from the caller's buffer and never copied into a pageable string.
- *
- * @par Injection timeline
  * @verbatim
  * hook heuristic                   advisory keylogger probe, up to 150 ms
  * Sleep(delay_ms)                  initial focus grace (default 4000 ms)
@@ -231,52 +169,36 @@ private:
  * SecureZeroMemory(seq)            wipe the INPUT buffer
  * @endverbatim
  *
- * The per-pair delay is @f$ 30 + (t \bmod 16) @f$ ms, with @f$ t @f$ the current tick
- * count, so it walks the range [30, 45] ms. The tick count paces the loop; it is not a
- * random source.
- *
- * @param bytes    UTF-16 string to type. A null pointer returns `false`.
- * @param len      Number of wide characters, or `-1` for null-terminated. A trailing null
- *                 inside @p len is dropped; a length of zero after that returns `false`.
- * @param delay_ms Delay in milliseconds before typing begins.
- * @return `true` when every pair was accepted. `false` for a null or empty string, or as
- *         soon as one `SendInput` call reports fewer than 2 events - the remaining
- *         characters are then not sent.
- *
- * @pre The target window has keyboard focus when typing begins.
- * @post Every intermediate buffer is wiped.
- *
- * @note A best-effort keylogger heuristic runs first: a zero-size foreground window, or a
- *       median `CallNextHookEx` latency above 2 ms over three synthetic events, writes a
- *       warning through `OutputDebugStringA`. Typing proceeds either way.
+ * @param bytes Null returns false.
+ * @param len Code-unit count, or -1 for null-terminated input; one trailing null is dropped.
+ * @param delay_ms Focus grace in milliseconds.
+ * @return False for empty input or a pair accepted as fewer than two events. Earlier
+ *         events remain delivered; failure cannot undo partial typing.
+ * @pre The target window has keyboard focus when typing starts.
+ * @note An advisory hook probe runs first, for up to 150 ms. A zero-size foreground window or
+ *       median CallNextHookEx latency above 2 ms logs a warning; typing still proceeds.
  */
 [[nodiscard]] bool typeSecret(const wchar_t* bytes, int len, DWORD delay_ms = 4000);
 
 /**
- * @brief Open the `seal` input file in Notepad.
+ * @fn bool openInputInNotepad()
+ * @brief Launch Notepad on the file named seal in the current directory.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup IO_Clipboard
  *
- * Tries `ShellExecuteA` first and falls back to `CreateProcessW` with
- * `notepad.exe seal` when that fails, as it does on a restricted account. The
- * file name is relative, so Notepad resolves it against the current working
- * directory. The call returns as soon as the launch is accepted and does not
- * wait for Notepad to exit.
+ * Uses ShellExecuteA, then CreateProcessW on failure. Does not wait for Notepad to exit.
  *
- * @return `true` when Notepad was launched.
+ * @return True if either launch succeeds.
  */
 [[nodiscard]] bool openInputInNotepad();
 
 /**
- * @brief Overwrite the entire console screen buffer with spaces.
+ * @fn void wipeConsoleBuffer()
+ * @brief Erase the active console screen buffer and reset its cursor.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup IO_Clipboard
  *
- * Fills every cell of the active console buffer with `' '`, re-applies the
- * current attributes, and resets the cursor to the home position, so a secret
- * printed earlier cannot be read off the screen. A terminal that keeps its own
- * scrollback is not touched.
- *
- * The function does nothing when standard output is not a console screen buffer,
- * so a redirected or GUI-only process is unaffected.
+ * Terminal-owned scrollback is unaffected. Does nothing when stdout is not a console buffer.
  */
 void wipeConsoleBuffer();
 
