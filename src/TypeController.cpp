@@ -27,14 +27,11 @@
 namespace seal
 {
 
-// Settle delays between username keystrokes, Tab, and password keystrokes.
-constexpr DWORD kFieldSettleDelayMs = 200;   // Wait for target field to process username
-constexpr DWORD kTabKeySettleDelayMs = 100;  // Wait for Tab to advance focus
+// settle delays in milliseconds.
+constexpr DWORD kFieldSettleDelayMs = 200;
+constexpr DWORD kTabKeySettleDelayMs = 100;
 
-// Decrypt a record's credential on demand, logging a mode-tagged failure line.
-// Returns false and leaves `cred` empty on any decrypt error. Shared preamble
-// for doTypeLogin and doTypePassword; `modeField` is the literal "mode=login"
-// or "mode=password" token.
+// leave cred empty and return false on decrypt failure; modeField is a diagnostic token.
 static bool decryptForType(
     const seal::VaultRecord& record,
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPw,
@@ -60,8 +57,7 @@ static bool decryptForType(
     }
 }
 
-// Type username, Tab, password into the focused window. Works on snapshots, so
-// the worker never touches the controller's shared state.
+// worker uses snapshots only; controller state stays on the GUI thread.
 static bool doTypeLogin(
     const seal::VaultRecord& record,
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPw)
@@ -80,11 +76,10 @@ static bool doTypeLogin(
         return false;
     }
 
-    // Let the target field register the username before Tab.
+    // wait for the target to register username input.
     Sleep(kFieldSettleDelayMs);
 
-    // Tab down and up via SendInput: hardware-level events that work even on
-    // applications that ignore WM_CHAR.
+    // SendInput reaches applications that ignore WM_CHAR.
     INPUT tabInput[2] = {};
     tabInput[0].type = INPUT_KEYBOARD;
     tabInput[0].ki.wVk = VK_TAB;
@@ -99,8 +94,7 @@ static bool doTypeLogin(
     return success2;
 }
 
-// Type only the password into the focused window. Same snapshot discipline as
-// doTypeLogin, so the worker stays off the controller's state.
+// password-only worker; use the same snapshot ownership as doTypeLogin.
 static bool doTypePassword(
     const seal::VaultRecord& record,
     const seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>& masterPw)
@@ -129,7 +123,6 @@ TypeController::TypeController(seal::CredentialWorkspace& workspace,
       m_Engine(engine),
       m_Async(asyncRunner)
 {
-    // Relay FillController state to QML so the UI can react to fill progress.
     connect(&m_Engine, &FillController::armedChanged, this, &TypeController::fillArmedChanged);
     connect(&m_Engine,
             &FillController::fillStatusTextChanged,
@@ -140,8 +133,7 @@ TypeController::TypeController(seal::CredentialWorkspace& workspace,
             this,
             &TypeController::fillCountdownSecondsChanged);
 
-    // On complete or cancel, stay minimized so seal does not steal focus from
-    // the target app. Restore only on error, so the user sees what went wrong.
+    // keep focus in the target on success/cancel; restore seal only to show errors.
     connect(&m_Engine,
             &FillController::fillCompleted,
             this,
@@ -211,8 +203,7 @@ void TypeController::typePassword(int index)
 
 void TypeController::scheduleTypingAction(int index, TypingMode mode, const QString& label)
 {
-    // typeLogin and typePassword early-return on isBusy(), so no overlapping
-    // timer can reach this point.
+    // busy checks prevent overlapping countdown timers.
     Q_ASSERT(!m_Ui.isBusy());
     m_Ui.setBusy(true);
 
@@ -228,8 +219,7 @@ void TypeController::scheduleTypingAction(int index, TypingMode mode, const QStr
                                 seal::diag::kv("index", index),
                                 "countdown_s=3"}));
 
-    // 3 s countdown lets the user focus the target field before
-    // keystrokes start arriving.
+    // allow 3 s for the user to focus the target.
     int remaining = 3;
     m_Ui.setCountdown(QString("Typing in %1...").arg(remaining));
 
@@ -271,10 +261,7 @@ void TypeController::scheduleTypingAction(int index, TypingMode mode, const QStr
 
                 QString service = QString::fromUtf8(m_Workspace.records()[index].platform.c_str());
 
-                // Run typing on a worker so the GUI loop stays responsive across the
-                // Sleep()s between keystrokes. Snapshot record and password into the
-                // worker's captures, because the GUI thread may mutate them meanwhile;
-                // the clone is taken in a tight unlock() window.
+                // snapshot workspace data before worker typing and keystroke delays.
                 auto record = m_Workspace.records()[index];
                 seal::basic_secure_string<wchar_t> clonedPw;
                 {
@@ -292,11 +279,8 @@ void TypeController::scheduleTypingAction(int index, TypingMode mode, const QStr
                     clonedPw.assign(access.password().begin(), access.password().end());
                 }
 
-                // shared_ptr so the work body is copyable (QtConcurrent::run decay-copies
-                // the callable); the secret bytes stay in the locked buffer.
-                // basic_secure_string defaults to locked_allocator, so clonedPw is already
-                // this SecureWide type, and it is move-only: the move below transfers the
-                // locked buffer instead of copying the plaintext into a second allocation.
+                // QtConcurrent copies the callable; share locked storage, then cleanse in the
+                // worker.
                 using SecureWide =
                     seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>;
                 auto pw = std::make_shared<SecureWide>(std::move(clonedPw));
@@ -358,10 +342,7 @@ void TypeController::doArm(int index)
     qCInfo(logBackend).noquote() << QString::fromStdString(
         seal::diag::joinFields({"event=fill.arm.begin", seal::diag::kv("index", index)}));
 
-    // The session stays DPAPI-protected while armed: arm() borrows the session
-    // and the engine opens its own scoped unlock() around the on-demand decrypt
-    // alone, so the master key is plaintext for that decrypt rather than for the
-    // entire armed window.
+    // arming borrows the protected session; the engine unlocks only for credential decryption.
     bool armed =
         m_Engine.arm(index, m_Workspace.records(), m_Workspace.session(), m_Workspace.generation());
     if (!armed)
@@ -380,8 +361,7 @@ void TypeController::doArm(int index)
                                 seal::diag::kv("generation", m_Workspace.generation())}));
     m_Ui.setStatus("Fill armed - Ctrl+Click target field");
 
-    // Minimize so the target app is visible and clickable. It stays minimized
-    // after a complete or cancelled fill; only an error restores it.
+    // minimize for target selection; restore only on fill error.
     for (QWindow* w : QGuiApplication::topLevelWindows())
     {
         if (w->isVisible())
