@@ -59,8 +59,6 @@ TEST(AutoStagePolicyTest, WwwPrefixAndSubdomainStillMatch)
 
 TEST(AutoStagePolicyTest, RecordStoredAsUrlMatchesSameAndDeeperHost)
 {
-    // A record stored as a login-subdomain URL binds that exact host and any
-    // host below it (parent->child), but NOT the parent domain.
     const std::vector<VaultRecord> records = {rec("https://login.paypal.com/signin?x=1")};
     EXPECT_EQ(resolveStageRecord(records, "login.paypal.com").m_Kind,
               StageResolution::Kind::Single);
@@ -70,8 +68,7 @@ TEST(AutoStagePolicyTest, RecordStoredAsUrlMatchesSameAndDeeperHost)
 
 TEST(AutoStagePolicyTest, RecordStoredAsSubdomainUrlDoesNotMatchParent)
 {
-    // Directional binding: a record stored as a specific login subdomain no
-    // longer auto-stages on the bare parent domain (child->parent removed).
+    // subdomain records cannot stage on the parent domain.
     const std::vector<VaultRecord> records = {rec("https://login.paypal.com/signin?x=1")};
     const auto res = resolveStageRecord(records, "www.paypal.com");
     EXPECT_EQ(res.m_Kind, StageResolution::Kind::None);
@@ -80,8 +77,6 @@ TEST(AutoStagePolicyTest, RecordStoredAsSubdomainUrlDoesNotMatchParent)
 
 TEST(AutoStagePolicyTest, DomainRecordStaysStrictAcrossTlds)
 {
-    // A record that carries a real DOMAIN is matched strictly (the safe tier):
-    // a different TLD or the subdomain trick must not auto-stage it.
     const std::vector<VaultRecord> records = {rec("paypal.com")};
     EXPECT_EQ(resolveStageRecord(records, "paypal.co").m_Kind, StageResolution::Kind::None);
     EXPECT_EQ(resolveStageRecord(records, "paypal.xyz").m_Kind, StageResolution::Kind::None);
@@ -91,8 +86,7 @@ TEST(AutoStagePolicyTest, DomainRecordStaysStrictAcrossTlds)
 
 TEST(AutoStagePolicyTest, FreeFormLabelDoesNotAutoStage)
 {
-    // Browser secret release requires a stored domain. Fuzzy labels remain
-    // useful for display/search, but never auto-stage credentials.
+    // browser fill requires a stored domain; fuzzy labels serve UI lookup only.
     const std::vector<VaultRecord> records = {rec("My PayPal"), rec("Bob's Gmail")};
     const auto res = resolveStageRecord(records, "www.paypal.com");
     EXPECT_EQ(res.m_Kind, StageResolution::Kind::None);
@@ -101,7 +95,6 @@ TEST(AutoStagePolicyTest, FreeFormLabelDoesNotAutoStage)
 
 TEST(AutoStagePolicyTest, LabelTierDoesNotAutoStageAcrossTlds)
 {
-    // The fuzzy label tier is no longer used for browser secret release.
     const std::vector<VaultRecord> label = {rec("PayPal")};
     const std::vector<VaultRecord> domain = {rec("paypal.com")};
     EXPECT_EQ(resolveStageRecord(label, "paypal.co").m_Kind, StageResolution::Kind::None);
@@ -118,9 +111,7 @@ TEST(AutoStagePolicyTest, DeletedRecordsSkipped)
 TEST(AutoStagePolicyTest, TwoRecordsSameSiteIsMultiple)
 {
     const std::vector<VaultRecord> records = {rec("paypal.com"), rec("login.paypal.com")};
-    // On the login subdomain both records bind (paypal.com as parent->child,
-    // login.paypal.com exact) -> ambiguous. (On the bare parent, only the apex
-    // record would match now that child->parent is removed.)
+    // parent and exact records both bind the login subdomain, making selection ambiguous.
     const auto res = resolveStageRecord(records, "login.paypal.com");
     EXPECT_EQ(res.m_Kind, StageResolution::Kind::Multiple);
     EXPECT_EQ(res.m_Index, -1);
@@ -128,8 +119,6 @@ TEST(AutoStagePolicyTest, TwoRecordsSameSiteIsMultiple)
 
 TEST(AutoStagePolicyTest, PunycodeHostMatchesLiterally)
 {
-    // Punycode arrives as ASCII (xn--...); a stored punycode host matches the
-    // same punycode page host, and a different one does not.
     const std::vector<VaultRecord> records = {rec("xn--pypal-4ve.com")};
     EXPECT_EQ(resolveStageRecord(records, "xn--pypal-4ve.com").m_Kind,
               StageResolution::Kind::Single);
@@ -138,8 +127,6 @@ TEST(AutoStagePolicyTest, PunycodeHostMatchesLiterally)
 
 TEST(AutoStagePolicyTest, BareBrandLabelDoesNotMatchDomainForAutoStage)
 {
-    // A bare brand label ("PayPal", no TLD) does not provide enough binding
-    // material for browser auto-stage. Store a domain/URL for browser fill.
     const std::vector<VaultRecord> label = {rec("PayPal")};
     const std::vector<VaultRecord> lowerLabel = {rec("paypal")};
     const std::vector<VaultRecord> domain = {rec("paypal.com")};
@@ -215,14 +202,8 @@ TEST(SiteBindingPreviewTest, DeletedRecordsAreExcluded)
     EXPECT_EQ(preview.m_DuplicateCount, 0U);
 }
 
-// ---------------------------------------------------------------------------
-// StageVisitTracker - per-page-visit one-shot latches. A visit is one
-// document lifetime in the browser (content.js mints a random token per
-// document; reload / reopen = new token). The user-facing contract under
-// test: the username fills at most ONCE per visit, the password at most
-// ONCE per visit, and after the password fill the visit is inert - no
-// staging action of any kind until a fresh page load produces a new token.
-// ---------------------------------------------------------------------------
+// each document has a distinct visit token. username and password fill at most once;
+// a password fill also consumes the username latch.
 
 using seal::StageVisitTracker;
 
@@ -235,8 +216,7 @@ TEST(StageVisitTrackerTest, FreshVisitAllowsBothActions)
 
 TEST(StageVisitTrackerTest, EmptyTokenFailsClosed)
 {
-    // A stale extension that sends no visit token must never stage: both
-    // latches read as "already done" and notes are no-ops.
+    // missing visit tokens disable both latches.
     StageVisitTracker tracker;
     EXPECT_TRUE(tracker.usernameDone(""));
     EXPECT_TRUE(tracker.passwordDone(""));
@@ -251,14 +231,13 @@ TEST(StageVisitTrackerTest, UsernameLatchesOncePerVisitButArmStaysAllowed)
     StageVisitTracker tracker;
     tracker.noteUsernameInjected("visit-a");
     EXPECT_TRUE(tracker.usernameDone("visit-a"));
-    // The password click-fill is still pending for this visit.
+
     EXPECT_FALSE(tracker.passwordDone("visit-a"));
 }
 
 TEST(StageVisitTrackerTest, PasswordLatchMakesVisitFullyInert)
 {
-    // After the one password fill, NOTHING more fills on this visit - the
-    // username latch reads done too (a pw-only page never injected one).
+    // password fill consumes the username latch even on password-only pages.
     StageVisitTracker tracker;
     tracker.notePasswordFilled("visit-a");
     EXPECT_TRUE(tracker.passwordDone("visit-a"));
@@ -267,7 +246,7 @@ TEST(StageVisitTrackerTest, PasswordLatchMakesVisitFullyInert)
 
 TEST(StageVisitTrackerTest, VisitsAreIndependent)
 {
-    // Two tabs of the same site: latching one leaves the other fresh.
+    // two tabs of the same site: latching one leaves the other fresh.
     StageVisitTracker tracker;
     tracker.noteUsernameInjected("visit-a");
     tracker.notePasswordFilled("visit-a");
@@ -277,8 +256,7 @@ TEST(StageVisitTrackerTest, VisitsAreIndependent)
 
 TEST(StageVisitTrackerTest, ReloadedPageGetsFreshLatches)
 {
-    // A refresh mints a NEW token; the old visit's latches must not carry
-    // over. (The old token never reappears - documents are never revived.)
+    // a reload creates a new token with fresh latches.
     StageVisitTracker tracker;
     tracker.notePasswordFilled("visit-load1");
     EXPECT_FALSE(tracker.passwordDone("visit-load2"));
@@ -293,18 +271,15 @@ TEST(StageVisitTrackerTest, OldestVisitEvictedAtCapacity)
     {
         tracker.noteUsernameInjected("visit-" + std::to_string(i));
     }
-    // visit-0 was evicted (bounded memory); it reads fresh again. Harmless:
-    // a real visit-0 document would long since have re-latched, and tokens
-    // are never reused across page loads.
+    // evicted visits read as fresh; tokens are not reused across document loads.
     EXPECT_FALSE(tracker.usernameDone("visit-0"));
-    // The most recent kMaxVisits entries are intact.
+
     EXPECT_TRUE(tracker.usernameDone("visit-" + std::to_string(StageVisitTracker::kMaxVisits)));
 }
 
 TEST(StageVisitTrackerTest, WriteRefreshesRecency)
 {
-    // LRU-on-write: re-noting a visit moves it to the back, so a busy tab is
-    // not evicted by churn from other tabs.
+    // writes refresh LRU position so active tabs survive churn from other tabs.
     StageVisitTracker tracker;
     tracker.noteUsernameInjected("hot");
     for (std::size_t i = 1; i < StageVisitTracker::kMaxVisits; ++i)
@@ -317,12 +292,7 @@ TEST(StageVisitTrackerTest, WriteRefreshesRecency)
     EXPECT_FALSE(tracker.usernameDone("cold-1"));
 }
 
-// ---------------------------------------------------------------------------
-// navShouldInjectUsername - the zero-click username-fill trigger. The nav
-// report's `user` flag is a STRICT autocomplete="username" probe; keying
-// injection on it alone stranded combined login forms whose identifier field
-// omits the token (the password armed but the username never injected).
-// ---------------------------------------------------------------------------
+// a visible password field can trigger username injection without autocomplete="username".
 
 using seal::navShouldInjectUsername;
 
@@ -334,11 +304,7 @@ TEST(NavInjectUsernameTest, EmailFirstIdentifierTriggers)
 
 TEST(NavInjectUsernameTest, CombinedFormWithoutAutocompleteStillTriggers)
 {
-    // The Duolingo regression, pinned: a combined login form (password field
-    // present) whose identifier input carries NO autocomplete="username" token.
-    // The old gate keyed on the identifier flag alone and returned false here,
-    // so the password armed but the username never injected. A visible password
-    // field is proof of a login, so this MUST trigger.
+    // combined login forms can omit autocomplete="username" from the identifier field.
     EXPECT_TRUE(navShouldInjectUsername(/*hasUsernameField=*/false, /*hasPasswordForm=*/true));
 }
 
@@ -349,18 +315,11 @@ TEST(NavInjectUsernameTest, BothSignalsTrigger)
 
 TEST(NavInjectUsernameTest, NeitherSignalDoesNotTrigger)
 {
-    // Not a login page (the caller's nav gate rejects this earlier too). Pinned
-    // so a password-less page with no autocomplete="username" identifier - a
-    // bare newsletter/contact email box - can never trigger a username write.
+    // an unlabelled email field without a password must not trigger injection.
     EXPECT_FALSE(navShouldInjectUsername(/*hasUsernameField=*/false, /*hasPasswordForm=*/false));
 }
 
-// ---------------------------------------------------------------------------
-// visitAuthorizes - the cross-document replay guard. A click bridge entry
-// carries the per-document visit token that was live when the extension
-// reported it; the fill gate rejects the entry when it belongs to a different
-// document than the one currently loaded in that browser process.
-// ---------------------------------------------------------------------------
+// click authorization belongs to the document that produced its visit token.
 
 using seal::visitAuthorizes;
 
@@ -371,15 +330,13 @@ TEST(VisitAuthorizesTest, SameDocumentAuthorizes)
 
 TEST(VisitAuthorizesTest, DifferentDocumentBlocks)
 {
-    // A stale entry from an earlier document must not authorize a fill into the
-    // currently-loaded (different) document - even at the same screen location.
+    // a matching screen position cannot authorize a different document.
     EXPECT_FALSE(visitAuthorizes("visit-old", "visit-new"));
 }
 
 TEST(VisitAuthorizesTest, UnknownTokenDefersToOtherGates)
 {
-    // Older extension (no visit on clicks) or no nav seen yet for the process:
-    // fall back to the other gates rather than break a legitimate fill.
+    // missing visit data defers to caller gates.
     EXPECT_TRUE(visitAuthorizes("", "visit-new"));
     EXPECT_TRUE(visitAuthorizes("visit-old", ""));
     EXPECT_TRUE(visitAuthorizes("", ""));
