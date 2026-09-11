@@ -15,10 +15,7 @@ namespace seal
 namespace
 {
 
-// Descend to the deepest child that still contains the click. The screen
-// point is re-mapped to client coordinates at every level. The loop stops
-// when RealChildWindowFromPoint returns the window itself or nothing, so it
-// terminates even on a window that reports itself as its own child.
+// convert to client coordinates at each level; stop on null or self to avoid a cycle.
 HWND drillDown(HWND parent, POINT screenPt)
 {
     HWND current = parent;
@@ -54,7 +51,7 @@ bool isEditLikeClass(std::wstring_view cls)
         L"RichEdit20A",
         L"RichEdit20W",
         L"RICHEDIT50W",
-        L"TEdit",  // Delphi VCL
+        L"TEdit",  // delphi VCL
     };
     for (const auto& candidate : kEditClasses)
     {
@@ -66,10 +63,7 @@ bool isEditLikeClass(std::wstring_view cls)
     return false;
 }
 
-// Evidence goes into a logfmt line, so every code unit at or above 0x80
-// becomes '?' here and the length is preserved. Control characters below
-// 0x20 pass through; the log layer replaces those and applies its own
-// 96-byte cap.
+// replace non-ASCII code units here; the log layer handles controls and its 96-byte cap.
 std::string narrowAscii(std::wstring_view input)
 {
     std::string out;
