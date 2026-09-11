@@ -55,12 +55,12 @@ FusionOutcome FusionDecider::decideDetailed(std::span<const ProbeResult> results
 {
     FusionOutcome outcome;
 
-    // Pass 1: collect Tier-1 short-circuit candidates. tier1Verdict latches on
+    // pass 1: collect tier-1 short-circuit candidates. tier1Verdict latches on
     // the first qualifying hit and every later hit is compared against it, so
-    // "no conflict" means all Tier-1 hits carry the same verdict.
+    // "no conflict" means all tier-1 hits carry the same verdict.
     Verdict tier1Verdict = Verdict::Unknown;
     int tier1HitCount = 0;
-    int tier1BridgeOnlyCount = 0;  // Tier-1 hits from browser_extension (M5 input).
+    int tier1BridgeOnlyCount = 0;  // tier-1 hits from browser_extension (M5 input).
     bool tier1Conflict = false;
 
     for (const auto& result : results)
@@ -93,13 +93,13 @@ FusionOutcome FusionDecider::decideDetailed(std::span<const ProbeResult> results
         ++tier1HitCount;
     }
 
-    // M5: browser-extension alone cannot short-circuit - another Tier-1
+    // M5: browser-extension alone cannot short-circuit - another tier-1
     // probe must agree, otherwise a poisoned bridge map could mis-route.
     const bool bridgeOnlyHit = (tier1HitCount > 0) && (tier1HitCount == tier1BridgeOnlyCount);
     const bool shortCircuit = tier1HitCount > 0 && !tier1Conflict && !bridgeOnlyHit;
     outcome.m_Tier1ShortCircuit = shortCircuit;
-    // Corroborated means a bridge Tier-1 hit was part of an accepted
-    // short-circuit, so an on-disk Tier-1 probe agreed with it.
+    // corroborated means a bridge tier-1 hit was part of an accepted
+    // short-circuit, so an on-disk tier-1 probe agreed with it.
     outcome.m_BridgeCorroborated = shortCircuit && (tier1BridgeOnlyCount > 0);
 
     if (shortCircuit)
@@ -108,8 +108,8 @@ FusionOutcome FusionDecider::decideDetailed(std::span<const ProbeResult> results
         return outcome;
     }
 
-    // Pass 2: Tier-2 weighted vote across every probe with a known profile,
-    // Tier-1 probes included - a conflicting or bridge-only Tier-1 hit still
+    // pass 2: tier-2 weighted vote across every probe with a known profile,
+    // tier-1 probes included - a conflicting or bridge-only tier-1 hit still
     // votes here with its full weight. Unknown was filtered above, so the
     // else-branch below can only be Username.
     float scorePassword = 0.0F;
