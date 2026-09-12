@@ -16,42 +16,15 @@ class FillController;
 
 /**
  * @class BridgeViewModel
- * @brief ViewModel collaborator that owns the browser-companion bridge
- *        presentation and control surface.
- * @author Fable 5 (https://github.com/claude)
+ * @brief Expose non-secret browser bridge controls as the Bridge QML context property.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup ViewModel
  *
- * Carries one QML concern: the M8 panic-mode toggle, the per-browser
- * connected-state indicators, native-messaging host install and uninstall, and
- * the diagnose dry-run. This is the same one-concern-per-context-property split
- * @ref WindowController uses.
+ * Poll connection atomics at 1 Hz and emit changes. Installed-browser detection
+ * runs only at construction and after manifest installation. QSettings persists
+ * `bridge/enabled` and `bridge/autostage`; RunQMLMode connects status to AppViewModel.
  *
- * Holds no secret material: it reads the bridge connection atomics exposed by
- * @ref FillController, persists `bridge/enabled` and `bridge/autostage` via
- * `QSettings`, and relays human-readable status, info and error strings. It is
- * the `Bridge` QML context property, bound in `RunQMLMode`; status messages
- * reach `AppViewModel`'s `IUiFeedback::setStatus` through a connect made in the
- * composition root.
- *
- * @par Lifetime
- * `RunQMLMode` builds this on the stack beside the @ref FillController it
- * borrows, with no QObject parent. It is not a child of @ref AppViewModel; the
- * two are linked only by signal connections made in the composition root.
- *
- * @par Polled state
- * `BrowserBridge` is not a QObject, so a 1 Hz timer samples it and turns level
- * changes into signals: a per-browser connect edge emits @ref browsersChanged,
- * and the Chrome, Brave and any-peer levels each emit their own signal. QML
- * draws the per-browser dots from @ref browsers; @ref bridgePeerConnected,
- * @ref bridgeChromeConnected and @ref bridgeBraveConnected are convenience
- * properties that no `qml/` file binds today.
- *
- * @par Installed-browser detection
- * Probed at construction and again after @ref runInstallBrowserExtension, never
- * polled. A browser installed while seal runs appears in @ref browsers only
- * after the next manifest install or a restart.
- *
- * @see AppViewModel, FillController
+ * @pre The borrowed FillController outlives this object.
  */
 class BridgeViewModel : public QObject
 {
@@ -72,190 +45,157 @@ class BridgeViewModel : public QObject
 
 public:
     /**
-     * @brief Construct the ViewModel, apply the persisted enable state, and
-     *        start the 1 Hz peer-connected poll.
+     * @fn BridgeViewModel(FillController* fillController, QObject* parent = nullptr)
+     * @brief Restore bridge enablement, connect diagnosis signals and start connection polling.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Applying the state is not passive. `bridge/enabled` defaults to true, and
-     * enabling opens the native-messaging pipe at once rather than on first
-     * arm, so an extension launched with the browser connects immediately. A
-     * pipe left closed until arm time drops the extension into its reconnect
-     * backoff (doubling, capped at 5 s) and then its 30 s recovery alarm, so
-     * the first fill can wait tens of seconds.
+     * Enablement defaults to true and opens the pipe immediately so browser startup
+     * does not enter reconnect backoff.
      *
-     * The constructor also subscribes to the FillController diagnose signals
-     * and seeds the connected and installed caches that the poll compares
-     * against.
-     *
-     * @pre @p fillController is not null; it is dereferenced during
-     *      construction and on every property read.
-     * @param fillController Borrowed controller that owns the BrowserBridge;
-     *        must outlive this object.
-     * @param parent QObject parent, or nullptr. The composition root passes
-     *        nothing and keeps the object on the stack.
+     * @param fillController Non-null borrowed controller; must outlive this object.
      */
     explicit BridgeViewModel(FillController* fillController, QObject* parent = nullptr);
 
     /**
-     * @brief Whether the browser bridge is enabled (M8 panic-mode off).
-     *
-     * Read live from the FillController, not from `QSettings`. The stored
-     * preference is only the value replayed at the next start.
+     * @fn bool bridgeEnabled() const
+     * @brief Live engine state; the persisted preference is replayed at startup.
+     * @author Alex (<https://github.com/lextpf>)
      */
     bool bridgeEnabled() const;
 
     /**
-     * @brief Whether peer signer authentication is active (this binary is signed).
+     * @fn bool bridgePeerAuthEnforced() const
+     * @brief Report whether the bridge requires a matching peer signer.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * False in an unsigned build, where the M6 signer gate accepts any peer; the
-     * browser-chip row in the status footer (qml/BridgeSettings.qml) then shows
-     * an amber unsigned-build warning. The value is fixed at startup from the
-     * running binary's Authenticode identity, so the QML property is `CONSTANT`
-     * and emits no change signal.
+     * An unavailable or untrusted application signer disables peer-signer matching
+     * in development builds. SEAL_REQUIRE_SIGNED_PEER then prevents bridge startup.
+     * Process pinning and trusted browser ancestry checks still apply.
+     *
+     * @return True when the application cached a trusted, non-empty signer identity.
      */
     bool bridgePeerAuthEnforced() const;
 
-    /// @brief Whether any browser-companion peer is currently connected.
     bool bridgePeerConnected() const;
 
-    /// @brief Whether a Chrome-launched companion peer is connected.
     bool bridgeChromeConnected() const;
 
-    /// @brief Whether a Brave-launched companion peer is connected.
     bool bridgeBraveConnected() const;
 
     /**
-     * @brief Installed Chromium-family browsers and live connection state.
+     * @fn QVariantList browsers() const
+     * @brief Build a list of installed or connected Chromium browsers.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Each row holds only non-secret presentation metadata: `label`, `key`,
-     * `icon`, `iconPath`, `iconAvailable`, `extensionsPage`, `installed` and
-     * `connected`.
+     * Rows contain `label`, `key`, `icon`, `iconPath`, `iconAvailable`, `extensionsPage`,
+     * `installed` and `connected`. Connected portable browsers remain visible even
+     * when installation detection misses them. Gecko has no supported manifest.
      *
-     * Gecko entries are skipped, because seal ships no Gecko native-messaging
-     * manifest. A Chromium entry is listed when it is detected as installed or
-     * is connected right now, so a portable copy that install detection misses
-     * still appears once its peer connects.
-     *
-     * - `installed` comes from the cache refreshed at construction and after
-     *   @ref runInstallBrowserExtension.
-     * - `connected` is read live from the FillController.
-     * - `iconAvailable` probes the compiled-in resource, so it is false in a
-     *   build made with an empty `assets/` tree.
-     *
-     * @return A freshly built list; the rows are rebuilt on every read, so bind
-     *         it in QML rather than calling it in a loop.
+     * Installed state is cached; connections and icon availability are read live.
+     * Missing bundled assets make `iconAvailable` false. Each read rebuilds the list.
      */
     QVariantList browsers() const;
 
-    /// @brief Human-readable result of the last companion install or uninstall.
-    /// Shown as the tooltip of the header Setup button (`qml/HeaderBar.qml`).
-    /// Empty until one of those two commands runs.
+    /**
+     * @fn QString bridgeStatusText() const
+     * @brief Last install/uninstall result; empty before either command runs.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     QString bridgeStatusText() const;
 
     /**
-     * @brief Toggle the browser bridge on/off (M8 panic mode) and persist it.
+     * @fn void setBridgeEnabled(bool enabled)
+     * @brief Persist enablement and open or close the pipe immediately.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Takes effect at once: enabling opens the native-messaging pipe, disabling
-     * closes it and drops any connected peer. The comparison is against the
-     * live FillController state, so a call that matches it returns without
-     * writing `QSettings` and without emitting @ref bridgeEnabledChanged.
-     *
-     * @param enabled true to allow extension reports, false to disable them.
+     * Disabling disconnects peers. Matching live state makes this a no-op.
      */
     Q_INVOKABLE void setBridgeEnabled(bool enabled);
 
     /**
-     * @brief Whether zero-gesture staged auto-fill is enabled (default false).
+     * @fn bool autoStageEnabled() const
+     * @brief Read bridge/autostage from QSettings on every call; default false.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Reads `bridge/autostage` from `QSettings` on every call, with no cached
-     * copy, so each call returns the stored value. Only @ref setAutoStageEnabled
-     * emits @ref autoStageEnabledChanged, so a write through any other path
-     * updates the stored value but re-evaluates no QML binding and does not
-     * notify StagingController. A new writer must emit that signal itself.
+     * External settings writes emit no signal. Use `setAutoStageEnabled()` to update
+     * QML bindings and StagingController.
      */
     bool autoStageEnabled() const;
 
     /**
-     * @brief Enable/disable staged auto-fill and persist it.
+     * @fn void setAutoStageEnabled(bool enabled)
+     * @brief Persist staging preference and emit only when it changes.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * This setter writes `bridge/autostage` and emits
-     * @ref autoStageEnabledChanged, nothing more. The staging behaviour lives
-     * in StagingController, which is not a QML context property and is attached
-     * to that signal in the composition root; without that connection the
-     * toggle changes nothing. A call that matches the stored value returns
-     * without writing and without emitting.
-     *
-     * @param enabled true to auto-arm on matching navigation.
+     * RunQMLMode must connect the signal to StagingController for it to take effect.
      */
     Q_INVOKABLE void setAutoStageEnabled(bool enabled);
 
     /**
-     * @brief Install the browser-companion native-messaging manifest (HKCU).
+     * @fn void runInstallBrowserExtension()
+     * @brief Write the manifest and HKCU registrations on the GUI thread.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Writes the manifest and the per-browser HKCU registry values, refreshes
-     * the installed-browser cache (emitting @ref browsersChanged when a flag
-     * moved), and stores the human-readable outcome in @ref bridgeStatusText.
-     * Emits @ref infoMessage on success and @ref errorOccurred on failure, with
-     * the same message text in both cases. Runs synchronously on the GUI
-     * thread.
+     * Refresh installed browsers and status. Success emits `infoMessage`; failure
+     * emits `errorOccurred`.
      */
     Q_INVOKABLE void runInstallBrowserExtension();
 
     /**
-     * @brief Remove the browser-companion native-messaging manifest (HKCU).
+     * @fn void runUninstallBrowserExtension()
+     * @brief Remove HKCU registrations and report status; keep the manifest file.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Mirrors @ref runInstallBrowserExtension for the registry values and the
-     * status text, but does not re-probe installed browsers: removing the
-     * manifest does not uninstall a browser, so the `installed` flags in
-     * @ref browsers stay valid. The generated manifest file on disk is kept.
+     * Browser installation state is unchanged, so its cache is not refreshed.
      */
     Q_INVOKABLE void runUninstallBrowserExtension();
 
     /**
-     * @brief Arm the FillController in dry-run "diagnose" mode.
+     * @fn void runBridgeDiagnose()
+     * @brief Diagnose a Ctrl+Click within 30 s without accessing credentials.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Diagnose reads no credential, so it skips the password gate and works
-     * with a locked vault. On success it emits @ref statusMessage with the
-     * prompt, and the user has one `FillController::FILL_TIMEOUT_SECONDS`
-     * window (30 s) to Ctrl+Click a field. The per-probe report then arrives as
-     * @ref bridgeDiagnoseReady, or @ref bridgeDiagnoseCancelled on Esc or
-     * timeout. When the input hooks cannot be installed, the method emits
-     * @ref errorOccurred and returns without arming.
+     * Works while locked. Emits the probe report on completion, cancellation on
+     * Escape/timeout, or `errorOccurred` when hooks cannot be installed.
      */
     Q_INVOKABLE void runBridgeDiagnose();
 
 signals:
-    void bridgeEnabledChanged();          ///< Browser bridge enabled/disabled.
-    void bridgePeerConnectedChanged();    ///< Any-bridge-peer connect/disconnect edge.
-    void bridgeChromeConnectedChanged();  ///< Chrome-peer connect/disconnect edge.
-    void bridgeBraveConnectedChanged();   ///< Brave-peer connect/disconnect edge.
-    void browsersChanged();               ///< Browser list/install/connect state changed.
-    void bridgeStatusTextChanged();       ///< Bridge status text updated.
-    void autoStageEnabledChanged();       ///< Staged auto-fill toggled on/off.
+    void bridgeEnabledChanged();
+    void bridgePeerConnectedChanged();
+    void bridgeChromeConnectedChanged();
+    void bridgeBraveConnectedChanged();
+    void browsersChanged();
+    void bridgeStatusTextChanged();
+    void autoStageEnabledChanged();
 
-    /// @brief Diagnose dry-run finished; @p summary holds the per-probe breakdown.
+    /**
+     * @fn void bridgeDiagnoseReady(const QString& summary)
+     * @brief Per-probe report from the dry run.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     void bridgeDiagnoseReady(const QString& summary);
 
-    /// @brief Diagnose dry-run was cancelled (Esc or timeout).
+    /**
+     * @fn void bridgeDiagnoseCancelled()
+     * @brief Escape or timeout ended diagnosis.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     void bridgeDiagnoseCancelled();
 
-    /// @brief An informational message should be shown to the user.
     void infoMessage(const QString& title, const QString& message);
 
-    /// @brief An error occurred that should be shown to the user.
     void errorOccurred(const QString& title, const QString& message);
 
-    /// @brief A status-bar message that the owning AppViewModel should display.
     void statusMessage(const QString& text);
 
 private:
     /**
-     * @brief Re-probe the registry and disk for installed Chromium browsers.
+     * @fn bool refreshInstalledBrowsers()
+     * @brief Refresh Chromium installation flags without emitting signals.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Updates @ref m_InstalledBrowsers in place. Gecko kinds are skipped and
-     * keep their initial false. This helper emits nothing; the caller decides
-     * whether to emit @ref browsersChanged.
-     *
-     * @return true when at least one entry changed value.
+     * @return True if any flag changed.
      */
     bool refreshInstalledBrowsers();
 
@@ -263,17 +203,15 @@ private:
 
     QTimer m_BridgePeerPoll;           ///< Polls bridge peer-connected state (1 Hz).
     bool m_LastPeerConnected = false;  ///< Last observed any-peer level, for edge detection.
-    /// Last observed Chrome level. Duplicates one m_LastBrowserConnected slot, because the
-    /// Chrome and Brave convenience properties need their own edge signal.
+    /// Separate edge cache for the Chrome convenience property.
     bool m_LastChromeConnected = false;
-    /// Last observed Brave level; same duplication as m_LastChromeConnected.
+    /// Separate edge cache for Brave.
     bool m_LastBraveConnected = false;
-    /// Per-BrowserKind connected level, indexed by the BrowserKind value; sized to
-    /// BrowserKind::Count in the constructor.
+    /// Indexed by BrowserKind; sized to BrowserKind::Count.
     std::vector<bool> m_LastBrowserConnected;
-    /// Per-BrowserKind installed flag, same indexing. Only Chromium kinds are probed.
+    /// Same indexing; only Chromium installation is probed.
     std::vector<bool> m_InstalledBrowsers;
-    QString m_BridgeStatusText;  ///< Last install/uninstall result text for QML.
+    QString m_BridgeStatusText;
 };
 
 }  // namespace seal
