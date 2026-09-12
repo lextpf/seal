@@ -1,51 +1,123 @@
 import QtQuick
 import QtQuick.Shapes
 
-// The cover over the whole window while the vault is locked or loading. It is
-// the startup screen and the unlock animation at once: a sonar field during the
-// scrypt grind, a seal that swings shut on success, a fracture on a wrong
-// password. It renders state only and never touches a secret.
-//
-//   phase        meaning                                       set by
-//   ----------   -------------------------------------------   ----------------
-//   hidden       cover down, nothing rendered                   _sync, timers
-//   listening    password entry; aurora only while fracturing   _sync, breakSeal
-//   sounding     scrypt running; full sonar                     _sync
-//   exiting      grind ended with no verdict yet; fades out     _sync
-//   sealing      unlock succeeded; seal outro plays             sealSuccess
-//   dismissing   outro done; fades out, then returns to hidden  sealAnim
-//
-// Main drives it through `listening`, `sounding`, `caption` and the two calls
-// sealSuccess() and breakSeal(). The outro phases settle themselves, and `sealing`
-// and `dismissing` additionally carry a timer as a backstop, so nothing has to
-// clear the cover from outside.
+/*!
+ * \qmltype LoadingOverlay
+ * \inqmlmodule seal
+ * \brief Present startup, password entry, and cryptographic work states.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * Main supplies state and verdicts, then fades the shell below this transparent cover.
+ * The cover intercepts mouse and wheel input until dismissal. It permits native window
+ * dragging during password entry, cryptographic work, and the success animation.
+ *
+ * \section1 Phases
+ *
+ * \table
+ * \header
+ *     \li Phase
+ *     \li Presentation
+ *     \li Set by
+ * \row
+ *     \li \c hidden
+ *     \li Zero target opacity unless booting or fracturing.
+ *     \li \c _sync and timers.
+ * \row
+ *     \li \c listening
+ *     \li Password entry. Aurora appears during fracture.
+ *     \li \c _sync and \c {breakSeal}.
+ * \row
+ *     \li \c sounding
+ *     \li Cryptographic work with animated rings.
+ *     \li \c {_sync}.
+ * \row
+ *     \li \c exiting
+ *     \li Fade out without a verdict.
+ *     \li \c {_sync}.
+ * \row
+ *     \li \c sealing
+ *     \li Successful unlock animation.
+ *     \li \c {sealSuccess}.
+ * \row
+ *     \li \c dismissing
+ *     \li Final fade after success.
+ *     \li Success animation.
+ * \endtable
+ *
+ * Success starts only from sounding or exiting. The success sequence advances to
+ * dismissing, then a 540 ms timer hides the cover. A 3800 ms watchdog hides it if the
+ * success sequence does not complete. New listening or sounding input can replace a phase.
+ *
+ * Reduced motion stops continuous clocks and replaces moving verdict effects with fades.
+ * Animation progress and opacity values use [0, 1]; verdict tint uses [-1, 1]. Geometry
+ * uses logical pixels. Rotation angles use degrees.
+ */
 Item {
     id: root
 
-    // --- Inputs (set by Main) -----------------------------------------------
-    property bool listening: false   // Password entry; field centred, aurora only while fracturing.
-    property bool sounding: false    // scrypt grind running (full sonar).
-    property string caption: ""      // Text beneath the sonar during the grind.
+    /*!
+     * Password entry is active. Sounding takes priority when both inputs are true.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property bool listening: false
+    /*!
+     * Cryptographic work is active. Selects the animated ring presentation.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property bool sounding: false
+    /*!
+     * Status text below the animation. An empty string fades the caption out.
+     * Trailing dots and whitespace are replaced by an animated ellipsis.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property string caption: ""
 
-    property string phase: "hidden"  // See the phase table above.
+    /*!
+     * Current presentation state. Use the input properties and verdict methods to change it.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property string phase: "hidden"
 
-    property bool fracturing: false  // Wrong-password outro is playing; holds the cover up.
+    /*!
+     * True while the failure animation runs. Holds full cover opacity until completion.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property bool fracturing: false
 
-    // Startup cover. `booting` forces the overlay fully opaque from the first
-    // frame, so the app is never visible before the cover, bridging the tick
-    // before the password dialog appears. _sync() releases it as soon as a real
-    // cover state exists; Main releases it when there is no vault to unlock.
-    // `snap` makes that first release instant, with no fade.
+    /*!
+     * Hold full opacity until an input selects a phase or Main reports no startup vault.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property bool booting: true
+    /*!
+     * When true, apply opacity changes without animation. Main clears it after startup.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property bool snap: true
 
     onListeningChanged: root._sync()
     onSoundingChanged: root._sync()
     Component.onCompleted: root._sync()
 
+    /*!
+     * \brief Select a phase from the current activity inputs.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * Sounding takes priority over listening and fracturing. Either activity input releases
+     * the boot hold. With all inputs false, sounding becomes exiting; sealing and exiting
+     * remain active; other phases become hidden.
+     */
     function _sync() {
-        // Hand opacity to the phase machine once a real cover state exists,
-        // otherwise the boot hold would keep the cover up forever.
+        // Release the boot hold once an activity phase controls opacity.
         if (booting && (sounding || listening))
             booting = false;
         if (sounding) {
@@ -59,14 +131,30 @@ Item {
         } else if (phase !== "sealing" && phase !== "exiting") {
             phase = "hidden";
         }
-        // `sealing`/`exiting` are transient outros; they settle themselves.
+        // The success and exit phases retain control until completion or another input.
     }
 
+    /*!
+     * \brief Start the successful unlock animation when work is ending.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * Changes sounding or exiting to sealing. Other phases remain unchanged.
+     * The phase handler starts the success animation and its watchdog.
+     */
     function sealSuccess() {
         if (phase === "sounding" || phase === "exiting")
             phase = "sealing";
     }
 
+    /*!
+     * \brief Restart the failure animation and hold the cover visible.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * Changes sounding, exiting, or hidden to listening. Other phases remain unchanged.
+     * Sets fracturing until the animation completes; repeated calls restart the animation.
+     */
     function breakSeal() {
         fracturing = true;
         if (phase === "sounding" || phase === "exiting" || phase === "hidden")
@@ -85,32 +173,52 @@ Item {
         }
     }
 
-    // Backstop: if sealAnim never reaches its end, drop the cover anyway. A
-    // stuck outro would otherwise lock the user out of an unlocked vault.
+    // Dismiss if the success animation fails to finish so the unlocked vault stays accessible.
     Timer {
         id: sealWatchdog
         interval: 3800
         onTriggered: if (root.phase === "sealing") root.phase = "hidden"
     }
 
-    // Outlasts the 440 ms dismiss fade, then parks the cover at hidden.
+    // Outlast the 440 ms dismissal fade.
     Timer {
         id: dismissTimer
         interval: 540
         onTriggered: if (root.phase === "dismissing") root.phase = "hidden"
     }
 
-    // --- Tuning -------------------------------------------------------------
-    // The seal is the focal point of the unlock transition, not an inline icon.
+    /*!
+     * Maximum animated ring radius in logical pixels, after design scaling.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property real maxRadius: Theme.px(68)
+    /*!
+     * Seated seal radius as a fraction of the maximum ring radius.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property real sealSeatFactor: 0.95
-    readonly property real seatRad: maxRadius * sealSeatFactor  // Radius the seated band rests at.
+    readonly property real seatRad: maxRadius * sealSeatFactor
 
-    // Reduce-motion: outros collapse to plain fades, with no spin or debris.
+    /*!
+     * Follow the Windows reduced-motion preference. Suppresses spin, flashes, and debris.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property bool calm: WindowVM.reduceMotion
 
-    // Duration multipliers for the two outros. Raise to slow an outro down.
+    /*!
+     * Duration multiplier for the failure animation when reduced motion is off.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property real fracturePace: 2.4
+    /*!
+     * Duration multiplier for the success animation when reduced motion is off.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property real successPace: 1.4
 
     readonly property color hueIndigo:  Theme.auroraIndigo
@@ -124,43 +232,48 @@ Item {
     readonly property real glowMul: isDark ? 0.55 : 1.6
     readonly property real payoffMul: isDark ? 1.0 : 1.3
 
-    // Outcome tint driver: -1 wrong password, 0 neutral, +1 unlocked. Every hue
-    // below is mixed toward the matching verdict color by vGreen or vRed.
+    /*!
+     * Verdict tint in [-1, 1]: -1 selects failure, 0 is neutral, and 1 selects success.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property real verdict: 0.0
     readonly property real vGreen: Math.max(0.0, verdict)
     readonly property real vRed: Math.max(0.0, -verdict)
-    // Linear color mix, forced opaque.
+    /*!
+     * \brief Interpolate two colors and return an opaque result.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * \a a and \a b supply RGB channels. \a k is a blend factor in [0, 1], where 0 selects
+     * \a a and 1 selects \a {b}. The factor is not clamped; input alpha is ignored.
+     */
     function vmix(a, b, k) {
         return Qt.rgba(a.r + (b.r - a.r) * k, a.g + (b.g - a.g) * k, a.b + (b.b - a.b) * k, 1.0);
     }
 
-    // Layer levels. Each one gates a group of items and animates between phases,
-    // so a phase change cross-fades the field instead of popping it.
+    // Animate layer opacity levels to fade between phases.
     property real auroraLevel: (phase === "sounding" || phase === "exiting"
                                || phase === "sealing" || phase === "dismissing") ? 1.0
                                : (root.fracturing ? 0.5 : 0.0)
-    // Blooming sonar rings: only during the grind. They dissolve as the seal forms.
     property real ringsLevel: (phase === "sounding" || phase === "exiting") ? 1.0 : 0.0
-    // Bright core / focal: with the rings, plus through the seal outro.
     property real coreLevel: (phase === "sounding" || phase === "exiting" || phase === "sealing") ? 1.0 : 0.0
     Behavior on auroraLevel { NumberAnimation { duration: 360; easing.type: Easing.OutCubic } }
     Behavior on ringsLevel { NumberAnimation { duration: 360; easing.type: Easing.OutCubic } }
     Behavior on coreLevel { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
 
-    // --- Seal outro state (driven by sealAnim) ------------------------------
-    property real sealProgress: 0.0   // The press: 0 formed wide -> 1 seated.
-    property real sealAngle: 0.0      // conic sweep angle, decelerates to a locked rest.
-    property real bandOpacity: 0.0    // band's own genesis fade (decoupled from the press).
+    property real sealProgress: 0.0   // Radius progress: 0 is expanded, 1 is seated.
+    property real sealAngle: 0.0      // Conical gradient angle in degrees.
+    property real bandOpacity: 0.0    // Band opacity, independent of radius progress.
     readonly property bool sealActive: phase === "sealing" || phase === "dismissing"
     readonly property real sealRad: maxRadius * (1.12 + (sealSeatFactor - 1.12) * sealProgress)
 
-    property real dialAngle: 0.0
-    // Clunk cluster drivers (all reset by sealAnim, all gate their own items).
-    property real kick: 0.0        // full-cover luminance kick envelope.
-    property real wavePhase: 0.0   // shockwave expansion 0 -> 1.
+    property real dialAngle: 0.0   // Dial rotation in degrees.
+    property real kick: 0.0        // Flash intensity across the cover in [0, 1].
+    property real wavePhase: 0.0   // Shockwave expansion from 0 to 1.
     property bool waveActive: false
-    property real boltDrive: 0.0   // bolt-throw master clock; bolts window it.
-    property real spinBlur: 0.0    // 1 while the dial whirs, eased to 0 at the catch.
+    property real boltDrive: 0.0   // Shared bolt progress; each bolt uses a different interval.
+    property real spinBlur: 0.0    // Blur strength: 1 during rotation, 0 at rest.
 
     SequentialAnimation {
         id: sealAnim
@@ -174,21 +287,15 @@ Item {
         PropertyAction { target: root; property: "bandOpacity"; value: 0.0 }
         PropertyAction { target: root; property: "spinBlur"; value: root.calm ? 0.0 : 1.0 }
         ParallelAnimation {
-            // Genesis: the band fades in fast at its forming radius...
             NumberAnimation { target: root; property: "bandOpacity"; to: 1.0; duration: root.calm ? 220 : Math.round(150 * root.successPace); easing.type: Easing.OutSine }
-            // ...then presses inward, accelerating into the seat.
             NumberAnimation { target: root; property: "sealProgress"; to: 1.0; duration: root.calm ? 0 : Math.round(490 * root.successPace); easing.type: Easing.InCubic }
-            // 360 + 14: settle just past a full turn to a fixed resting angle.
+            // 360 + 14 settles just past one turn at a fixed resting angle.
             NumberAnimation { target: root; property: "sealAngle"; to: 374.0; duration: root.calm ? 0 : Math.round(490 * root.successPace); easing.type: Easing.OutExpo }
             SequentialAnimation {
-                // Spin down to just short of rest...
                 NumberAnimation { target: root; property: "dialAngle"; to: -30.0; duration: root.calm ? 0 : Math.round(430 * root.successPace); easing.type: Easing.OutQuart }
-                // ...the strike: visible velocity through zero...
                 NumberAnimation { target: root; property: "dialAngle"; to: 8.0; duration: root.calm ? 0 : Math.round(60 * root.successPace); easing.type: Easing.Linear }
-                // ...and the catch, with the clunk cluster fired on this frame.
                 ParallelAnimation {
                     NumberAnimation { target: root; property: "dialAngle"; to: 0.0; duration: root.calm ? 0 : Math.round(140 * root.successPace); easing.type: Easing.OutBack; easing.overshoot: 1.8 }
-                    // The blur resolves into crisp ticks as the dial seats.
                     NumberAnimation { target: root; property: "spinBlur"; to: 0.0; duration: root.calm ? 0 : Math.round(170 * root.successPace); easing.type: Easing.OutCubic }
                     SequentialAnimation {
                         PropertyAction { target: root; property: "waveActive"; value: true }
@@ -200,22 +307,21 @@ Item {
                         NumberAnimation { target: root; property: "kick"; to: 0.0; duration: root.calm ? 0 : Math.round(320 * root.successPace); easing.type: Easing.OutCubic }
                     }
                     NumberAnimation { target: root; property: "boltDrive"; to: 1.0; duration: root.calm ? 0 : Math.round(480 * root.successPace) }
-                    // The verdict lands with the clunk, not before it.
+                    // Apply the verdict color when the dial reaches its stop.
                     NumberAnimation { target: root; property: "verdict"; to: 1.0; duration: root.calm ? 240 : Math.round(200 * root.successPace); easing.type: Easing.OutCubic }
                 }
             }
             SequentialAnimation {
-                // Preserve the outro timing, but hold the seated seal still.
+                // Keep the success hold while reduced motion holds the seal still.
                 PauseAnimation { duration: root.calm ? 250 : Math.round(1460 * root.successPace) }
                 ScriptAction { script: { if (root.phase === "sealing") root.phase = "dismissing" } }
             }
         }
-        // Guard: if the hold branch ever mistimes, the cover still dismisses.
+        // Dismiss if the hold branch misses completion.
         ScriptAction { script: { if (root.phase === "sealing") root.phase = "dismissing" } }
     }
 
-    // --- Fracture state (driven by breakSeal) -------------------------------
-    property real fractureProgress: 1.0   // 1 = idle/hidden; animates 0 -> 1.
+    property real fractureProgress: 1.0   // Progress from 0 to 1; 1 hides fracture effects.
     ParallelAnimation {
         id: fractureAnim
         onFinished: root.fracturing = false
@@ -243,10 +349,8 @@ Item {
         }
     }
 
-    // The cover owns input while it is up: it swallows clicks and the wheel so
-    // nothing behind it reacts, and it stands in for the title bar, because the
-    // frameless window can only be dragged from a MouseArea that calls
-    // WindowVM.startWindowDrag(). Dragging stops once the cover is dismissing.
+    // Consume clicks and wheel input. Permit WindowVM dragging while the normal
+    // title strip is covered; disable interception during dismissal.
     MouseArea {
         anchors.fill: parent
         enabled: root.visible && root.phase !== "dismissing"
@@ -259,11 +363,6 @@ Item {
                 WindowVM.startWindowDrag();
         }
         onWheel: function(wheel) { wheel.accepted = true }
-    }
-
-    Rectangle {
-        anchors.fill: parent
-        color: Qt.rgba(Theme.bgDeep.r, Theme.bgDeep.g, Theme.bgDeep.b, root.isDark ? 1.0 : 0.92)
     }
 
     Shape {
@@ -304,7 +403,7 @@ Item {
         opacity: Math.sin(Math.min(1.0, root.fractureProgress / 0.45) * Math.PI) * (root.isDark ? 0.28 : 0.14)
     }
 
-    // The sonar core, centred on the exact pixel the password field occupies.
+    // Center the animated rings on the password field.
     Item {
         id: spinner
         anchors.centerIn: parent
@@ -313,16 +412,15 @@ Item {
 
         readonly property real tau: 2.0 * Math.PI
 
-        // Four free-running clocks. All stop under reduce-motion or a hidden
-        // cover, so an idle overlay repaints nothing.
-        property real t: 0.0          // Ring cadence.
+        // Stop clocks for reduced motion or a hidden cover to avoid idle repaints.
+        property real t: 0.0
         NumberAnimation on t {
             running: root.visible && !root.calm
             from: 0.0; to: 1.0
             duration: 2600
             loops: Animation.Infinite
         }
-        property real breath: 0.0     // Core and halo swell.
+        property real breath: 0.0
         NumberAnimation on breath {
             running: root.visible && !root.calm
             from: 0.0; to: 1.0
@@ -331,7 +429,7 @@ Item {
         }
         readonly property real swell: 0.5 - 0.5 * Math.cos(breath * tau)
         readonly property real swellB: 0.5 - 0.5 * Math.cos((breath + 0.15) * tau)
-        property real drift: 0.0      // Aurora wander.
+        property real drift: 0.0
         NumberAnimation on drift {
             running: root.visible && !root.calm
             from: 0.0; to: 1.0
@@ -339,7 +437,7 @@ Item {
             loops: Animation.Infinite
         }
 
-        property real sweep: 0.0      // Conic hue rotation; runs only while rings are up.
+        property real sweep: 0.0      // Hue angle in degrees; runs only while rings are visible.
         NumberAnimation on sweep {
             running: root.visible && !root.calm && root.ringsLevel > 0.001
             from: 0.0; to: 360.0
@@ -354,7 +452,7 @@ Item {
             width: Theme.px(150); height: width
             antialiasing: true
             preferredRendererType: Shape.CurveRenderer
-            // Lagged swell (swellB) so the halo breathes a beat behind the core.
+            // Offset swellB to delay the halo relative to the core.
             opacity: (0.28 + 0.10 * spinner.swellB) * root.coreLevel
             ShapePath {
                 strokeWidth: -1
@@ -495,18 +593,15 @@ Item {
             }
         }
 
-        // Crisp breathing core - the bright point the ripples emanate from.
         Rectangle {
             anchors.centerIn: parent
             visible: root.coreLevel > 0.001
             width: Theme.px(7); height: width; radius: width / 2
             color: root.vmix(Theme.accentBright, Theme.verdictSealFlash, root.vGreen * 0.7)
             opacity: root.coreLevel
-            // The pop rides the clunk's kick on top of the idle breathing.
             scale: 0.92 + 0.18 * spinner.swell + 0.60 * root.kick
         }
 
-        // The conic band (the seal's face).
         Shape {
             id: seal
             visible: root.sealActive
@@ -629,7 +724,7 @@ Item {
             readonly property real waveR: root.sealRad + (root.maxRadius * 2.1 - root.sealRad) * root.wavePhase
             readonly property color wc: Theme.verdictSealFlash
             opacity: Math.min(1.0, (1.0 - root.wavePhase) * 0.6 * root.payoffMul)
-            // Wide low-alpha halo first (paint order), crisp front on top.
+            // Paint the broad halo before the sharp foreground.
             ShapePath {
                 strokeColor: Qt.rgba(shockwave.wc.r, shockwave.wc.g, shockwave.wc.b, 0.16)
                 strokeWidth: Math.max(1.0, Theme.pxf(12.0 - 7.5 * root.wavePhase))
@@ -691,7 +786,6 @@ Item {
                 opacity: (fp < 0.12 ? fp / 0.12 : Math.pow((1.0 - fp) / 0.88, 1.15))
                 antialiasing: true
                 preferredRendererType: Shape.CurveRenderer
-                // Rotational shear per arc - the break twists as it flies.
                 rotation: [14, -16, 11][index] * flightP
                 transform: Translate {
                     x: Math.cos(frag.midAng) * Theme.pxf(52) * frag.flightP
@@ -699,7 +793,7 @@ Item {
                 }
                 ShapePath {
                     strokeColor: [Theme.verdictBreak, root.hueMagenta, Theme.verdictBreakSoft][index]
-                    // Early flash: thick for the first ~15%, then thins away.
+                    // Use a thick stroke for the first 15% of progress, then taper.
                     strokeWidth: Math.max(1.0, Theme.pxf(4.2) * (1.0 - 0.6 * frag.fp)
                                                + Theme.pxf(2.6) * Math.max(0.0, 1.0 - frag.fp / 0.15))
                     fillColor: "transparent"
@@ -738,8 +832,11 @@ Item {
         }
     }
 
-    // Hold the last non-empty caption so the text stays readable while the block
-    // fades out, instead of blanking on the frame the caption is cleared.
+    /*!
+     * Last non-empty caption. Retained while the caption fades out.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property string lastCaption: ""
     onCaptionChanged: if (caption.length > 0) lastCaption = caption
 
@@ -754,7 +851,7 @@ Item {
         visible: opacity > 0.001
         Behavior on opacity { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
 
-        // Trailing dots are stripped: the animated ellipsis below supplies them.
+        // Remove trailing dots and whitespace; the animated ellipsis supplies the dots.
         readonly property string baseText: root.lastCaption.replace(/[.\s]+$/, "")
         property int dots: 0
         Timer {
