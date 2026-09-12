@@ -1,22 +1,62 @@
 import QtQuick
 import QtQuick.Effects
 
-// Press feedback: a circle that grows from the press point and fades out. Put
-// one inside a control's background item and call trigger(x, y) on press.
+/*!
+ * \qmltype RippleEffect
+ * \inqmlmodule seal
+ * \brief Animate a clipped ripple from a control press point.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * Place the item inside a control background and call \c trigger with local coordinates.
+ * A new trigger restarts the single ripple. The ripple expands over 420 ms and starts
+ * fading after 80 ms. Positive corner radii use a rounded mask; other values use a clip.
+ */
 Item {
     id: ripple
     anchors.fill: parent
-    clip: !ripple._useRoundedMask   // Square hosts clip; rounded ones mask instead.
+    clip: !ripple._useRoundedMask   // Square hosts clip; rounded hosts use a mask.
 
+    /*!
+     * Color and initial alpha of the ripple. Fading multiplies this alpha.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property color baseColor: Theme.rippleColor
+    /*!
+     * Horizontal center in local logical pixels. Updated by each trigger.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property real cx: 0
+    /*!
+     * Vertical center in local logical pixels. Updated by each trigger.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property real cy: 0
-    property real cornerRadius: 0   // > 0 rounds the ripple to match the host's corners.
+    /*!
+     * Mask radius in logical pixels. Set to the host radius; zero uses a square clip.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property real cornerRadius: 0
     readonly property bool _useRoundedMask: cornerRadius > 0
-    // Diagonal, so the circle covers the whole item from any press point.
+    /*!
+     * Final radius in logical pixels. The default diagonal covers any in-bounds press.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property real maxRadius: Math.sqrt(width * width + height * height)
 
-    // Resets and restarts animation from the press point.
+    /*!
+     * \brief Restart the ripple at a press point.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * \a pressX and \a pressY are local logical-pixel coordinates. They are not clamped.
+     * Reset scale and opacity before restarting the expansion and fade.
+     */
     function trigger(pressX, pressY) {
         cx = pressX; cy = pressY;
         circle.scale = 0; circle.opacity = 1;
@@ -34,7 +74,6 @@ Item {
             autoPaddingEnabled: false
         }
 
-        // Circle centered on (cx, cy), scaled from 0 to 1.
         Rectangle {
             id: circle
             x: ripple.cx - ripple.maxRadius
@@ -48,7 +87,7 @@ Item {
         }
     }
 
-    // Mask source for the MultiEffect above. Never drawn itself.
+    // Use as a mask source only; do not draw directly.
     Rectangle {
         id: roundedMask
         anchors.fill: parent
@@ -59,7 +98,7 @@ Item {
         antialiasing: true
     }
 
-    // Fade starts 80ms after scale for a brief fully-visible moment.
+    // Delay fading by 80 ms to keep the initial press visible.
     ParallelAnimation {
         id: anim
         NumberAnimation { target: circle; property: "scale"; to: 1.0; duration: 420; easing.type: Easing.OutCubic }
