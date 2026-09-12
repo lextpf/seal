@@ -3,18 +3,55 @@ import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
 
-// Generic yes/no dialog: set title, message, tone and titleIcon, then act on
-// confirmed(). Main.qml also reuses this shell for the error and info popups by
-// replacing contentItem outright, so edits to the default content below do not
-// reach those two instances.
+/*!
+ * \qmltype ConfirmDialog
+ * \inqmlmodule seal
+ * \brief Present a modal confirmation with a shared dialog background.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * The default content provides Yes and No actions. No, Escape, and outside clicks
+ * close the popup without confirmation. Yes emits \c confirmed() before closing.
+ *
+ * Main replaces \c contentItem for error and information popups. Those instances
+ * retain the background and transitions but supply their own content and actions.
+ */
 Popup {
     id: root
 
+    /*!
+     * Heading used by the default content.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property string title: "Confirm"
+    /*!
+     * Explanation below the heading. Long text wraps to the dialog width.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property string message: ""
-    property color tone: Theme.btnDeleteText  // Tints the icon, the header wash and the corner blob
+    /*!
+     * Accent for the title icon, header wash, and corner decoration.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property color tone: Theme.btnDeleteText
+    /*!
+     * SVG resource for the title icon in the default content.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property string titleIcon: Theme.iconTrash
 
+    /*!
+     * \brief Notify the caller that the Yes action was selected.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * Handlers run before the default action closes the popup. The caller performs
+     * the requested operation; this signal does not report its success.
+     */
     signal confirmed()
 
     modal: true
@@ -23,7 +60,6 @@ Popup {
     padding: 0
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
-    // Scale+fade entrance shared with AccountDialog and RekeyDialog.
     enter: Transition {
         ParallelAnimation {
             NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 175; easing.type: Easing.OutCubic }
@@ -97,7 +133,6 @@ Popup {
         }
     }
 
-    // Overlay dimming.
     Overlay.modal: Rectangle {
         color: Theme.bgOverlay
     }
@@ -105,7 +140,6 @@ Popup {
     contentItem: ColumnLayout {
         spacing: 0
 
-        // Title row: icon slot tinted with tone, then the title text.
         RowLayout {
             Layout.fillWidth: true
             Layout.topMargin: 24
@@ -157,10 +191,8 @@ Popup {
             Layout.rightMargin: 24
             spacing: Theme.spacingSmall
 
-            // Spacer: pushes both buttons to the right edge.
             Item { Layout.fillWidth: true }
 
-            // Ghost "No" button, low visual weight.
             Button {
                 id: noButton
                 text: "No"
@@ -204,7 +236,6 @@ Popup {
                 onPressed: noRipple.trigger(noHover.point.position.x, noHover.point.position.y)
             }
 
-            // Primary "Yes" button. The handler runs on confirmed(), before close().
             Button {
                 id: yesButton
                 text: "Yes"
