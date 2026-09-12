@@ -1,35 +1,46 @@
 import QtQuick
 
-// Living backdrop shared by AccountDialog / ConfirmDialog / RekeyDialog. The
-// host wraps this in a rounded MultiEffect mask, so all drift and ripples are
-// clipped to the dialog corners. Motion mirrors the main window's Blob field
-// (Main.qml) at a subtler, dialog-scale amplitude, off the shared Ambient clock.
+/*!
+ * \qmltype DialogBlobs
+ * \inqmlmodule seal
+ * \brief Draw shared decorative blobs and ripples behind dialog content.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * The item fills its parent at z = -1. The host supplies rounded clipping through
+ * MultiEffect. Motion follows \c Ambient.tidePhase when active and
+ * \c WindowVM.reduceMotion is false. Otherwise, blobs use their base positions
+ * and ripples hide.
+ */
 Item {
     id: root
     anchors.fill: parent
     z: -1
 
-    // Set by the host dialog to its open-state. While false (or reduce-motion),
-    // blobs sit at their base pose and ripples hide - and the bindings drop the
-    // Ambient.tidePhase dependency, so a closed dialog costs nothing per frame.
+    /*!
+     * When false, stop motion and remove the shared phase dependency.
+     * Bind to dialog visibility to avoid updates while hidden.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property bool active: true
 
     readonly property bool _moving: root.active && !WindowVM.reduceMotion
     readonly property real _tau: 2 * Math.PI
 
-    // A breathing, wandering blob. Base pose is (baseX, baseY, size); the shared
-    // tide clock drives a gentle sway/bob/scale/opacity swell around it.
+    // Base positions and motion amplitudes use logical pixels. Phase offsets use radians.
+    // Integer frequencies keep each loop continuous when the shared phase wraps.
     component DialogBlob: Rectangle {
         id: blob
         property real baseX: 0
         property real baseY: 0
-        property real swayAmp: Theme.px(6)   // horizontal drift (subtle)
-        property real bobAmp: Theme.px(8)    // vertical drift (subtle)
-        property real breatheAmp: 0.05       // scale swell, +/-5%
-        property int freqX: 1                // integer multipliers keep the loop seamless
+        property real swayAmp: Theme.px(6)
+        property real bobAmp: Theme.px(8)
+        property real breatheAmp: 0.05       // Scale varies by +/-5% around 1.
+        property int freqX: 1
         property int freqY: 1
         property int freqS: 1
-        property real phaseX: 0              // offsets spread the field out of sync
+        property real phaseX: 0              // Offsets separate the blob movements.
         property real phaseY: 0
         property real phaseS: 0
 
@@ -74,9 +85,8 @@ Item {
         phaseX: 3.3; phaseY: 1.4; phaseS: 4.0
     }
 
-    // Faint, occasional ripples. Phase derived from the shared clock (no extra
-    // animation object): ~16.7s period, the two rings staggered ~8s apart. Each
-    // ring re-seeds its centre/hue while invisible on wrap.
+    // Derive ripples from the shared clock: about 16.7 s per cycle, 8.3 s apart.
+    // Select a new center and hue while invisible at the phase wrap.
     Repeater {
         model: 2
         Rectangle {
@@ -92,7 +102,7 @@ Item {
             readonly property real maxD: Math.hypot(root.width, root.height)
 
             onPhChanged: {
-                if (ph < lastPh) {          // wrapped -> re-seed while invisible
+                if (ph < lastPh) {          // The ripple is invisible at the phase wrap.
                     cx = Math.random();
                     cy = Math.random();
                     hue = hues[Math.floor(Math.random() * 3)];
