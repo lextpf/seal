@@ -3,18 +3,44 @@ import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
 
-// Change-master-password dialog. Rekey re-encrypts every record and replaces the
-// vault file, so it is the only path that changes the master password. Unlike the
-// other dialogs this one calls the view model itself; Main.qml only reports the
-// outcome through onRekeyFinished.
+/*!
+ * \qmltype RekeyDialog
+ * \inqmlmodule seal
+ * \brief Collect the current and replacement master passwords.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * Validate field presence and confirmation before calling AppViewModel directly.
+ * C++ authenticates the current password and rotates the vault, folder profile,
+ * or both. Main reports the result through its \c onRekeyFinished handler.
+ *
+ * Password fields start empty and clear on close or submission. Clearing these
+ * fields does not guarantee that QML string storage is overwritten.
+ */
 Popup {
     id: root
 
-    property string errorMessage: ""  // Local field validation only; rekey failures go to Main.qml
+    /*!
+     * Local field-validation error. Empty text hides it; Main reports rekey failures.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property string errorMessage: ""
+    /*!
+     * Accent for the heading icon and dialog background.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property color shellTone: Theme.accent
 
-    // Runs on open, on close and after submit, so no typed password stays in the
-    // QML heap after the dialog is done with it.
+    /*!
+     * \brief Reset password entry and local validation feedback.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * Clear all three password fields and \c errorMessage. Used on open, close,
+     * and after submitting the passwords to C++.
+     */
     function clearFields() {
         currentField.text = "";
         newField.text = "";
@@ -22,8 +48,16 @@ Popup {
         errorMessage = "";
     }
 
-    // Checks presence and the confirmation match only. The current password is
-    // verified against the vault inside rekeyVault, not here.
+    /*!
+     * \brief Validate the fields and request master-password rotation.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * An empty current or replacement password, or a confirmation mismatch, sets
+     * \c errorMessage and keeps the popup open. Otherwise, pass the passwords to
+     * \c AppViewModel.rekeyVault(), clear the fields, and close without waiting
+     * for the result. Password whitespace is significant.
+     */
     function submit() {
         if (currentField.text.length === 0) {
             errorMessage = "Current password must not be empty.";
@@ -54,7 +88,6 @@ Popup {
     }
     onClosed: clearFields()
 
-    // Scale+fade entrance shared with AccountDialog and ConfirmDialog.
     enter: Transition {
         ParallelAnimation {
             NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 175; easing.type: Easing.OutCubic }
@@ -132,7 +165,6 @@ Popup {
         color: Theme.bgOverlay
     }
 
-    // Shared password field for the three inputs: same metrics, hover-to-reveal eye.
     component RekeyField: TextField {
         id: field
         Layout.fillWidth: true
@@ -209,8 +241,7 @@ Popup {
             }
         }
 
-        // The rekey covers the vault, the folder profile, or both, so the copy
-        // depends on folder protection and on whether a vault is open.
+        // Match the explanation to the vault and folder-profile state.
         Text {
             Layout.fillWidth: true
             Layout.topMargin: 8
