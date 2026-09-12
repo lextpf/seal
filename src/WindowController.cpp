@@ -127,9 +127,7 @@ void WindowController::toggleAlwaysOnTop()
 
 void WindowController::toggleCompact()
 {
-    // kCompactHeight / kNormalMinimumHeight are mirrored by the minimumHeight
-    // binding in qml/Main.qml, and kWorkAreaInset by its
-    // fitInitialWindowToScreen(). Keep both sides in step.
+    // keep compact/normal heights and work-area inset synchronized with qml/Main.qml.
     static constexpr int kCompactHeight = 272;
     static constexpr int kNormalMinimumHeight = 480;
     static constexpr int kDefaultNormalWidth = 1600;
@@ -147,8 +145,7 @@ void WindowController::toggleCompact()
 
     if (m_Compact)
     {
-        // Save the size so leaving compact can restore it. Only the height
-        // collapses; the chosen width is kept as it is.
+        // save both dimensions; compact mode changes only height.
         m_NormalWidth = win->width();
         m_NormalHeight = win->height();
         win->setMinimumHeight(kCompactHeight);
@@ -156,8 +153,7 @@ void WindowController::toggleCompact()
     }
     else
     {
-        // Restore the saved size, clamped to the current monitor's work area,
-        // which also re-fits a strip dragged onto a smaller monitor.
+        // clamp restored size to the current monitor after moving a compact window.
         win->setMinimumHeight(kNormalMinimumHeight);
         int restoreWidth = m_NormalWidth > 0 ? m_NormalWidth : kDefaultNormalWidth;
         int restoreHeight = m_NormalHeight > 0 ? m_NormalHeight : kDefaultNormalHeight;
