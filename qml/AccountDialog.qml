@@ -3,42 +3,104 @@ import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
 
-// Add and edit dialog for one credential. Edit mode never receives the stored
-// username or password: the secret fields start blank and blank means "keep the
-// stored value", so no secret can reach this view. The dialog only emits
-// accepted(); Main.qml calls AppViewModel to add or edit the record.
+/*!
+ * \qmltype AccountDialog
+ * \inqmlmodule seal
+ * \brief Collect a new credential or changes to an existing record.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * Set the service label and record index before opening. Username and password fields
+ * start empty. In edit mode, empty fields preserve their stored values in C++.
+ * Stored credentials never populate these fields.
+ *
+ * Main routes \c accepted() to AppViewModel. The site-binding preview is advisory;
+ * C++ validates the record change. Closing clears the fields, but does not guarantee
+ * that QML string storage is overwritten.
+ */
 Popup {
     id: root
 
+    /*!
+     * Heading text. Set it to match the selected add or edit mode.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property string dialogTitle: "Add Account"
-    property string initialService: ""  // Prefilled service, set by the edit path
-    property int editIndex: -1  // -1 = add mode, >= 0 = record index to edit
-    property bool _showValidation: false  // Set by a rejected submit; reddens fields and hint
+    /*!
+     * Non-secret service label copied into the field on open. Cleared on close.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property string initialService: ""
+    /*!
+     * Full record index for editing. A negative value selects add mode.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property int editIndex: -1
+    /*!
+     * Show required-field errors after a rejected submission. Reset on open.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property bool _showValidation: false
+    /*!
+     * Require both username and password in add mode.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property bool _requiresSecretFields: root.editIndex < 0
+    /*!
+     * Accent for the heading and background, selected by add or edit mode.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property color shellTone: root.editIndex >= 0 ? Theme.accent3 : Theme.accent2
+    /*!
+     * Theme icon for the selected add or edit mode.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property string shellIcon: root.editIndex >= 0 ? Theme.iconPen : Theme.iconPlus
+    /*!
+     * Instruction below the heading for the selected add or edit mode.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property string shellSubtitle: root.editIndex >= 0
                                          ? "Change service or enter replacement login details."
                                          : "Add a credential to your vault."
-    // Live browser-binding preview for the typed service, re-queried per keystroke.
-    // The literal is the nothing-typed-yet value and must keep the same keys as
-    // the map AppViewModel returns.
+    /*!
+     * Advisory site-binding result from AppViewModel, excluding the edited record.
+     * An empty service uses the same result keys with empty, zero, or false values.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property var _siteBindingPreview:
         serviceField.text.trim().length > 0
         ? AppViewModel.previewSiteBinding(serviceField.text, root.editIndex)
         : ({"bindable": false, "host": "", "duplicateCount": 0,
             "publicSuffix": false, "suggestion": ""})
 
+    /*!
+     * \brief Request an account change after local field validation.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * The \a service and \a username have surrounding whitespace removed.
+     * The \a password preserves whitespace. A negative \a editIdx adds a record;
+     * otherwise it is a full record index. Empty credentials preserve stored values
+     * in edit mode. Handlers run before the popup closes.
+     */
     signal accepted(string service, string username, string password, int editIdx)
 
     modal: true
     anchors.centerIn: parent
     width: 440
     padding: 0
-    // Esc and click-outside dismiss. Nothing reaches the vault until OK.
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
-    // Scale+fade entrance shared with ConfirmDialog and RekeyDialog.
     enter: Transition {
         ParallelAnimation {
             NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 175; easing.type: Easing.OutCubic }
@@ -112,7 +174,6 @@ Popup {
         }
     }
 
-    // Overlay dimming behind the modal.
     Overlay.modal: Rectangle {
         color: Theme.bgOverlay
     }
@@ -360,7 +421,6 @@ Popup {
             }
         }
 
-        // Validation hint, shown only after a rejected submit.
         Text {
             Layout.fillWidth: true
             Layout.leftMargin: 24
@@ -476,8 +536,15 @@ Popup {
 
     onOpened: serviceField.forceActiveFocus()
 
-    // Service and username are trimmed; the password is not, because leading and
-    // trailing spaces are part of the secret.
+    /*!
+     * \brief Validate the fields and submit an account change.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * Trim service and username; preserve password whitespace. An empty service,
+     * or an empty credential in add mode, enables validation hints and keeps the
+     * popup open. Otherwise, emit \c accepted() and close the popup.
+     */
     function submitForm() {
         var svc = serviceField.text.trim()
         var usr = usernameField.text.trim()
@@ -490,8 +557,14 @@ Popup {
         root.close()
     }
 
-    // Both secret fields start blank in edit mode as well: blank tells
-    // AppViewModel to keep the stored username or password.
+    /*!
+     * \brief Prepare empty credential fields for a new dialog session.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * Restore the service from \c initialService. Clear the username and password
+     * fields. Leave validation hints unchanged.
+     */
     function resetFields() {
         serviceField.text = initialService;
         usernameField.text = "";
@@ -500,7 +573,7 @@ Popup {
 
     onAboutToShow: { _showValidation = false; resetFields() }
 
-    // Drop the typed secrets on close so they do not linger in the QML heap.
+    // Clear fields after close so the next session cannot display submitted text.
     onClosed: {
         initialService = ""
         serviceField.text = ""
