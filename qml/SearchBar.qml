@@ -1,37 +1,75 @@
 import QtQuick
 import QtQuick.Controls
 
-// Service-name search field. It emits searchRequested, which Main assigns to
-// AppViewModel.searchFilter; the field itself never filters anything.
+/*!
+ * \qmltype SearchBar
+ * \inqmlmodule seal
+ * \brief Collect service-name search input with a short delay.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * Each text change restarts a 200 ms timer, including programmatic assignments
+ * and clearing. The timer emits the current text unchanged; the owner applies
+ * the filter through AppViewModel and supplies the resulting row count.
+ *
+ * Unloading a vault disables input and clears non-empty text. This schedules an
+ * empty filter request so the next vault does not inherit the previous search.
+ * Whitespace-only input hides the match count but is still emitted.
+ */
 TextField {
     id: root
+    /*!
+     * Number of visible rows after filtering; the owner supplies this value.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property int resultCount: 0
+    /*!
+     * Enable input; changing to false also clears non-empty search text.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property bool vaultLoaded: true
+    /*!
+     * True when input contains non-whitespace text; controls search feedback only.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property bool filtering: text.trim().length > 0
-    readonly property bool showResultLabel: width >= 520
+    /*!
+     * Reserve the match-count label only at widths of at least 320 logical pixels.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    readonly property bool showResultLabel: width >= 320
+    /*!
+     * Match count with singular wording for one row; the label is hidden without a filter.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property string resultLabel: resultCount === 1 ? "1 match" : resultCount + " matches"
-    readonly property real surfaceOpacity: !enabled ? (Theme.dark ? 0.32 : 0.16)
-                                                : activeFocus ? (Theme.dark ? 0.46 : 0.30)
-                                                : searchHover.hovered ? (Theme.dark ? 0.38 : 0.24)
-                                                : (Theme.dark ? 0.30 : 0.18)
 
+    /*!
+     * \brief Request a filter update after 200 ms without a text change.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * The \a text value is not trimmed. An empty value requests all rows.
+     */
     signal searchRequested(string text)
 
-    // Each keystroke restarts the timer, so a filter change reaches the view model
-    // 200 ms after typing stops rather than on every character.
+    // Restart the delay for every text change, including clearing and owner assignments.
     Timer {
         id: _debounce
         interval: 200
         onTriggered: root.searchRequested(root.text)
     }
     onTextChanged: _debounce.restart()
-    // Unloading the vault clears the text, which fires the debounce and drops the
-    // filter; a stale filter would otherwise hide records after the next load.
+    // Clear a stale search when the vault closes.
     onVaultLoadedChanged: if (!vaultLoaded && text.length > 0) text = ""
 
     enabled: vaultLoaded
-    placeholderText: vaultLoaded ? "Search service names"
-                                 : "Load a vault or add an account to enable search"
+    placeholderText: vaultLoaded ? "Search service names" : "Load a vault to search"
     placeholderTextColor: Theme.textPlaceholder
     color: Theme.textPrimary
     font.family: Theme.fontFamily
@@ -40,8 +78,7 @@ TextField {
     selectionColor: Theme.btnGradBot
     selectedTextColor: Theme.textOnAccent
 
-    // Padding reserves room for the search icon on the left and the match count plus
-    // clear button on the right, so typed text never runs under them.
+    // Reserve text padding for both overlays.
     leftPadding: searchIcon.width + 24
     rightPadding: 16
                 + (clearBtn.visible ? clearBtn.width + 16 : 0)
@@ -83,7 +120,7 @@ TextField {
         Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
     }
 
-    // Clear button. -6 margin expands hit area without enlarging the icon.
+    // Negative margin enlarges the hit area only.
     SvgIcon {
         id: clearBtn
         source: Theme.iconXmark
@@ -105,28 +142,26 @@ TextField {
             anchors.margins: -6
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            // Clear and re-focus, so a new search can start without a second click.
             onClicked: { root.text = ""; root.forceActiveFocus(); }
         }
     }
 
-    // Hover cursor also carries the enabled state: I-beam when the vault is loaded,
-    // plain arrow when the field is disabled.
     HoverHandler {
         id: searchHover
         cursorShape: root.enabled ? Qt.IBeamCursor : Qt.ArrowCursor
     }
 
-    // Border and glow follow one precedence: disabled, then focused, then hovered,
-    // then idle. Keep every branch in that order or states start fighting.
+    // State precedence: disabled, focused, hovered, idle.
     background: Rectangle {
-        readonly property color fillBase: root.activeFocus ? Theme.bgGridEnd : Theme.bgGrid
-
-        implicitHeight: 44
-        radius: Theme.radiusLarge
-        color: Qt.rgba(fillBase.r, fillBase.g, fillBase.b, root.surfaceOpacity)
+        implicitHeight: 40
+        radius: Theme.radiusMedium
+        color: !root.enabled ? Theme.bgInputGlass
+             : root.activeFocus ? Theme.bgInputGlassFocus
+             : searchHover.hovered ? Theme.bgInputGlassHover
+             : Theme.bgInputGlass
+        opacity: root.enabled ? 1.0 : 0.55
         border.width: Theme.strokeRegular
-        border.color: !root.enabled ? (Theme.dark ? Theme.borderMedium : Theme.borderSubtle)
+        border.color: !root.enabled ? Theme.borderSubtle
                     : root.activeFocus ? Theme.borderFocus
                     : searchHover.hovered ? (Theme.dark ? Theme.borderHighlight : Theme.borderMedium)
                     : (Theme.dark ? Theme.borderMedium : Theme.borderSubtle)
@@ -156,6 +191,7 @@ TextField {
         }
 
         Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
+        Behavior on opacity { NumberAnimation { duration: Theme.hoverDuration } }
         Behavior on border.color { ColorAnimation { duration: Theme.hoverDuration } }
     }
 }
