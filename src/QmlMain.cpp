@@ -23,9 +23,11 @@
 
 int RunQMLMode(int argc, char* argv[])
 {
-    // "Basic" is the non-native Quick Controls style, so Theme.qml's palette
-    // takes full effect regardless of the OS look and feel.
+    // Basic lets Theme.qml control the palette.
     QQuickStyle::setStyle("Basic");
+
+    // Request an alpha buffer before the platform window is created.
+    QQuickWindow::setDefaultAlphaBuffer(true);
 
     QGuiApplication app(argc, argv);
 
@@ -41,39 +43,23 @@ int RunQMLMode(int argc, char* argv[])
                                     "reason=remote_session_detected"}));
     }
 
-    // CredentialWorkspace is the Qt-free core (records, session, vault path);
-    // AsyncRunner and FillController are QObjects. All three are constructed
-    // before every ViewModel and outlive them, so the pointers borrowed from the
-    // workspace stay valid for the whole UI session: by VaultListModel through
-    // AppViewModel, and by FillController through TypeController::armFor.
+    // Construct owners before borrowers; reverse stack destruction preserves workspace pointers.
     seal::CredentialWorkspace workspace;
     seal::AsyncRunner async;
     seal::FillController fillEngine;
     seal::AppViewModel appViewModel(workspace, async);
-    // TypeController owns the auto-type surface (the "Fill" context property) and
-    // drives the borrowed fillEngine. appViewModel is both its status sink
-    // (IUiFeedback) and its password gate (IPasswordGate) for deferred arming.
+    // AppViewModel supplies both feedback and password gating.
     seal::TypeController fill(workspace, appViewModel, appViewModel, fillEngine, async);
     appViewModel.setFillControl(&fill);
-    // Bridge borrows fillEngine, which is declared earlier and therefore
-    // outlives it, and routes its status messages through appViewModel's
-    // IUiFeedback::setStatus so the shared footer updates.
+    // Bridge borrows fillEngine and reports status through AppViewModel.
     seal::BridgeViewModel bridge(&fillEngine);
-    // Zero-gesture staged auto-fill. An owned collaborator, not a context
-    // property: it polls the bridge's nav snapshot and auto-arms fillEngine on a
-    // unique host match. Borrows workspace, fillEngine and appViewModel, all
-    // declared earlier, so they outlive it.
+    // Staging borrows earlier owners and stays outside the QML context.
     seal::StagingController staging(workspace, fillEngine, appViewModel);
     seal::WindowController window;
-    // The embedded-CLI surface (the "Cli" context property). Declared last so it
-    // destructs first: it borrows workspace, appViewModel (as IUiFeedback +
-    // IPasswordGate), and fill (as IFillControl), all of which must outlive it.
+    // CLI dies before its borrowed workspace, feedback, password gate and fill controller.
     seal::CliPanelViewModel cli(workspace, appViewModel, appViewModel, fill);
     appViewModel.setCliPanel(&cli);
-    // Detach the borrowed seams when their owners are destroyed. fill and cli
-    // are declared after appViewModel, so they destruct first; nulling the
-    // pointers here keeps ~AppViewModel's cleanup() from dereferencing a freed
-    // TypeController or CliPanelViewModel.
+    // Detach borrowed pointers as their targets die before AppViewModel.
     QObject::connect(&fill,
                      &QObject::destroyed,
                      &appViewModel,
@@ -82,8 +68,7 @@ int RunQMLMode(int argc, char* argv[])
                      &QObject::destroyed,
                      &appViewModel,
                      [&appViewModel] { appViewModel.setCliPanel(nullptr); });
-    // The :qr builtin runs on AppViewModel's QR worker; its result routes back
-    // into the CLI transcript when the panel is in CLI mode.
+    // Route QR worker results to the active CLI panel.
     QObject::connect(&cli,
                      &seal::CliPanelViewModel::qrCaptureRequested,
                      &appViewModel,
@@ -93,9 +78,7 @@ int RunQMLMode(int argc, char* argv[])
                      &appViewModel,
                      [p = static_cast<seal::IUiFeedback*>(&appViewModel)](const QString& t)
                      { p->setStatus(t); });
-    // Staged auto-fill: highlight the auto-armed record and follow the
-    // Bridge.autoStageEnabled master switch. StagingController is not exposed to
-    // QML, so the toggle rides the Bridge context property.
+    // Bridge exposes the staging preference; staged arms update row highlighting.
     QObject::connect(&staging,
                      &seal::StagingController::autoArmedForRecord,
                      &appViewModel,
@@ -104,16 +87,13 @@ int RunQMLMode(int argc, char* argv[])
                      &seal::BridgeViewModel::autoStageEnabledChanged,
                      &staging,
                      [&staging, &bridge] { staging.setEnabled(bridge.autoStageEnabled()); });
-    // Route TypeController fill errors into the same error dialog as
-    // AppViewModel's vault errors, so QML keeps a single Connections target.
+    // Merge fill errors into the shared QML dialog channel.
     QObject::connect(&fill,
                      &seal::TypeController::errorOccurred,
                      &appViewModel,
                      &seal::AppViewModel::errorOccurred);
     QQmlApplicationEngine engine;
-    // Abort on QML construction failure (a Main.qml type error, for example)
-    // instead of leaving an empty window. QueuedConnection defers exit(1) until
-    // control returns to the event loop, so the engine finishes unwinding.
+    // Queue failure exit so QML construction can finish unwinding.
     QObject::connect(
         &engine,
         &QQmlApplicationEngine::objectCreationFailed,
