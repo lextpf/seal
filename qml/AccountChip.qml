@@ -2,22 +2,82 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// One account pill in the grid: brand icon or monogram, shortened service label,
-// and a warning marker when the record has no browser site binding. The chip is
-// view-only. It emits clicked and doubleClicked; AccountsGrid and Main.qml turn
-// those into AppViewModel calls.
+/*!
+ * \qmltype AccountChip
+ * \inqmlmodule seal
+ * \brief Display a credential label and emit selection gestures.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * The grid supplies non-secret model roles and the selection state.
+ * This control displays the service label, brand icon, and site-binding warning.
+ * It neither reads credentials nor starts a fill operation.
+ *
+ * Row and record indices belong to the current model snapshot. The owner must
+ * refresh them after a workspace mutation, including save-time deletion compaction.
+ */
 Item {
     id: root
 
-    required property int index               // Visual row in the filtered grid
-    required property string platform         // Cleartext service name as stored
-    required property string displayPlatform  // Chip label, subdomains and suffix removed
-    required property string brandIconPath    // qrc path for the resolved brand icon, "" if no match
-    required property string siteBinding      // Browser-binding host, "" when the label cannot bind
-    required property string maskedUsername   // Bullet mask; model-role parity, not rendered
-    required property string maskedPassword   // Bullet mask; model-role parity, not rendered
-    required property int recordIndex         // Record index, stable across filter and sort
-    required property bool selected           // Driven by the grid's selectedRow binding
+    /*!
+     * Zero-based row in the filtered, sorted grid; changes when the model refreshes.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    required property int index
+    /*!
+     * Full stored service label, used for the tooltip and fallback brand color.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    required property string platform
+    /*!
+     * Short display label; an empty value uses a question mark in the fallback icon.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    required property string displayPlatform
+    /*!
+     * Resource path; an empty value selects a character as the fallback icon.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    required property string brandIconPath
+    /*!
+     * Validated browser host. An empty value shows the unbound-record warning.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    required property string siteBinding
+    /*!
+     * Fixed username mask from the model; accepted for role parity and not displayed.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    required property string maskedUsername
+    /*!
+     * Fixed password mask from the model; accepted for role parity and not displayed.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    required property string maskedPassword
+    /*!
+     * Backing record index. Filtering and sorting preserve it; workspace mutations may not.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    required property int recordIndex
+    /*!
+     * Owner-supplied selection state; gestures do not change it locally.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    required property bool selected
+    /*!
+     * Pointer is inside the pill's hit area, which excludes the hover-lift headroom.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property bool isHovered: mouseArea.containsMouse
 
     readonly property string brandSlug: Theme.brandSlugFromPath(root.brandIconPath)
@@ -27,18 +87,42 @@ Item {
                                        : Theme.lightBrandColor(root.rawBaseColor,
                                                                root.brandSlug)
     readonly property color contrastText: Theme.chipTextOn(root.baseColor)
+    /*!
+     * Pill height in logical pixels, excluding the two-pixel hover-lift headroom.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property int chipHeight: 36
+    /*!
+     * Reserved icon width and height in logical pixels.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property int iconFootprint: chipHeight - 12
+    /*!
+     * Maximum label width in logical pixels; longer labels elide on the right.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property int maxTextWidth: 200
 
+    /*!
+     * \brief Notify the owner of a left-button click inside the pill.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     signal clicked()
+    /*!
+     * \brief Notify the owner of a left-button double-click inside the pill.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     signal doubleClicked()
 
-    // Content-sized width: icon footprint + spacing + elided text + horizontal padding.
     implicitWidth: contentRow.implicitWidth + 24
-    implicitHeight: chipHeight + 2  // +2 for the hover-lift transform headroom
+    implicitHeight: chipHeight + 2  // Reserve headroom for the hover-lift transform.
 
-    // Hover lift uses Translate so the surrounding Flow does not reflow.
+    // Translate lifts the chip without reflowing its Flow.
     transform: Translate { y: root.isHovered && !root.selected ? -1 : 0 }
     Behavior on transform { NumberAnimation { duration: Theme.hoverDuration; easing.type: Easing.OutCubic } }
 
@@ -50,52 +134,20 @@ Item {
         height: root.chipHeight
         radius: height / 2
 
-        // Light mode uses higher alpha than dark so the brand tint stays visible
-        // without washing out the account name.
+        // Higher light-mode alpha keeps the brand tint visible.
         color: {
             var c = root.baseColor;
             if (Theme.dark) {
                 if (root.selected) return Qt.rgba(c.r, c.g, c.b, 0.80);
-                if (root.isHovered) return Qt.rgba(c.r, c.g, c.b, 0.22);
-                return Qt.rgba(c.r, c.g, c.b, 0.12);
+                if (root.isHovered) return Qt.rgba(c.r, c.g, c.b, 0.32);
+                return Qt.rgba(c.r, c.g, c.b, 0.22);
             }
             if (root.selected) return Qt.rgba(c.r, c.g, c.b, 0.88);
-            if (root.isHovered) return Qt.rgba(c.r, c.g, c.b, 0.27);
-            return Qt.rgba(c.r, c.g, c.b, 0.16);
-        }
-        border.width: Theme.strokeRegular
-        border.color: {
-            var c = root.baseColor;
-            if (Theme.dark) {
-                if (root.selected) return Qt.rgba(c.r, c.g, c.b, 1.0);
-                if (root.isHovered) return Qt.rgba(c.r, c.g, c.b, 0.55);
-                return Qt.rgba(c.r, c.g, c.b, 0.35);
-            }
-            if (root.selected) return c;
-            if (root.isHovered) return Qt.rgba(c.r, c.g, c.b, 0.60);
-            return Qt.rgba(c.r, c.g, c.b, 0.42);
+            if (root.isHovered) return Qt.rgba(c.r, c.g, c.b, 0.34);
+            return Qt.rgba(c.r, c.g, c.b, 0.24);
         }
 
         Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
-        Behavior on border.color { ColorAnimation { duration: Theme.hoverDuration } }
-
-        // Selection halo, drawn outside the pill and kept behind it with z: -1.
-        Rectangle {
-            anchors.fill: parent
-            anchors.margins: -3
-            radius: height / 2
-            color: "transparent"
-            border.width: Theme.strokeSelected
-            border.color: {
-                var c = root.baseColor;
-                return Theme.dark
-                    ? Qt.rgba(c.r, c.g, c.b, 0.35)
-                    : Qt.rgba(c.r, c.g, c.b, 0.42);
-            }
-            opacity: root.selected ? 1.0 : 0.0
-            Behavior on opacity { NumberAnimation { duration: 200 } }
-            z: -1
-        }
 
         RowLayout {
             id: contentRow
@@ -104,7 +156,6 @@ Item {
             anchors.rightMargin: 14
             spacing: 6
 
-            // Icon slot: SvgIcon when brandIconPath is non-empty, else monogram circle.
             Item {
                 Layout.preferredWidth: root.iconFootprint
                 Layout.preferredHeight: root.iconFootprint
@@ -120,7 +171,6 @@ Item {
                     Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
                 }
 
-                // Monogram fallback: first letter of the shortened display name.
                 Rectangle {
                     anchors.fill: parent
                     radius: width / 2
@@ -155,17 +205,15 @@ Item {
                 elide: Text.ElideRight
                 Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
 
-                // The label is shortened and may elide, so the tooltip carries the
-                // stored service name.
+                // Preserve the full stored label when display text is shortened.
                 ToolTip.visible: root.isHovered &&
                                  (truncated || root.displayPlatform !== root.platform)
                 ToolTip.text: root.platform
                 ToolTip.delay: 400
             }
 
-            // Warning marker for a record with no site binding. It can never release
-            // into a browser, by auto-fill or by Ctrl+Click, because the strict host
-            // gate refuses it. Only non-browser auto-type targets still fill.
+            // An unbound record cannot fill browser fields; non-browser auto-type remains
+            // available.
             Item {
                 visible: root.siteBinding === ""
                 Layout.preferredWidth: visible ? Theme.px(12) : 0
@@ -188,7 +236,7 @@ Item {
             }
         }
 
-        // Covers the pill, not the lift headroom, and is the source of isHovered.
+        // Exclude the lift headroom from the hit area.
         MouseArea {
             id: mouseArea
             anchors.fill: parent
