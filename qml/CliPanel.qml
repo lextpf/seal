@@ -2,13 +2,22 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// The terminal panel embedded in the GUI. It is a pure view: it renders the
-// transcript held by the `Cli` context property and hands each submitted line
-// to Cli.executeCliCommand. The panel adds nothing to the transcript itself and
-// the prompt it draws is a static label. Cli.executeCliCommand appends the echo
-// line, and seal::CliEchoLine (src/CliHandler.cpp) masks it: a fixed set of safe
-// commands echoes verbatim, anything else becomes `seal> [input hidden]`. That
-// masking, not this view, keeps a mistyped secret out of the visible output.
+/*!
+ * \qmltype CliPanel
+ * \inqmlmodule seal
+ * \brief Present the embedded command input and transcript.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * The Cli context property owns command dispatch, output, and command echo.
+ * CliEchoLine masks unrecognized input before its echo reaches the transcript.
+ * The input field itself remains ordinary visible text.
+ *
+ * Enter submits non-whitespace input unchanged to Cli, then clears the field.
+ * Dispatch can block the GUI or defer through the password gate. The view does
+ * not retain command history. Showing the panel focuses the input; transcript
+ * updates scroll to the end after text layout completes.
+ */
 Item {
     id: root
 
@@ -16,7 +25,6 @@ Item {
         anchors.fill: parent
         spacing: 0
 
-        // Transcript. Read-only, but selectable so output can be copied out.
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -46,9 +54,7 @@ Item {
                 TextArea {
                     id: outputArea
                     text: Cli.cliOutputText
-                    // Stay pinned to the newest line. callLater defers the jump
-                    // until the new text has been laid out, otherwise the scroll
-                    // range is still the previous one and the view lags a line.
+                    // Defer scrolling until text layout updates the scroll range.
                     onTextChanged: Qt.callLater(function() {
                         outputScroll.ScrollBar.vertical.position =
                                 1.0 - outputScroll.ScrollBar.vertical.size
@@ -63,13 +69,11 @@ Item {
                     wrapMode: Text.WrapAnywhere
                     textFormat: Text.PlainText
 
-                    // Empty background: the enclosing Rectangle is the surface.
                     background: Item {}
                 }
             }
         }
 
-        // Prompt and command entry.
         RowLayout {
             Layout.fillWidth: true
             Layout.topMargin: Theme.spacingSmall
@@ -112,6 +116,8 @@ Item {
                 Keys.onReturnPressed: submitCommand()
                 Keys.onEnterPressed: submitCommand()
 
+                // Ignore whitespace-only input. Keep the original text for dispatch and
+                // clear the field after the command handler returns.
                 function submitCommand() {
                     if (inputField.text.trim().length === 0)
                         return
