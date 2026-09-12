@@ -1,14 +1,26 @@
 import QtQuick
 import QtQuick.Controls
 
-// Browser connection chips for the status footer (instantiated by
-// StatusFooter.qml): one pulsing chip per entry in Bridge.browsers, plus a
-// warning sign on unsigned builds. Left-click runs a dry-run probe,
-// right-click toggles the bridge. The chips report link state only; the
-// install and uninstall actions live in HeaderBar.
+/*!
+ * \qmltype BridgeSettings
+ * \inqmlmodule seal
+ * \brief Display browser connections and provide bridge controls.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * The Bridge context property supplies browser rows and connection state.
+ * Left-click starts a diagnostic probe. Right-click toggles the entire bridge,
+ * including connections for other browsers. HeaderBar owns installation commands.
+ * Disabling the bridge overrides each browser's connected indicator.
+ */
 Row {
     id: root
-    property bool compact: false   // Narrow window: drop the labels, keep the dots.
+    /*!
+     * Hide browser and authentication-warning labels; retain icons and status dots.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property bool compact: false
     spacing: compact ? 6 : 8
 
     Repeater {
@@ -19,8 +31,7 @@ Row {
 
             required property var modelData
 
-            // Green only when the extension is connected and the bridge is
-            // enabled: a disabled bridge reads as down even with a live port.
+            // Disabled overrides a live connection.
             readonly property bool _on: Bridge.bridgeEnabled && modelData.connected
 
             implicitWidth: chipBg.implicitWidth
@@ -46,15 +57,19 @@ Row {
                         Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
                     }
                 }
-                border.width: Theme.strokeRegular
-                border.color: chipMouse.containsMouse
-                              ? Theme.borderHighlight
-                              : (chip._on ? Theme.statusChipStrongBorder : Theme.statusChipBorder)
-                Behavior on border.color { ColorAnimation { duration: Theme.hoverDuration } }
+                border.width: 0
 
                 scale: chipMouse.pressed ? 0.97 : 1.0
                 Behavior on scale {
                     NumberAnimation { duration: 160; easing.type: Easing.OutBack; easing.overshoot: 1.5 }
+                }
+
+                Rectangle {
+                    anchors.fill: parent
+                    radius: height / 2
+                    color: Theme.surfaceHighlight
+                    opacity: chipMouse.containsMouse ? 0.6 : 0.0
+                    Behavior on opacity { NumberAnimation { duration: Theme.hoverDuration } }
                 }
 
                 Row {
@@ -87,8 +102,6 @@ Row {
                             }
                         }
 
-                        // Concentric fading rings make the halo around the dot;
-                        // they breathe outward with `pulse`.
                         Repeater {
                             model: 7
                             Rectangle {
@@ -121,19 +134,22 @@ Row {
                         height: Theme.px(11)
                         anchors.verticalCenter: parent.verticalCenter
                         visible: chip.modelData.iconAvailable
-                        color: chip._on ? Theme.statusChipStrongText : Theme.statusChipText
+                        color: chipMouse.containsMouse
+                               ? Theme.textPrimary
+                               : (chip._on ? Theme.statusChipStrongText : Theme.statusChipText)
                         Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
                     }
 
-                    // Fallback for a browser with no bundled icon: a lettered
-                    // disc, so an untracked assets/ still gives every chip a mark.
                     Rectangle {
                         width: Theme.px(11)
                         height: Theme.px(11)
                         radius: width / 2
                         anchors.verticalCenter: parent.verticalCenter
                         visible: !chip.modelData.iconAvailable
-                        color: chip._on ? Theme.statusChipStrongText : Theme.statusChipText
+                        color: chipMouse.containsMouse
+                               ? Theme.textPrimary
+                               : (chip._on ? Theme.statusChipStrongText : Theme.statusChipText)
+                        Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
 
                         Text {
                             anchors.centerIn: parent
@@ -141,7 +157,7 @@ Row {
                             font.family: Theme.fontFamily
                             font.pixelSize: Theme.px(7)
                             font.bold: true
-                            color: chip._on ? Theme.statusChipStrongEnd : Theme.statusChipEnd
+                            color: Theme.bgDeep
                         }
                     }
 
@@ -151,7 +167,9 @@ Row {
                         font.family: Theme.fontFamily
                         font.pixelSize: Theme.fontSizeSmall
                         font.weight: Font.Medium
-                        color: chip._on ? Theme.statusChipStrongText : Theme.statusChipText
+                        color: chipMouse.containsMouse
+                               ? Theme.textPrimary
+                               : (chip._on ? Theme.statusChipStrongText : Theme.statusChipText)
                         anchors.verticalCenter: parent.verticalCenter
                         Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
                     }
@@ -185,11 +203,8 @@ Row {
         }
     }
 
-    // An unsigned build has an empty signer identity, so peer authentication
-    // (M6) degrades to accept-all and any local process can talk to the bridge.
-    // A bare amber sign rather than a chip, so it reads as a caution instead of
-    // another pill. A signed release hides it (Row skips invisible items) and
-    // shows no "signed" counterpart.
+    // Warn when peer-signer matching is unavailable. Process pinning and trusted
+    // browser ancestry checks still apply to unsigned development builds.
     Item {
         id: authWarn
         visible: !Bridge.bridgePeerAuthEnforced
