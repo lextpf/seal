@@ -2,32 +2,122 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Two-step dialog that arms folder protection. Step one shows the preflight plan
-// that AppViewModel computed; step two collects the folder password. The dialog
-// decides nothing: it emits confirmed(), and AppViewModel re-runs the preflight
-// and aborts the arming if the plan changed in the meantime.
+/*!
+ * \qmltype ProtectFolderDialog
+ * \inqmlmodule seal
+ * \brief Preview folder protection and collect its password when required.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * Main binds the plan to AppViewModel's preflight result. Confirmation requests
+ * arming; it does not encrypt files. C++ revalidates the plan and aborts if it changed.
+ * Opening shows the plan page and clears both password fields.
+ *
+ * \section1 Password modes
+ *
+ * \table
+ * \header
+ *     \li Mode
+ *     \li Password action
+ * \row
+ *     \li 0
+ *     \li Reuse the verified session password; skip password entry.
+ * \row
+ *     \li 1
+ *     \li Create a folder profile; require a non-empty password and matching confirmation.
+ * \row
+ *     \li 2
+ *     \li Unlock an existing folder profile; require a non-empty password.
+ * \endtable
+ */
 Popup {
     id: root
 
+    /*!
+     * Root path from the preflight result. Used only for display.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property string folderPath: ""
-    property var encryptFiles: []   // Preflight plan: plaintext files to be encrypted on exit
-    property var skippedFiles: []   // Files the plan leaves untouched
-    property double totalBytes: 0   // Combined size of encryptFiles, shown in the header
-    // 0 = reuse the verified session password and skip step two,
-    // 1 = create a profile, which needs the password twice,
-    // 2 = unlock the .seal-folder-profile already in the folder.
+    /*!
+     * Relative plaintext paths planned for encryption on exit. Supply a string list.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property var encryptFiles: []
+    /*!
+     * Display strings in the form \c {<relative path> - <skip reason token>}.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property var skippedFiles: []
+    /*!
+     * Total plaintext size in bytes for \c encryptFiles. Must be non-negative.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property double totalBytes: 0
+    /*!
+     * Preflight password mode, from 0 to 2. See the type's password-mode table.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property int passwordMode: 1
-    property bool passwordStep: false  // false = plan page, true = password page
+    /*!
+     * Show password entry when true, or the plan when false. Reset to false on open.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property bool passwordStep: false
 
+    /*!
+     * \brief Request folder arming with the selected password mode.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * The \a password and \a confirmation preserve whitespace. Both are empty in
+     * mode 0; \a confirmation is required only in mode 1. Fields are cleared before
+     * emission, but the argument strings still contain the submitted text. Handlers
+     * run before close. The caller revalidates the plan and applies the password mode.
+     */
     signal confirmed(string password, string confirmation)
 
-    // Runs on open, on close, on Back, and on confirm once the text is copied into
-    // locals, so a typed folder password never outlives the step that collected it.
+    /*!
+     * \brief Clear both password fields without changing the current page.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * Used on open, close, Back, and submission. This does not guarantee that QML
+     * string storage or strings copied for confirmation are overwritten.
+     */
     function clearPasswordFields() {
         folderPassword.text = "";
         folderPasswordConfirm.text = "";
     }
 
+    /*!
+     * \brief Format a byte count for the plan summary.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * The input \a bytes is a non-negative integer byte count. Return a label using
+     * the largest applicable unit, up to GiB. Each unit is 1024 times the previous one.
+     *
+     * \table
+     * \header
+     *     \li Unit
+     *     \li Decimal places
+     * \row
+     *     \li B
+     *     \li 0
+     * \row
+     *     \li KiB or MiB
+     *     \li 1
+     * \row
+     *     \li GiB
+     *     \li 2
+     * \endtable
+     */
     function formatBytes(bytes) {
         if (bytes < 1024)
             return bytes + " B";
@@ -140,7 +230,6 @@ Popup {
             }
         }
 
-        // ---- Plan page: these items hide once passwordStep turns true ----
 
         Text {
             Layout.fillWidth: true
@@ -286,7 +375,6 @@ Popup {
             }
         }
 
-        // ---- Password page: reached from the plan page when passwordMode is 1 or 2 ----
 
         ColumnLayout {
             Layout.fillWidth: true
@@ -413,7 +501,6 @@ Popup {
                 color: Theme.textMuted
             }
 
-            // Back on the password page returns to the plan; Cancel closes the dialog.
             Button {
                 id: cancelButton
                 text: root.passwordStep ? "Back" : "Cancel"
@@ -453,8 +540,7 @@ Popup {
                 }
             }
 
-            // One button, two jobs: on the plan page it advances to the password
-            // page, unless passwordMode is 0, which confirms straight away.
+            // Mode 0 confirms from the plan; other modes advance to password entry.
             Button {
                 id: armButton
                 text: root.passwordStep
