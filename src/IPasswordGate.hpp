@@ -5,38 +5,29 @@ namespace seal
 {
 /**
  * @class IPasswordGate
- * @brief Password gate seam: run a master-password-dependent action now or later.
- * @author Alex (https://github.com/lextpf)
+ * @brief Defer key-dependent commands through the AppViewModel password queue.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup ViewModel
  *
- * Collaborators that need the master key (TypeController, CliPanelViewModel)
- * pass their continuation through this seam instead of driving the password
- * dialog themselves. AppViewModel is the only implementation; it owns the
- * deferred-action queue and the dialog signal.
- *
- * Call every method on the GUI thread.
+ * @pre Call on the GUI thread.
  */
 class IPasswordGate
 {
 public:
     virtual ~IPasswordGate() = default;
     /**
-     * @brief Ensure the master password is available, else enqueue @p action.
+     * @fn bool ensurePassword(std::function<void()> action)
+     * @brief Queue an action and open the password prompt if the key is absent.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * The callable is copied into the implementation's queue, so a caller that
-     * carries secrets must keep them in locked memory behind a shared_ptr. A
-     * queued callable may never run: exit cleanup drops the whole queue, so the
-     * callable must be safe to destroy unrun.
+     * Copied callables must keep secrets in shared locked buffers and tolerate
+     * destruction without execution; exit cleanup drops the queue. A queued action
+     * must revalidate record indices and busy state because they can change during the prompt.
      *
-     * @param action Deferred callable, re-run once the password is set.
-     * @return true when the password is already set and the caller proceeds
-     *         inline; false when @p action was enqueued.
-     *
-     * @par Decision
-     * | Master password | Returns | @p action                                 |
-     * |-----------------|---------|-------------------------------------------|
-     * | already set     | `true`  | not enqueued; caller runs it inline       |
-     * | not set         | `false` | queued at the tail; the dialog is opened  |
+     * | Password | Return | Action                       |
+     * |----------|--------|------------------------------|
+     * | Set      | True   | Caller proceeds inline       |
+     * | Absent   | False  | Append to queue; open prompt |
      */
     virtual bool ensurePassword(std::function<void()> action) = 0;
 };
