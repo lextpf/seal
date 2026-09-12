@@ -11,58 +11,35 @@ namespace seal
 
 /**
  * @class TitleBarFilter
- * @brief Native event filter that extends the client area into the title bar.
+ * @brief extend Qt client rendering over native window chrome.
  * @author Alex (https://github.com/lextpf)
  * @ingroup WindowChrome
  *
- * Intercepts Win32 messages before Qt sees them, so QML can draw the whole
- * title bar while resize, snap and the DWM shadow stay native.
- *
- * @par Ownership
- * `InstallWindowChrome` is the only construction site: it heap-allocates one
- * instance, sets `m_Hwnd`, and installs it on `QCoreApplication`. Qt takes no
- * ownership and nothing removes or deletes the filter, so the instance lives for
- * the whole process. Qt routes every window's messages through it, so
- * `nativeEventFilter` re-checks `m_Hwnd` on entry.
- *
- * @note Qt runs the filter on the GUI thread. The class holds no lock and needs
- * none.
- *
- * @see InstallWindowChrome, ApplyWindowTheme
+ * InstallWindowChrome installs one process-lifetime filter. Qt borrows it and
+ * dispatches on the GUI thread; only the bound HWND is handled.
  */
 class TitleBarFilter : public QAbstractNativeEventFilter
 {
 public:
-    /// Native window handle the filter acts on. Messages for any other window
-    /// are ignored, and a null handle makes the filter inert.
+    /// borrowed target HWND; null makes the filter inert.
     HWND m_Hwnd = nullptr;
 
     /**
-     * @brief Handle the non-client Win32 messages that realize the custom frame.
+     * @brief handle non-client messages for the bound window.
      *
-     * Messages for any window other than `m_Hwnd` fall through to Qt untouched.
+     * | message       | action                             | result   |
+     * |---------------|------------------------------------|----------|
+     * | WM_NCCALCSIZE | claim client area                  | 0        |
+     * | WM_NCACTIVATE | suppress border activation repaint | TRUE     |
+     * | WM_NCPAINT    | suppress non-client paint          | 0        |
+     * | WM_NCHITTEST  | return resize/client zone          | HT* code |
      *
-     * @par Non-client message handling
-     * | Message       | Action                                  | `*result` |
-     * |---------------|-----------------------------------------|-----------|
-     * | WM_NCCALCSIZE | Claim the whole window as client area   | 0         |
-     * | WM_NCACTIVATE | Suppress active/inactive border repaint | TRUE      |
-     * | WM_NCPAINT    | Suppress non-client painting            | 0         |
-     * | WM_NCHITTEST  | Report resize-border / client zones     | HT* code  |
+     * WM_NCCALCSIZE handles both wParam forms. maximized windows use the monitor work
+     * area; failed monitor queries leave the proposed rectangle unchanged.
      *
-     * @par Client area
-     * WM_NCCALCSIZE writes 0 (no `WVR_*` bits) on both the `wParam == TRUE` and
-     * the `wParam == FALSE` path, so the client area becomes the proposed
-     * rectangle. While maximized it first rewrites that rectangle to the monitor
-     * work area, which keeps the frame off the taskbar. A failed
-     * `GetMonitorInfoW` leaves the rectangle untouched.
+     * resize bands use window DPI, falling back to 96. fx = SM_CXSIZEFRAME +
+     * SM_CXPADDEDBORDER; fy = SM_CYSIZEFRAME + SM_CXPADDEDBORDER. coordinates are screen pixels.
      *
-     * @par Resize bands
-     * When not maximized, WM_NCHITTEST measures the bands at the window's own
-     * DPI (`GetSystemMetricsForDpi`), so they stay correct across mixed-DPI
-     * monitors. Below, `fx` is `SM_CXSIZEFRAME + SM_CXPADDEDBORDER` and `fy` is
-     * `SM_CYSIZEFRAME + SM_CXPADDEDBORDER`; a `GetDpiForWindow` of 0 falls back
-     * to 96 DPI. Hit point and window rectangle are in screen coordinates.
      * @verbatim
      *                x < left+fx                     x >= right-fx
      *                +---------+---------------------+---------+
@@ -73,99 +50,52 @@ public:
      * y >= bottom-fy | BTMLEFT |       HTBOTTOM      | BTMRIGHT|
      *                +---------+---------------------+---------+
      * @endverbatim
-     * The top strip is tested before the bottom and both before the sides, so
-     * corners win over edges. While maximized every point is HTCLIENT. The filter
-     * answers every remaining point with HTCLIENT and still returns `true`, so
-     * Windows delivers the next press to Qt as an ordinary client-area mouse
-     * message. QML then starts the move through `WindowVM.startWindowDrag()`,
-     * which calls `QWindow::startSystemMove()`.
      *
-     * @warning HTCAPTION and HTMAXBUTTON are never reported, so the shell gives
-     * this window no caption double-click maximize, no right-click system menu
-     * and no Snap Layouts flyout. QML must supply those gestures itself.
+     * corners win over edges. maximized windows and all remaining points return
+     * HTCLIENT; QML must start dragging itself. HTCAPTION/HTMAXBUTTON are never
+     * returned, so native caption double-click, system menu and Snap Layouts are absent.
      *
-     * @param eventType Qt platform tag; only `"windows_generic_MSG"` is inspected.
-     * @param message   Points to a Win32 `MSG` owned by Qt, valid for this call only.
-     * @param result    Receives the message result; written only when the return
-     *                  value is `true`.
-     * @return `true` when the message was handled and @p result is authoritative.
+     * @param eventType only `windows_generic_MSG` is inspected.
+     * @param message borrowed MSG, valid for this call.
+     * @param result written only when returning true.
      */
     bool nativeEventFilter(const QByteArray& eventType, void* message, qintptr* result) override;
 };
 
 /**
- * @brief One-time setup of the frameless window: styles, filter, DWM frame,
- * rounded corners.
+ * @brief install chrome for the first window passed in the process.
  * @ingroup WindowChrome
  *
- * Runs at most once per process: a function-local `static` flag latches on the
- * first call, so a later call is a no-op even when @p hwnd names a different
- * window. Only the first window passed here gets the custom chrome.
+ * clears class/window icons and native caption/edge styles; retains native resize,
+ * snap and min/max behavior. installs the process-lifetime filter, extends DWM
+ * over the client area, disables the opaque backdrop, requests rounded corners
+ * and recalculates the frame. class icon changes affect other windows of that class.
  *
- * @par What the first call does
- * - Clears the class icons with `SetClassLongPtr` (`GCLP_HICON` and
- *   `GCLP_HICONSM`), which affects every window Qt creates from that class, then
- *   clears this window's own small and large icons with WM_SETICON.
- * - Clears `WS_CAPTION` and the `WS_EX_*` edge styles; forces on
- *   `WS_THICKFRAME`, `WS_SYSMENU`, `WS_MINIMIZEBOX` and `WS_MAXIMIZEBOX` so
- *   resize, snap, minimize and maximize stay native.
- * - Installs a `TitleBarFilter` bound to @p hwnd.
- * - Extends the DWM frame over the whole client area (`MARGINS{-1,-1,-1,-1}`)
- *   so the drop shadow survives.
- * - Sets DWMWA_SYSTEMBACKDROP_TYPE (38) to DWMSBT_NONE (1), so accent and glass
- *   do not bleed through the rounded-corner clip.
- * - Sets DWMWA_WINDOW_CORNER_PREFERENCE (33) to DWMWCP_ROUND (2).
- * - Forces `SWP_FRAMECHANGED` so WM_NCCALCSIZE re-runs through the new filter.
+ * Win32/DWM failures are ignored and still latch the one-time guard.
  *
- * @pre A `QCoreApplication` instance exists; the function dereferences
- *      `QCoreApplication::instance()` without a null check. Call it on the GUI
- *      thread with a valid window handle.
- *
- * @note Every Win32 and DWM result is discarded, so an invalid handle fails
- * silently and still latches the guard.
- * @note Nothing removes or deletes the filter; it lives for the process
- * lifetime on purpose.
- * @note Theme colors are not applied here. Call `ApplyWindowTheme` for those.
- *
- * @param hwnd Native window handle for the application's main window.
+ * @pre a QCoreApplication exists; call on the GUI thread with a valid HWND.
+ * @see ApplyWindowTheme
  */
 void InstallWindowChrome(HWND hwnd);
 
 /**
- * @brief Apply DWM dark or light window theme attributes.
+ * @brief set DWM colors for shell previews.
  * @ingroup WindowChrome
  *
- * Writes four attributes in a fixed order: immersive dark mode, caption color,
- * text color, border color. The border goes last, because writing a caption
- * attribute makes Windows recompute the frame color and would undo an earlier
- * border write.
+ * write dark mode, caption, text, then border. caption attributes recompute frame
+ * color, so the border override must be last. QML Theme colors are independent.
  *
- * @par DWM theme colors (COLORREF built with RGB, shown as #RRGGBB)
- * | Element | DWM attribute (id)       | Dark    | Light   |
+ * | element | DWM attribute            | dark    | light   |
  * |---------|--------------------------|---------|---------|
- * | Caption | DWMWA_CAPTION_COLOR (35) | #070810 | #f8f6f2 |
- * | Text    | DWMWA_TEXT_COLOR (36)    | #e0e6f4 | #1e1a12 |
- * | Border  | DWMWA_BORDER_COLOR (34)  | none    | none    |
+ * | caption | DWMWA_CAPTION_COLOR (35) | #070810 | #f8f6f2 |
+ * | text    | DWMWA_TEXT_COLOR (36)    | #e0e6f4 | #1e1a12 |
+ * | border  | DWMWA_BORDER_COLOR (34)  | none    | none    |
  *
- * The border is DWMWA_COLOR_NONE (0xFFFFFFFE) in both themes, which drops the
- * 1px accent stroke; DWMWA_USE_IMMERSIVE_DARK_MODE (20) follows @p dark.
+ * DWMWA_COLOR_NONE (0xFFFFFFFE) removes the accent border. failures are ignored:
+ * attribute 20 needs windows 10 build 18985; color attributes need windows 11
+ * build 22000. older dark-mode attribute 19 is not attempted.
  *
- * @par Where the colors show
- * `InstallWindowChrome` removes `WS_CAPTION` and `TitleBarFilter` suppresses
- * non-client painting, so these colors reach only the surfaces the shell still
- * draws itself: taskbar thumbnails and alt-tab previews. They are literals here,
- * not read from the QML `Theme` singleton, so the two can drift apart.
- *
- * @note Every `DwmSetWindowAttribute` result is discarded. Attribute 20
- * (immersive dark mode) is honoured from Windows 10 build 18985 on; builds 17763
- * to 18362 used id 19, so those systems apply nothing at all. Attributes 34, 35
- * and 36 need Windows 11 build 22000 or newer. Every call returns normally on
- * every version.
- * @note This function does not install the custom chrome. Callers that need
- * both use `WindowController::updateWindowTheme`.
- *
- * @param hwnd Native window handle.
- * @param dark `true` for dark theme, `false` for light.
+ * @note does not install chrome; `WindowController::updateWindowTheme()` does both.
  */
 void ApplyWindowTheme(HWND hwnd, bool dark);
 
