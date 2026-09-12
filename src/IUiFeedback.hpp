@@ -5,39 +5,30 @@ namespace seal
 {
 /**
  * @class IUiFeedback
- * @brief App-shell status sink: the single owner of status/loading/busy/countdown UI state.
- * @author Alex (https://github.com/lextpf)
+ * @brief Write non-secret application status through AppViewModel.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup ViewModel
  *
- * Collaborators without a view of their own (TypeController, CliPanelViewModel,
- * StagingController) write their user-visible state through this seam instead
- * of holding a reference to the hub ViewModel. TypeController and
- * StagingController also read isBusy() through it, to refuse an arm while
- * another operation runs.
- *
- * AppViewModel is the only implementation. The setters drive five of its
- * Q_PROPERTY values (statusText, isLoading, loadingCaption, isBusy,
- * countdownText) and emit their change signals. BridgeViewModel does not take
- * this seam: it emits its own `statusMessage` signal, which RunQMLMode connects
- * to setStatus().
- *
- * @par Threading
- * Call every method on the GUI thread. Each setter is idempotent: setting the
- * value the sink already holds emits nothing.
+ * Call on the GUI thread. Setters emit change signals only when values change.
  */
 class IUiFeedback
 {
 public:
     virtual ~IUiFeedback() = default;
-    /// @brief Replace the status-bar text.
     virtual void setStatus(const QString& text) = 0;
-    /// @brief Show/hide the loading cover; @p caption labels the spinner (cleared when off).
+    /**
+     * @fn void setLoading(bool on, const QString& caption = {})
+     * @brief Caption is cleared when the loading cover is off.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     virtual void setLoading(bool on, const QString& caption = {}) = 0;
-    /// @brief Set the background-busy flag that drives the busy indicator.
     virtual void setBusy(bool busy) = 0;
-    /// @brief Whether a background operation is currently in progress.
     virtual bool isBusy() const = 0;
-    /// @brief Set the auto-fill countdown text (empty string clears it).
+    /**
+     * @fn void setCountdown(const QString& text)
+     * @brief An empty string clears the countdown.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     virtual void setCountdown(const QString& text) = 0;
 };
 }  // namespace seal
