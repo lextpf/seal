@@ -1,22 +1,39 @@
 pragma Singleton
 import QtQuick
 
-// The shared clock for decorative motion. Blobs, motes and dialog ripples bind
-// to these phases instead of running their own animations, so the whole window
-// stays in step and the drifting field costs two running animations instead of
-// one per item. Singleton
-// status needs both the pragma above and QT_QML_SINGLETON_TYPE TRUE on
-// qml/Ambient.qml in CMakeLists.txt.
+/*!
+ * \qmltype Ambient
+ * \inqmlmodule seal
+ * \brief Supply shared animation phases for decorative motion.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * Bind decorative items to these phases to share two animation clocks. Main controls
+ * \c awake when the window visibility changes. Consumers must handle reduced motion.
+ * Singleton registration requires \c QT_QML_SINGLETON_TYPE in CMakeLists.txt.
+ */
 QtObject {
     id: root
 
-    property real tidePhase: 0   // Main clock: 0 -> 2*PI every 50 s.
+    /*!
+     * Phase in radians. Advances from 0 to 2 * pi every 50 seconds while awake.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property real tidePhase: 0
 
-    property real driftPhase: 0  // Second, out-of-step clock: 0 -> 2*PI every 40 s.
+    /*!
+     * Phase in radians. Advances from 0 to 2 * pi every 40 seconds while awake.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property real driftPhase: 0
 
-    // Main.qml binds this to window visibility and the loading overlay. False
-    // stops both animations, so a hidden, minimised or covered window renders
-    // no decorative frames and every bound item freezes at its current pose.
+    /*!
+     * When false, stop both clocks. Main disables motion when hidden or minimized.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property bool awake: true
 
     property NumberAnimation _tide: NumberAnimation {
