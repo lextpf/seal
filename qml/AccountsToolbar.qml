@@ -2,16 +2,37 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Header strip of the accounts grid: record count on the left, sort control on the
-// right. AccountsGrid owns it and supplies accountCount. Sort order is view state:
-// the dropdown writes Theme.sortMode, which is persisted, and Main binds that to the
-// view model. No view here touches the model.
+/*!
+ * \qmltype AccountsToolbar
+ * \inqmlmodule seal
+ * \brief Show the visible account count and choose the row order.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * A sort choice writes the theme's sort mode. Main applies it to AppViewModel.
+ * The owner supplies the count after filtering. Compact mode keeps the count
+ * visible and hides the sort menu.
+ */
 Rectangle {
     id: root
+    /*!
+     * Number of visible rows after filtering; zero is displayed explicitly.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property int accountCount: 0
+    /*!
+     * Hide the sort control while retaining the account count.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property bool isCompact: false
 
-    // Index order matches the C++ sort modes: 0 A-Z, 1 Z-A, 2 grouped by brand.
+    /*!
+     * Labels indexed by VaultListModel::SortMode: 0 is A-Z, 1 is Z-A, and 2 groups brands.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property var sortLabels: ["A-Z", "Z-A", "Grouped by brand"]
 
     implicitHeight: 32
@@ -33,8 +54,7 @@ Rectangle {
         color: Theme.borderSubtle
     }
 
-    // Small label-plus-chevron dropdown. It reports the chosen index and never stores
-    // it, so the current selection stays a binding on whatever owns the value.
+    // The owner binds selection; this control only emits changes.
     component DropdownButton: Item {
         id: ddRoot
         property var labels: []
@@ -158,7 +178,8 @@ Rectangle {
             font.pixelSize: Theme.fontSizeSmall
             font.weight: Font.DemiBold
             font.letterSpacing: 1.0
-            color: Theme.textMuted
+            // Use stronger light-mode text over the translucent background.
+            color: Theme.dark ? Theme.textMuted : Theme.textSecondary
         }
 
         Item { Layout.fillWidth: true }
