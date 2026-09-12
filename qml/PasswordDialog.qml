@@ -2,23 +2,72 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Master-password prompt: the only view that collects the master password to
-// unlock, by typing, a QR scan, or the Windows secure screen. RekeyDialog also
-// takes the current password, to change it.
-// Each route emits a signal; Main.qml calls AppViewModel, which owns the gate and
-// decides when the prompt closes.
+/*!
+ * \qmltype PasswordDialog
+ * \inqmlmodule seal
+ * \brief Collect a master password or request an alternate input method.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * Main routes requests to AppViewModel and handles password verification and retries.
+ * The popup closes when it submits typed or QR text. Escape and outside clicks do
+ * not dismiss it. QR text requires confirmation; secure-screen input stays in C++.
+ *
+ * Opening, closing, and submitting clear the password field. Clearing the field
+ * does not guarantee that QML string storage or signal arguments are overwritten.
+ */
 Popup {
     id: root
 
-    property string errorMessage: ""  // Non-empty shows a red error line and shakes on open
+    /*!
+     * Error shown below the instruction. Empty text hides it. A non-empty value
+     * starts the shake animation on open unless reduced motion is enabled.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property string errorMessage: ""
+    /*!
+     * Accent for the lock icon in the heading.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property color shellTone: Theme.accent
 
+    /*!
+     * \brief Submit password text for verification by the caller.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * The \a password is non-empty and preserves whitespace. The field is cleared
+     * and close is requested before emission. The signal does not imply verification.
+     */
     signal accepted(string password)
+    /*!
+     * \brief Request QR capture without submitting or closing the popup.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * The caller supplies captured text through \c fillPassword() for confirmation.
+     */
     signal qrRequested()
+    /*!
+     * \brief Request the Windows credential prompt through the caller.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * This request leaves the popup open. Main handles completion; the captured
+     * password does not pass through this popup.
+     */
     signal secureScreenRequested()
 
-    // QR path only: Main.qml pushes the decoded text here for the user to confirm.
-    // The secure-screen result never comes back through the field.
+    /*!
+     * \brief Place captured QR text in the password field for confirmation.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * Ignore empty \a text. Otherwise, replace the field text and focus it without
+     * submitting. The caller must pass a string; its whitespace is preserved.
+     */
     function fillPassword(text) {
         if (text.length > 0) {
             passwordField.text = text;
@@ -31,8 +80,7 @@ Popup {
     anchors.centerIn: parent
     width: 420
     padding: 0
-    // Esc and click-outside do nothing: Main.qml closes this on unlock or on the
-    // protected-folder boot path, so the prompt cannot be walked away from.
+    // Keep the unlock flow active until submission or a caller requests close.
     closePolicy: Popup.NoAutoClose
 
     enter: Transition {
@@ -52,9 +100,9 @@ Popup {
         }
     }
 
+    // Use the loading cover as the prompt background.
     background: Item {}
 
-    // Clear stale password on open.
     onAboutToShow: {
         passwordField.text = "";
         passwordField.forceActiveFocus();
@@ -62,7 +110,6 @@ Popup {
 
     onClosed: passwordField.text = ""
 
-    // Wrong-password shake, skipped when reduce-motion is on.
     SequentialAnimation {
         id: shakeAnim
         NumberAnimation { target: shakeOffset; property: "x"; to: -Theme.px(8); duration: 70; easing.type: Easing.OutQuad }
@@ -127,7 +174,6 @@ Popup {
             wrapMode: Text.WordWrap
         }
 
-        // Hover-to-reveal eye icon. Enter submits if non-empty.
         TextField {
             id: passwordField
             Layout.fillWidth: true
@@ -176,7 +222,8 @@ Popup {
             Keys.onReturnPressed: {
                 if (passwordField.text.length > 0) {
                     var pw = passwordField.text;
-                    passwordField.text = ""; // Best-effort scrub before close animation runs.
+                    // Remove the displayed password before the close animation.
+                    passwordField.text = "";
                     root.close();
                     root.accepted(pw);
                 }
@@ -184,7 +231,8 @@ Popup {
             Keys.onEnterPressed: {
                 if (passwordField.text.length > 0) {
                     var pw = passwordField.text;
-                    passwordField.text = ""; // Best-effort scrub before close animation runs.
+                    // Remove the displayed password before the close animation.
+                    passwordField.text = "";
                     root.close();
                     root.accepted(pw);
                 }
@@ -199,8 +247,6 @@ Popup {
             Layout.rightMargin: 24
             spacing: Theme.spacingSmall
 
-            // The three actions share the row equally, so the group spans the same
-            // width as the password field above.
             Button {
                 id: secureButton
                 Layout.fillWidth: true
@@ -209,9 +255,7 @@ Popup {
                     root.secureScreenRequested();
                 }
 
-                // The secure desktop is reached with the Ctrl+Alt+Delete secure
-                // attention sequence. Warn first, so the Windows sign-in prompt
-                // that appears is not mistaken for phishing.
+                // Explain Ctrl+Alt+Delete before Windows requests secure attention.
                 ToolTip.visible: secureButton.hovered
                 ToolTip.delay: 600
                 ToolTip.text: "Enter your password on the Windows secure screen (press Ctrl+Alt+Delete when prompted)."
@@ -336,7 +380,8 @@ Popup {
                 Layout.preferredWidth: 100
                 onClicked: {
                     var pw = passwordField.text;
-                    passwordField.text = ""; // Best-effort scrub before close animation runs.
+                    // Remove the displayed password before the close animation.
+                    passwordField.text = "";
                     root.close();
                     root.accepted(pw);
                 }
