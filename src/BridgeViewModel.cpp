@@ -20,8 +20,7 @@ BridgeViewModel::BridgeViewModel(FillController* fillController, QObject* parent
     : QObject(parent),
       m_FillController(fillController)
 {
-    // Diagnose dry-run: forward the summary up to QML. No DPAPI re-protect
-    // is needed because diagnose never touches the master password.
+    // Diagnosis touches no credential or DPAPI state.
     connect(m_FillController,
             &FillController::diagnoseCompleted,
             this,
@@ -39,11 +38,7 @@ BridgeViewModel::BridgeViewModel(FillController* fillController, QObject* parent
                 emit bridgeDiagnoseCancelled();
             });
 
-    // Restore persisted bridge enablement (M8; default true, QSettings ->
-    // HKCU\Software\seal\seal via QmlMain). enableBridge() starts the pipe at
-    // once, not only on arm, so the extension can connect at launch. A closed
-    // pipe drops the extension into its reconnect backoff (doubling, capped at
-    // 5 s) and, once its service worker suspends, into the 30 s recovery alarm.
+    // Open the pipe at startup so the extension avoids reconnect backoff.
     QSettings settings;
     const bool bridgeEnabledPref = settings.value("bridge/enabled", true).toBool();
     if (bridgeEnabledPref)
@@ -55,9 +50,7 @@ BridgeViewModel::BridgeViewModel(FillController* fillController, QObject* parent
         m_FillController->disableBridge();
     }
 
-    // BrowserBridge is not a QObject, so poll per-browser connected state at
-    // 1 Hz and convert level changes into *Changed signals. A QML dot turns
-    // green only after an authenticated handshake.
+    // Sample connection atomics at 1 Hz because BrowserBridge has no Qt signals.
     const std::size_t browserKindCount = static_cast<std::size_t>(seal::signer::BrowserKind::Count);
     m_LastBrowserConnected.assign(browserKindCount, false);
     m_InstalledBrowsers.assign(browserKindCount, false);
@@ -142,10 +135,7 @@ bool BridgeViewModel::bridgeBraveConnected() const
 
 QVariantList BridgeViewModel::browsers() const
 {
-    // Chromium kinds only - seal ships no Gecko native-messaging manifest. A
-    // row is emitted when the browser was detected as installed or has a live
-    // peer, so a portable copy that install detection misses still shows up
-    // once it connects. Rebuilt on every read; QML binds it, nothing caches it.
+    // Include connected portable Chromium browsers even when installation detection misses them.
     QVariantList result;
     for (const auto& browser : seal::signer::kBrowserMetadata)
     {
@@ -187,9 +177,7 @@ QVariantList BridgeViewModel::browsers() const
 
 bool BridgeViewModel::refreshInstalledBrowsers()
 {
-    // Registry and disk probe, so it stays off the 1 Hz poll. Gecko kinds keep
-    // their initial false. Returns whether anything moved; the caller decides
-    // whether to emit browsersChanged.
+    // Registry/disk detection stays outside the connection poll.
     bool changed = false;
     for (const auto& browser : seal::signer::kBrowserMetadata)
     {
@@ -228,8 +216,6 @@ void BridgeViewModel::setBridgeEnabled(bool enabled)
         m_FillController->disableBridge();
     }
 
-    // Persist preference - QSettings resolves to HKCU\Software\seal\seal
-    // (org/app names set in QmlMain).
     QSettings settings;
     settings.setValue("bridge/enabled", enabled);
 
@@ -243,9 +229,7 @@ QString BridgeViewModel::bridgeStatusText() const
 
 bool BridgeViewModel::autoStageEnabled() const
 {
-    // Default false: zero-gesture staged auto-fill is opt-in. QSettings
-    // resolves to HKCU\Software\seal\seal. StagingController reads the same
-    // key for its initial state and follows this property's change signal.
+    // Staging is opt-in; StagingController follows this property signal.
     const QSettings settings;
     return settings.value("bridge/autostage", false).toBool();
 }
@@ -284,8 +268,7 @@ void BridgeViewModel::runInstallBrowserExtension()
 
 void BridgeViewModel::runUninstallBrowserExtension()
 {
-    // No refreshInstalledBrowsers() here on purpose: removing the manifest
-    // does not uninstall the browser, so the installed flags stay valid.
+    // Removing registration does not uninstall browsers; keep the detection cache.
     std::string message;
     seal::BrowserExtensionUninstallReport report;
     const int rc = seal::uninstallBrowserExtensionInternal(&message, &report);
@@ -303,8 +286,7 @@ void BridgeViewModel::runUninstallBrowserExtension()
 
 void BridgeViewModel::runBridgeDiagnose()
 {
-    // Diagnose never touches the master password, so it skips any password
-    // gate; the user can run it with a locked vault.
+    // Diagnosis works while locked because it releases no credential.
     if (!m_FillController->armDiagnose())
     {
         emit errorOccurred(QStringLiteral("Bridge diagnose"),
