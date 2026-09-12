@@ -1,10 +1,20 @@
 import QtQuick
 import QtQuick.Controls.impl as Impl
 
-// Tintable icon: set `source` to an SVG path and `color` to recolor it. The SVG
-// is rasterised at the screen device pixel ratio, so it stays sharp above 100%
-// Windows scaling. IconImage lives in QtQuick.Controls.impl, a private Qt
-// module, so a Qt upgrade can change it - keep this wrapper as the only user.
+/*!
+ * \qmltype SvgIcon
+ * \inqmlmodule seal
+ * \brief Render a tinted SVG at the screen device pixel ratio.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * Set the inherited source, color, width, and height. Width and height use logical
+ * pixels; source rasterization multiplies them by the screen device pixel ratio.
+ * The image preserves its aspect ratio within that area.
+ *
+ * This wrapper contains the dependency on the private QtQuick.Controls.impl IconImage
+ * type. Check its inherited properties when upgrading Qt.
+ */
 Impl.IconImage {
     sourceSize: Qt.size(width * Screen.devicePixelRatio,
                         height * Screen.devicePixelRatio)
