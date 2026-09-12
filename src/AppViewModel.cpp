@@ -150,8 +150,7 @@ basic_secure_string<wchar_t, locked_allocator<wchar_t>> AppViewModel::qstringToS
     if (qstr.isEmpty())
         return result;
 
-    // Copy directly into locked memory; toStdWString() would heap-allocate
-    // an intermediate plaintext std::wstring. wchar_t==QChar on Windows.
+    // Copy into locked memory without an intermediate pageable std::wstring.
     static_assert(sizeof(wchar_t) == sizeof(QChar), "wchar_t/QChar size mismatch");
     const auto* src = reinterpret_cast<const wchar_t*>(qstr.data());
     result.assign(src, src + qstr.size());
@@ -185,9 +184,7 @@ AppViewModel::AppViewModel(seal::CredentialWorkspace& workspace,
         m_StatusText = QStringLiteral("Folder protection armed");
     }
 
-    // Auto-lock collaborator: wipes the master password on idle timeout or
-    // Windows session lock (Win+L). lockVault() already cancels an armed
-    // fill, so the borrowed-pointer discipline holds.
+    // lockVault also cancels armed fills before clearing the borrowed session.
     m_AutoLock = new AutoLockController(this);
     connect(m_AutoLock,
             &AutoLockController::lockRequested,
@@ -205,9 +202,7 @@ AppViewModel::AppViewModel(seal::CredentialWorkspace& workspace,
 
 AppViewModel::~AppViewModel()
 {
-    // QML's held-close flow runs the asynchronous re-protection while the event
-    // loop is alive. Destruction starts no worker and shows no prompt: an
-    // abnormal teardown is represented by the plaintext marker on the next start.
+    // Re-protection needs the event loop; abnormal teardown leaves the plaintext marker.
     m_Destroying = true;
     m_QrHandle.cancel();
     if (m_Fill)
@@ -379,8 +374,7 @@ size_t AppViewModel::pendingActionDepth() const
 void AppViewModel::adoptPasswordAndDrain(
     seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>&& wide, const char* source)
 {
-    // CredentialSession takes ownership and keeps the buffer DPAPI-protected
-    // between Access windows, so a process dump cannot read it.
+    // The session takes ownership and DPAPI-protects the buffer between access windows.
     m_Workspace.adoptPassword(std::move(wide));
     m_VerifiedVaultPath.clear();
     m_ProtectedPasswordVerified = false;
@@ -392,16 +386,13 @@ void AppViewModel::adoptPasswordAndDrain(
     setStatus("Password set");
     emit passwordSetChanged();
 
-    // Drain the actions deferred while waiting for the password, front to back.
-    // The queued vault load is what verifies it: a wrong password fails the GCM
-    // tag check and reopens the prompt.
+    // Adoption is unverified; queued loads authenticate and re-prompt on failure.
     drainPendingActions();
 }
 
 void AppViewModel::submitPassword(QString password)
 {
     auto wide = qstringToSecureWide(password);
-    // Wipe the input QString to reduce plaintext residency in pageable memory.
     password.fill(QChar(0));
     adoptPasswordAndDrain(std::move(wide), "manual_entry");
 }
@@ -410,14 +401,12 @@ void AppViewModel::requestSecureDesktopUnlock()
 {
     try
     {
-        // Blocks until the user submits or cancels. The secure desktop owns the
-        // screen while it is up, so blocking the GUI thread is invisible. The
-        // secure desktop is best-effort: policy or an RDP session can fall back
-        // to the normal desktop, which the API does not report.
+        // The prompt blocks. Policy or RDP can fall back to the normal desktop
+        // without an API indication.
         auto wide = readPasswordSecureDesktop(
             L"seal - Master Password", L"Enter your master password.", /*secureDesktop=*/true);
 
-        // A blank submission is treated as a cancel: leave the prompt open.
+        // Treat blank input as cancellation; leave the prompt open.
         if (wide.empty())
         {
             return;
@@ -433,7 +422,7 @@ void AppViewModel::requestSecureDesktopUnlock()
             seal::diag::joinFields({"event=auth.secure_desktop.finish",
                                     canceled ? "result=cancel" : "result=fail",
                                     seal::diag::kv("reason", seal::diag::reasonFromMessage(msg))}));
-        // Cancel is a normal outcome; only surface genuine failures.
+        // Cancellation stays silent.
         if (!canceled)
         {
             emit secureCaptureFinished(false);
@@ -443,7 +432,6 @@ void AppViewModel::requestSecureDesktopUnlock()
 
 namespace
 {
-// File-local result struct for the QR capture worker.
 struct QrOutcome
 {
     QString text;
@@ -466,8 +454,7 @@ void AppViewModel::requestQrCapture()
         return;
     }
 
-    // ASFW_ANY lets any process take the foreground; without it, the QR
-    // scanner's OpenCV window would open behind ours.
+    // Allow the OpenCV preview to take foreground instead of opening behind seal.
     AllowSetForegroundWindow(ASFW_ANY);
 
     qCInfo(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
@@ -475,9 +462,7 @@ void AppViewModel::requestQrCapture()
 
     m_QrActive = true;
 
-    // Run captureQrFromWebcam() on the async pool; it can block for up
-    // to 60 s, which would freeze the UI if done on the GUI thread.
-    // The CancellationToken lets callers cancel via m_QrHandle.cancel().
+    // Capture can block for 60 s; keep it off the GUI thread.
     m_QrHandle = m_Async.runCancellable(
         this,
         [opId](seal::CancellationToken token) -> QrOutcome
@@ -487,12 +472,9 @@ void AppViewModel::requestQrCapture()
             {
                 return {};
             }
-            // Pre-fill the password dialog with the QR text; nothing reaches
-            // the session until the user confirms. QrOutcome carries a QString
-            // because handleQrResult does the TTL clipboard copy, the cleanse
-            // and the masked append.
+            // QML confirms QR text before session adoption; CLI routing uses a masked
+            // transcript and timed clipboard copy.
             QString captured = QString::fromUtf8(qrResult.data(), (int)qrResult.size());
-            // qrResult auto-wipes on scope exit (locked allocator).
             return {std::move(captured), true};
         },
         [this, opId, started](QrOutcome r)
@@ -535,12 +517,10 @@ void AppViewModel::requestQrCapture()
             {
                 emit qrCaptureFinished(true);
 
-                // Re-open the password dialog with the captured text.
                 emit qrTextReady(r.text);
             }
 
-            // Wipe the local copy so the QR text does not linger in the heap
-            // after QML receives its own.
+            // Wipe the sender copy after QML receives its own.
             r.text.fill(QChar(0));
         });
 }
@@ -604,7 +584,6 @@ void AppViewModel::loadVaultFromPath(const QString& filePath, bool isAutoLoad)
 {
     if (m_LoadWorkerActive)
     {
-        // A load worker is already in flight; ignore the re-entrant dispatch.
         return;
     }
 
@@ -612,8 +591,7 @@ void AppViewModel::loadVaultFromPath(const QString& filePath, bool isAutoLoad)
     const auto started = std::chrono::steady_clock::now();
     const std::string pathMeta = seal::diag::pathSummary(filePath.toUtf8().toStdString());
 
-    // Cancel any active fill before the records are swapped on completion;
-    // FillController's borrowed pointer would otherwise dangle.
+    // Release borrowed record pointers before the worker replaces the records.
     cancelFillIfArmed();
     qCInfo(logBackend).noquote() << QString::fromStdString(
         seal::diag::joinFields({"event=vault.load.begin",
@@ -622,10 +600,7 @@ void AppViewModel::loadVaultFromPath(const QString& filePath, bool isAutoLoad)
                                 seal::diag::kv("auto", isAutoLoad),
                                 pathMeta}));
 
-    // Clone the master password into a worker-owned secure string inside a
-    // tight GUI-thread unlock() window, so the session is re-protected before
-    // the worker starts and never touched off-thread. basic_secure_string is
-    // move-only, hence the explicit element copy.
+    // Clone under a GUI-thread access window; the worker must not touch the session.
     seal::basic_secure_string<wchar_t> workerPassword;
     {
         auto access = m_Workspace.session().unlock();
@@ -654,8 +629,6 @@ void AppViewModel::loadVaultFromPath(const QString& filePath, bool isAutoLoad)
     m_LoadWorkerActive = true;
     setLoading(true, QStringLiteral("Decrypting vault..."));
 
-    // The scrypt KDF + per-record AES decrypt runs off the GUI thread so the
-    // loading spinner can animate; results marshal back via AsyncRunner.
     struct LoadOutcome
     {
         std::vector<seal::VaultRecord> records;
@@ -664,9 +637,7 @@ void AppViewModel::loadVaultFromPath(const QString& filePath, bool isAutoLoad)
         QString message;
     };
 
-    // shared_ptr so the work body is copyable (QtConcurrent::run decay-copies
-    // the callable); the secret bytes stay in the locked buffer. The clone was
-    // taken inside the GUI-thread session().unlock() window above.
+    // QtConcurrent copies callables; share locked storage without copying plaintext.
     using SecureWide = seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>;
     auto pw = std::make_shared<SecureWide>(std::move(workerPassword));
 
@@ -755,10 +726,8 @@ void AppViewModel::loadVaultFromPath(const QString& filePath, bool isAutoLoad)
                 if (isAutoLoad && m_ProtectFolderEnabled && m_ProtectedDecryptPending &&
                     m_ProtectedPasswordVerified)
                 {
-                    // The folder profile already authenticated the session. A
-                    // newly added vault with a different password is optional:
-                    // replacing the folder key would strand the exit
-                    // encryption. Continue folder-only and report the skip.
+                    // The folder profile already verified this key. Skip the optional vault
+                    // rather than replace the key needed for exit protection.
                     m_ProtectedDecryptPending = false;
                     setLoading(false);
                     startProtectedFolderDecrypt(
@@ -776,10 +745,7 @@ void AppViewModel::loadVaultFromPath(const QString& filePath, bool isAutoLoad)
                     return;
                 }
 
-                // Wrong-password retry: wipe the bad password, clear
-                // passwordSet, push a lambda that redoes this load to the front
-                // of the queue so it runs before older intents, and signal QML
-                // to re-show the dialog with an error hint.
+                // Prepend the retry so password verification precedes older queued actions.
                 qCWarning(logBackend).noquote() << QString::fromStdString(seal::diag::joinFields(
                     {"event=vault.load.finish",
                      "result=retry",
@@ -871,7 +837,6 @@ void AppViewModel::saveVault()
         return;
     }
 
-    // Re-use the existing path, or prompt for a new one on first save.
     QString fileName = m_CurrentVaultPath;
     if (fileName.isEmpty())
     {
@@ -893,12 +858,9 @@ void AppViewModel::saveVault()
                                 seal::diag::kv("record_count", m_Workspace.records().size()),
                                 seal::diag::pathSummary(fileName.toUtf8().toStdString())}));
 
-    // Point the workspace at the (possibly newly chosen) target before saving;
-    // workspace.save() opens its own Access window and writes to vaultPath().
     m_Workspace.setVaultPath(std::filesystem::path{fileName.toStdWString()});
 
-    // FillController borrows records; save() clears dirty flags and purges
-    // soft-deletes, so cancel any armed fill before the mutation.
+    // Save purges soft deletes; cancel fills that borrow these records.
     cancelFillIfArmed();
 
     bool saveOk = false;
@@ -947,8 +909,7 @@ void AppViewModel::saveVault()
 
 void AppViewModel::unloadVault()
 {
-    // Cancel any active fill so FillController's borrowed pointer to the
-    // workspace records does not dangle once the records are cleared.
+    // Release borrowed record pointers before clearing storage.
     cancelFillIfArmed();
     qCInfo(logBackend).noquote() << QString::fromStdString(
         seal::diag::joinFields({"event=vault.unload",
@@ -974,9 +935,8 @@ void AppViewModel::addAccount(const QString& service,
 
     if (!m_Workspace.isPasswordSet())
     {
-        // Move credentials into locked-page memory before the dialog opens
-        // so plaintext doesn't sit in pageable heap. shared_ptr makes the
-        // lambda std::function-copyable without duplicating the secret.
+        // Deferred std::function copies share locked buffers, keeping secrets off the pageable
+        // heap.
         auto secUser =
             std::make_shared<seal::basic_secure_string<wchar_t>>(qstringToSecureWide(username));
         auto secPass =
@@ -984,9 +944,6 @@ void AppViewModel::addAccount(const QString& service,
         if (!ensurePassword(
                 [this, service, secUser, secPass]()
                 {
-                    // Encrypt directly from locked memory - no pageable-QString
-                    // round-trip. shared_ptrs keep the secrets alive across the
-                    // std::function copy boundary.
                     cancelFillIfArmed();
                     try
                     {
@@ -1006,7 +963,6 @@ void AppViewModel::addAccount(const QString& service,
         }
     }
 
-    // Locked-page wide strings minimise plaintext residency.
     auto secUsername = qstringToSecureWide(username);
     auto secPassword = qstringToSecureWide(password);
 
@@ -1042,11 +998,10 @@ void AppViewModel::editAccountWithSecureFields(
 
     try
     {
-        // FillController borrows records; editRecord replaces one in place.
+        // Cancel fills before replacing the borrowed record.
         cancelFillIfArmed();
 
-        // The workspace owns the keep-current decrypt: a null field pointer
-        // means "reuse the stored value".
+        // Null fields tell the workspace to reuse stored values.
         m_Workspace.editRecord(static_cast<size_t>(index),
                                service.toUtf8().toStdString(),
                                hasUsername ? &username : nullptr,
@@ -1166,8 +1121,6 @@ void AppViewModel::deleteAccount(int index)
     if (index < 0 || index >= (int)m_Workspace.records().size())
         return;
 
-    // Soft-delete: hide from the model immediately but keep the record
-    // until saveVault() commits to disk.
     cancelFillIfArmed();
     m_Workspace.markDeleted(static_cast<size_t>(index));
     qCInfo(logBackend).noquote() << QString::fromStdString(
@@ -1178,9 +1131,7 @@ void AppViewModel::deleteAccount(int index)
     refreshModel();
     setStatus("Account deleted");
 
-    // If nothing visible remains, re-emit the vault signals so the dependent
-    // QML bindings re-evaluate and the empty-vault state renders. vaultLoaded()
-    // itself stays true: the soft-deleted records are still in the workspace.
+    // Soft deletes leave vaultLoaded true; signal bindings when the visible list becomes empty.
     bool anyVisible = false;
     for (const auto& rec : m_Workspace.records())
     {
@@ -1504,9 +1455,7 @@ void AppViewModel::requestProtectFolderEnabled(bool enabled)
     }
     else
     {
-        // A non-empty loaded vault authenticated the current session key. An
-        // empty vault has no encrypted record and therefore cannot detect a
-        // typo, so fresh folder-only setup still requires confirmation.
+        // An empty vault cannot authenticate a password; folder setup still needs confirmation.
         const bool authenticatedVaultPassword = m_Workspace.isPasswordSet() &&
                                                 !m_VerifiedVaultPath.isEmpty() &&
                                                 !m_Workspace.records().empty();
@@ -1773,10 +1722,7 @@ void AppViewModel::autoLoadVault()
     if (!m_CurrentVaultPath.isEmpty())
         return;
 
-    // An armed folder is self-contained. Its profile is the folder-password
-    // authority; a credential vault beside seal.exe is optional and is only
-    // auto-loaded after that profile succeeds. Unarmed startup uses the
-    // exe-dir -> cwd -> home priority.
+    // The folder profile authenticates first; a neighboring vault is optional.
     QStringList searchPaths;
     if (m_ProtectFolderEnabled)
     {
@@ -1836,9 +1782,8 @@ void AppViewModel::autoLoadVault()
                 candidates, [](const VaultCandidate& candidate) { return candidate.vault; }));
             if (protectedVaultCount > 1)
             {
-                // Folder protection itself is unambiguous because the profile
-                // owns its password. Avoid guessing which credential vault to
-                // show; startup continues in folder-only mode.
+                // Multiple vault candidates select folder-only startup; the profile remains
+                // authoritative.
                 candidates.clear();
             }
         }
@@ -1955,10 +1900,8 @@ void AppViewModel::startProtectedFolderUnlock(const QString& optionalVaultPath)
             else if (profile.state == ProtectedFolderProfileState::Missing &&
                      !legacyVaultPath.empty())
             {
-                // Migration path for an armed folder that still has no
-                // profile: the vault beside seal.exe authenticates the entered
-                // key, and the new profile becomes the authority before any
-                // file is decrypted.
+                // Authenticate a missing profile through the vault, then write the profile
+                // before decrypting any folder file.
                 try
                 {
                     const std::vector<VaultRecord> legacyRecords =
@@ -2062,8 +2005,7 @@ void AppViewModel::startProtectedFolderDecrypt(std::function<void()> done)
     }
 
     const std::filesystem::path root{m_AutoEncryptDirectory.toStdWString()};
-    // Write before the first plaintext commit, not after the worker: this also
-    // covers a process death midway through a multi-file decrypt.
+    // Write the marker before plaintext commits so interrupted decryption is detected.
     if (!writeProtectedFolderMarker())
     {
         seal::Cryptography::cleanseString(*workerPassword);
@@ -2141,7 +2083,7 @@ void AppViewModel::armFillForRow(int row)
         return;
     }
     setSelectedIndex(row);
-    // armFor() self-gates on the master password; no ensurePassword here.
+    // armFor owns password gating.
     if (m_Fill)
     {
         m_Fill->armFor(index);
@@ -2155,7 +2097,6 @@ void AppViewModel::armFillForSelection()
     {
         return;
     }
-    // armFor() self-gates on the master password; no ensurePassword here.
     if (m_Fill)
     {
         m_Fill->armFor(index);
@@ -2164,9 +2105,7 @@ void AppViewModel::armFillForSelection()
 
 void AppViewModel::onAutoArmed(int recordIndex, const QString& platform)
 {
-    // Display only: select the auto-armed record's row so the user sees which
-    // credential is staged, and show a non-secret hint. StagingController owns
-    // the actual arming; AppViewModel never touches the fill engine here.
+    // StagingController already armed the engine; this updates presentation only.
     const int row = m_Model->rowForRecordIndex(recordIndex);
     if (row >= 0)
     {
@@ -2200,9 +2139,7 @@ void AppViewModel::cleanup()
 
     m_CleanupStarted = true;
 
-    // Cancel any in-flight QR capture first so its token-polling OpenCV frame
-    // loop aborts promptly, instead of waiting for ~AsyncRunner to cancel
-    // everything after exec() returns. A no-op when no QR capture ever ran.
+    // Request capture cancellation while its GUI receiver and event loop still exist.
     m_QrHandle.cancel();
 
     qCInfo(logBackend).noquote() << QString::fromStdString(
@@ -2386,8 +2323,7 @@ void AppViewModel::failCleanup(const QString& message)
 
 void AppViewModel::finishCleanup()
 {
-    // Wipe the master password from locked memory only after folder
-    // re-protection is complete (or immediately when protection is off).
+    // Retain the key until folder re-protection completes.
     if (m_Workspace.isPasswordSet())
     {
         m_Workspace.clearPassword();
@@ -2425,8 +2361,7 @@ void AppViewModel::rekeyVault(QString currentPassword, QString newPassword)
     const bool rekeyFolderOnly = m_ProtectFolderEnabled && m_CurrentVaultPath.isEmpty();
     if ((!rekeyFolderOnly && m_CurrentVaultPath.isEmpty()) || m_Busy)
     {
-        // Scrub the plaintext parameters before the early return: every path
-        // out of this method wipes them, including this one.
+        // Wipe inputs on early returns too.
         currentPassword.fill(QChar(0));
         newPassword.fill(QChar(0));
         emit rekeyFinished(
@@ -2489,9 +2424,7 @@ void AppViewModel::rekeyVault(QString currentPassword, QString newPassword)
     currentPassword.fill(QChar(0));
     newPassword.fill(QChar(0));
 
-    // FillController borrows records + password; both are about to change.
-    // cancelFillIfArmed() drops the borrow; the post-rekey reload bumps the
-    // workspace generation via replaceRecords(), so no manual pre-bump is needed.
+    // Release record/key borrows before rekey; replaceRecords bumps generation on reload.
     cancelFillIfArmed();
 
     m_Busy = true;
@@ -2514,13 +2447,11 @@ void AppViewModel::rekeyVault(QString currentPassword, QString newPassword)
         QString message;
     };
 
-    // shared_ptr clones so the work body is copyable (QtConcurrent::run
-    // decay-copies the callable); secret bytes stay in the locked buffers.
+    // Shared locked buffers keep the QtConcurrent callable copyable.
     using SecureWide = seal::basic_secure_string<wchar_t, seal::locked_allocator<wchar_t>>;
     auto current = std::make_shared<SecureWide>(std::move(currentWide));
     auto fresh = std::make_shared<SecureWide>(std::move(newWide));
-    // GUI-thread clone of the new password, captured only by onDone: adopted on
-    // success / cleansed on failure (the worker copy is cleansed inside work).
+    // Completion owns a separate clone to adopt or cleanse after the worker finishes.
     auto adopt = std::make_shared<SecureWide>();
     adopt->assign(fresh->begin(), fresh->end());
 
@@ -2555,10 +2486,8 @@ void AppViewModel::rekeyVault(QString currentPassword, QString newPassword)
                     std::string profileError;
                     if (!replaceProtectedFolderProfile(folderProfilePath, *fresh, &profileError))
                     {
-                        // Keep the two authorities aligned. A profile commit
-                        // failure occurs after the vault's atomic swap, so
-                        // immediately rotate the vault back before reporting
-                        // failure. The old profile remained live throughout.
+                        // Profile commit failed after the vault swap; try restoring the vault
+                        // to the still-active profile password.
                         if (rekeyVaultFile)
                         {
                             try
@@ -2601,12 +2530,8 @@ void AppViewModel::rekeyVault(QString currentPassword, QString newPassword)
         {
             if (r.ok && isPasswordSet())
             {
-                // Session still active: adopt the new password and reload from
-                // disk so the workspace holds new-password packets. Unlike
-                // submitPassword, nothing is drained here: the rekey dialog is
-                // modal, so no action was deferred while it ran. The reload owns
-                // the loading cover: it switches the caption to "Decrypting
-                // vault...", then clears it.
+                // Adopt and reload new-password packets without draining pending actions.
+                // The reload owns the loading cover.
                 m_Workspace.adoptPassword(std::move(*adopt));
                 m_VerifiedVaultPath.clear();
                 m_ProtectedPasswordVerified = updateFolderProfile;
@@ -2622,9 +2547,7 @@ void AppViewModel::rekeyVault(QString currentPassword, QString newPassword)
             }
             else if (r.ok)
             {
-                // Auto-lock fired mid-rekey and cleared the session; the disk
-                // already holds the new password. Respect the lock instead of
-                // silently re-unlocking: the next unlock needs the new one.
+                // Preserve a lock taken during rekey; the next unlock needs the new disk password.
                 seal::Cryptography::cleanseString(*adopt);
                 m_ProtectedPasswordVerified = false;
                 setLoading(false);
