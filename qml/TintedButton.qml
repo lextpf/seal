@@ -1,84 +1,148 @@
 import QtQuick
 import QtQuick.Controls
 
-// The shared button for the ActionBar actions and the HeaderBar vault actions:
-// gradient fill, optional leading icon, press ripple.
-// A caller picks a role by assigning a Theme color family to the tint*
-// properties (Theme.btnAdd*, Theme.btnDelete*, ...); the defaults are the
-// ghost palette, so an unstyled TintedButton reads as a secondary action.
-// Dialog buttons and the ActionBar Fill button hand-roll their own Button,
-// because they carry states or sizes this component does not model (the armed
-// countdown, the smaller dialog footprint).
+/*!
+ * \qmltype TintedButton
+ * \inqmlmodule seal
+ * \brief Present a shared workspace action with configurable colors.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * Select colors from one Theme family to keep the background, outline, and text
+ * consistent. Defaults follow the ghost palette when the theme changes.
+ * Disabled buttons use the shared neutral palette and ignore custom colors.
+ *
+ * \section1 Color states
+ *
+ * \table
+ * \header
+ *     \li State
+ *     \li Background
+ *     \li Icon and label
+ * \row
+ *     \li Normal
+ *     \li Gradient from \c tintTop to \c tintEnd.
+ *     \li \c tintText.
+ * \row
+ *     \li Hovered
+ *     \li Gradient from \c tintHoverTop to \c tintHoverEnd.
+ *     \li \c tintTextHover.
+ * \row
+ *     \li Pressed
+ *     \li Solid \c tintPressed color.
+ *     \li Hover color if hovered; normal color otherwise.
+ * \row
+ *     \li Disabled
+ *     \li Shared disabled gradient from Theme.
+ *     \li Shared disabled text color from Theme.
+ * \endtable
+ *
+ * Disabled colors take precedence over pressed and hovered colors. Pressing changes
+ * the background but leaves text and outline selection dependent on hover state.
+ * The outline derives from the tint colors and active theme unless overridden.
+ */
 Button {
     id: root
-    property string faIcon: ""      // Icon qrc path; "" hides the icon and its spacing.
+    /*!
+     * SVG resource path. An empty string removes the icon and its label spacing.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property string faIcon: ""
+    /*!
+     * Hide the label without clearing the inherited text property.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property bool iconOnly: false
+    /*!
+     * Top gradient color when enabled, unpressed, and not hovered.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property color tintTop:         Theme.ghostBtnTop
+    /*!
+     * Bottom gradient color when enabled, unpressed, and not hovered.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property color tintEnd:         Theme.ghostBtnEnd
+    /*!
+     * Top gradient color when enabled, hovered, and unpressed.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property color tintHoverTop:    Theme.ghostBtnHoverTop
+    /*!
+     * Bottom gradient color when enabled, hovered, and unpressed.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property color tintHoverEnd:    Theme.ghostBtnHoverEnd
+    /*!
+     * Solid background color when enabled and pressed.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property color tintPressed:     Theme.ghostBtnPressed
+    /*!
+     * Icon and label color when enabled and not hovered, including while pressed.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property color tintText:        Theme.textGhost
+    /*!
+     * Icon and label color when enabled and hovered, including while pressed.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property color tintTextHover:   Theme.textPrimary
-    property bool translucentSurface: false  // Set on glass buttons; see the disabled fills below.
 
-    // Derived states. Dark mode drops alpha, light mode blends toward an opaque
-    // color, because a light surface needs real contrast rather than more glass.
-    property color tintTextDisabled: Theme.dark
-        ? Qt.rgba(tintText.r, tintText.g, tintText.b, 0.32)
-        : Theme.opaqueBlend(tintText, Theme.textDisabled, 0.30)
+    /*!
+     * Outline color when enabled and not hovered. The default follows the tint family.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property color tintBorder: Theme.dark
         ? Qt.rgba(tintEnd.r, tintEnd.g, tintEnd.b, Math.min(tintEnd.a + 0.18, 1.0))
-        : Theme.opaqueBlend(tintText, tintEnd, 0.32)
-    property color tintBorderHover: Theme.borderHover
-    property color tintBorderDisabled: Theme.dark
-        ? Theme.borderDim
-        : Theme.opaqueBlend(tintBorder, Theme.borderDim, 0.36)
+        : Theme.blend(tintText, tintEnd, 0.24, 0.50)
+    /*!
+     * Outline color when enabled and hovered. The default also depends on the theme.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property color tintBorderHover: Theme.dark
+        ? Theme.borderHover
+        : Theme.blend(tintTextHover, tintHoverEnd, 0.24, 0.65)
     leftPadding: 14
     rightPadding: 14
 
-    // Disabled fills. A glass button keeps its source alpha so it stays
-    // transparent; a semantic action button keeps its alpha in dark mode and fades
-    // toward the opaque disabled color in light mode, instead of turning back into
-    // a solid pill.
-    readonly property color _disText: tintTextDisabled
-    readonly property color _disTop: translucentSurface
-        ? Qt.rgba(tintTop.r, tintTop.g, tintTop.b, tintTop.a * 0.45)
-        : Theme.dark
-          ? Qt.rgba(tintTop.r, tintTop.g, tintTop.b, tintTop.a * 0.35)
-          : Theme.opaqueBlend(tintTop, Theme.btnDisabledTop, 0.50)
-    readonly property color _disEnd: translucentSurface
-        ? Qt.rgba(tintEnd.r, tintEnd.g, tintEnd.b, tintEnd.a * 0.45)
-        : Theme.dark
-          ? Qt.rgba(tintEnd.r, tintEnd.g, tintEnd.b, tintEnd.a * 0.35)
-          : Theme.opaqueBlend(tintEnd, Theme.btnDisabledBot, 0.50)
-
-    // Sets the cursor, and supplies the press point the ripple starts from.
     HoverHandler { id: btnHover; cursorShape: Qt.PointingHandCursor }
 
     contentItem: Row {
-        spacing: root.faIcon !== "" ? 6 : 0
+        spacing: (root.faIcon !== "" && !root.iconOnly) ? 6 : 0
         anchors.centerIn: parent
         SvgIcon {
             source: root.faIcon
             width: visible ? Theme.iconSizeMedium : 0
             height: Theme.iconSizeMedium
-            color: !root.enabled ? root._disText : root.hovered ? root.tintTextHover : root.tintText
+            color: !root.enabled ? Theme.textDisabled : root.hovered ? root.tintTextHover : root.tintText
             visible: root.faIcon !== ""
             anchors.verticalCenter: parent.verticalCenter
             Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
         }
         Text {
             text: root.text
+            visible: !root.iconOnly
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeMedium
             font.weight: Font.DemiBold
-            color: !root.enabled ? root._disText : root.hovered ? root.tintTextHover : root.tintText
+            color: !root.enabled ? Theme.textDisabled : root.hovered ? root.tintTextHover : root.tintText
             anchors.verticalCenter: parent.verticalCenter
             Behavior on color { ColorAnimation { duration: Theme.hoverDuration } }
         }
     }
 
-    // Press squish: 0.97 scale with spring-back easing.
     scale: pressed ? 0.97 : 1.0
     Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutBack; easing.overshoot: 2.0 } }
 
@@ -87,14 +151,13 @@ Button {
         implicitHeight: 40
         radius: Theme.radiusMedium
         clip: true
-        // Four-state gradient: disabled / normal / hovered / pressed.
         gradient: Gradient {
-            GradientStop { position: 0; color: !root.enabled ? root._disTop : root.pressed ? root.tintPressed : root.hovered ? root.tintHoverTop : root.tintTop; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
-            GradientStop { position: 1; color: !root.enabled ? root._disEnd : root.pressed ? root.tintPressed : root.hovered ? root.tintHoverEnd : root.tintEnd; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
+            GradientStop { position: 0; color: !root.enabled ? Theme.btnDisabledTop : root.pressed ? root.tintPressed : root.hovered ? root.tintHoverTop : root.tintTop; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
+            GradientStop { position: 1; color: !root.enabled ? Theme.btnDisabledBot : root.pressed ? root.tintPressed : root.hovered ? root.tintHoverEnd : root.tintEnd; Behavior on color { ColorAnimation { duration: Theme.hoverDuration } } }
         }
 
         border.width: Theme.strokeRegular
-        border.color: !root.enabled ? root.tintBorderDisabled
+        border.color: !root.enabled ? Theme.btnDisabledBorder
                     : root.hovered ? root.tintBorderHover
                     : root.tintBorder
 

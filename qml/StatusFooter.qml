@@ -1,35 +1,68 @@
 import QtQuick
 import QtQuick.Layouts
 
-// Bottom status strip, hidden in compact mode. Main pushes every value in as a plain
-// property, so the footer holds no vault state of its own. The browser connection
-// chips are the exception: BridgeSettings binds the Bridge context property itself.
-Rectangle {
+/*!
+ * \qmltype StatusFooter
+ * \inqmlmodule seal
+ * \brief Display workspace status, browser connections, and armed state.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * Main supplies non-secret status and vault values. BridgeSettings reads the
+ * Bridge context property directly and owns the connection controls.
+ *
+ * Below 1120 logical pixels, the footer hides the vault filename. Below 900,
+ * it also hides browser and folder-protection labels. Status text elides to
+ * fit the available width. The armed-fill dot remains visible while armed.
+ */
+Item {
     id: root
 
+    /*!
+     * Non-secret status message; elides on the right when space is limited.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property string statusText: "Ready"
+    /*!
+     * Show the pulsing indicator for an armed fill.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property bool fillArmed: false
+    /*!
+     * Display name only; an empty value hides the filename.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property string vaultFileName: ""
+    /*!
+     * Visible account count supplied by the owner; values below one hide the count.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property int accountCount: 0
+    /*!
+     * Show the armed-folder indicator.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property bool protectFolderEnabled: false
+    /*!
+     * Hide the filename below 1120 logical pixels; zero width is excluded.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property bool narrowLayout: width > 0 && width < 1120
+    /*!
+     * Hide secondary labels below 900 logical pixels; zero width is excluded.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property bool condensedLayout: width > 0 && width < 900
 
     implicitHeight: condensedLayout ? 40 : 36
     clip: true
-    gradient: Gradient {
-        GradientStop { position: 0; color: Theme.bgFooterTop }
-        GradientStop { position: 1; color: Theme.bgFooterEnd }
-    }
-
-    // Top border.
-    Rectangle {
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        height: Theme.strokeDivider
-        color: Theme.borderDim
-    }
 
     RowLayout {
         anchors.fill: parent
@@ -37,7 +70,6 @@ Rectangle {
         anchors.rightMargin: anchors.leftMargin
         spacing: root.condensedLayout ? 8 : root.narrowLayout ? 12 : 16
 
-        // Status text
         Text {
             Layout.minimumWidth: 0
             Layout.maximumWidth: root.condensedLayout ? 120 : root.narrowLayout ? 180 : 320
@@ -45,7 +77,8 @@ Rectangle {
             font.family: Theme.fontFamily
             font.pixelSize: Theme.fontSizeSmall
             font.weight: Font.Medium
-            color: Theme.textSubtle
+            // Stronger light-mode text remains visible over a dark desktop.
+            color: Theme.dark ? Theme.textSubtle : Theme.textSecondary
             elide: Text.ElideRight
         }
 
@@ -54,7 +87,6 @@ Rectangle {
             Layout.alignment: Qt.AlignVCenter
         }
 
-        // Reminder that folder protection is armed: the folder encrypts on exit.
         RowLayout {
             visible: root.protectFolderEnabled
             spacing: 5
@@ -79,7 +111,6 @@ Rectangle {
 
         Item { Layout.fillWidth: true }
 
-        // Vault filename
         Text {
             Layout.minimumWidth: 0
             Layout.maximumWidth: 260
@@ -89,11 +120,10 @@ Rectangle {
             font.pixelSize: Theme.fontSizeSmall
             color: Theme.dark
                    ? Theme.accent2Dim
-                   : Theme.opaqueBlend(Theme.textPrimary, Theme.accent2Dim, 0.28)
+                   : Theme.blend(Theme.textPrimary, Theme.accent2Dim, 0.28, 1.0)
             elide: Text.ElideMiddle
         }
 
-        // Pipe separator, hidden when either side is absent.
         Text {
             visible: root.vaultFileName !== "" && root.accountCount > 0 && !root.narrowLayout
             text: "|"
@@ -102,7 +132,6 @@ Rectangle {
             color: Theme.textDisabled
         }
 
-        // Account count
         Text {
             visible: root.accountCount > 0
             text: root.accountCount + (root.accountCount === 1 ? " account" : " accounts")
@@ -111,7 +140,6 @@ Rectangle {
             color: Theme.dark ? Theme.textMuted : Theme.textSecondary
         }
 
-        // Pulsing dot while a fill is armed, mirroring the ActionBar countdown.
         Rectangle {
             id: armedIndicator
             width: 8

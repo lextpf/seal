@@ -28,18 +28,61 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
 
-// The application shell: one frameless window that owns the drag strip and window
-// buttons, the ambient backdrop, the content column and every top-level dialog.
-// Four of the five C++ context properties are driven from here: AppViewModel (vault
-// state and commands), Fill (TypeController, auto-fill arming), Cli (embedded
-// terminal) and WindowVM (Win32 window chrome). Bridge is only listened to here, for
-// its info and error dialogs; its commands live in HeaderBar and BridgeSettings.
+/*!
+ * \qmltype Main
+ * \inqmlmodule seal
+ * \brief Compose the application window and connect UI actions to C++ controllers.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * Create this window after QmlMain installs the context objects. They must remain
+ * alive until the QML engine is destroyed. QML presents state and routes gestures;
+ * C++ owns vault records, command validation, and credential access.
+ *
+ * \section1 Context objects
+ *
+ * \table
+ * \header
+ *     \li Object
+ *     \li Responsibility
+ * \row
+ *     \li \c AppViewModel
+ *     \li Vault commands, account selection, and password requests.
+ * \row
+ *     \li \c Fill
+ *     \li Armed-fill state, countdown, and cancellation.
+ * \row
+ *     \li \c Bridge
+ *     \li Browser companion state, installation, and diagnostics.
+ * \row
+ *     \li \c WindowVM
+ *     \li Native window operations and system motion preference.
+ * \row
+ *     \li \c Cli
+ *     \li CLI mode, command submission, and sanitized transcript output.
+ * \endtable
+ *
+ * Startup retains the cover during password entry and loading. If startup returns
+ * without a password request, release the initial cover hold. Closing waits for the
+ * cleanup completion signal because folder protection can finish asynchronously.
+ *
+ * Stored credentials do not enter edit fields. Typed passwords and QR results can
+ * enter QML temporarily; secure-desktop password capture remains in C++.
+ *
+ * \section1 Window geometry
+ *
+ * All dimensions use logical pixels. The compact minimum height is 272 pixels and
+ * must match WindowController. The fixed content uses 266 pixels: 92 for the header,
+ * 20 for two gaps, 100 for the account strip, 40 for actions, and 14 for the bottom
+ * margin. The content column receives the remaining 6 pixels.
+ */
 ApplicationWindow {
     id: window
     visible: false
     width: 1600
     height: 568
     minimumWidth: 800
+    // Keep the compact minimum synchronized with WindowController.
     minimumHeight: WindowVM.isCompact ? 272 : 480
     title: "seal"
     flags: Qt.Window | Qt.FramelessWindowHint
@@ -47,30 +90,64 @@ ApplicationWindow {
     leftPadding: 0
     rightPadding: 0
     bottomPadding: 0
-    color: Theme.bgDeep
+    // Alpha exposes the desktop beneath the window.
+    color: Theme.windowBase
     Behavior on color { ColorAnimation { duration: 350; easing.type: Easing.InOutQuad } }
 
-    // Desktop-only breakpoints. Qt reports these dimensions in logical pixels,
-    // so they remain stable across Windows DPI settings and mixed-DPI monitors.
+    /*!
+     * Use tighter horizontal spacing below 1200 logical pixels.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property bool narrowDesktop: width < 1200
+    /*!
+     * Use the narrowest horizontal spacing below 960 logical pixels.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property bool compactDesktop: width < 960
+    /*!
+     * Reduce vertical spacing below 540 logical pixels outside compact mode.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property bool shortDesktop: !WindowVM.isCompact && height < 540
+    /*!
+     * Left and right content inset, in logical pixels.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property int contentSideMargin: WindowVM.isCompact ? 16
                                                    : compactDesktop ? 20
                                                    : narrowDesktop ? 28
                                                    : Theme.spacingXL
-    // The window-control row owns the first 36 logical pixels in every mode, so
-    // content starts below it. Anything opaque drawn over that strip also removes
-    // window dragging there - see the drag MouseArea below.
-    readonly property int contentTopMargin: 36
+    /*!
+     * Content inset above the footer, in logical pixels.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property int contentBottomMargin: WindowVM.isCompact ? 14
                                                      : shortDesktop ? 16
                                                      : 24
+    /*!
+     * Gap between the header and content and between content rows, in logical pixels.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property int contentSpacing: WindowVM.isCompact ? 10
                                                 : shortDesktop ? 12
                                                 : narrowDesktop ? 16
                                                 : Theme.spacingLarge
 
+    /*!
+     * \brief Limit the initial window size to the available screen area.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * Reserve 64 logical pixels on each screen dimension, subject to the window's
+     * minimum size. Leave geometry unchanged if either available dimension is
+     * non-positive. This method does not reposition the window.
+     */
     function fitInitialWindowToScreen() {
         var availableWidth = Screen.desktopAvailableWidth;
         var availableHeight = Screen.desktopAvailableHeight;
@@ -87,8 +164,7 @@ ApplicationWindow {
         function onDarkChanged() { WindowVM.updateWindowTheme(Theme.dark) }
     }
 
-    // Theme.sortMode is the persisted user choice. Pushing it into the view model
-    // here keeps the ordering decision out of the views that display it.
+    // Apply the persisted sort choice to the model.
     Binding {
         target: AppViewModel
         property: "sortMode"
@@ -104,8 +180,7 @@ ApplicationWindow {
             errorDialog.open();
         }
 
-        // AppViewModel resolves the row and passes the platform name, so the view
-        // never reads the model to build the question.
+        // AppViewModel supplies the resolved, non-secret platform label.
         function onConfirmDeleteRequested(index, platform) {
             confirmDlg.deleteIndex = index;
             confirmDlg.message = "Are you sure you want to delete the account for '" + platform + "'?";
@@ -125,7 +200,7 @@ ApplicationWindow {
             infoDialog.open();
         }
 
-        // Rekey runs off-thread; this signal is its only completion report.
+        // Rekey reports validation failures and worker completion through this signal.
         function onRekeyFinished(success, message) {
             if (success) {
                 infoDialog.title = "Master password changed";
@@ -138,8 +213,7 @@ ApplicationWindow {
             }
         }
 
-        // First unlock prompt. Marks the boot cover as owned by the prompt so
-        // Component.onCompleted holds the cover instead of dropping it.
+        // Mark the unlock prompt as owner of the startup cover.
         function onPasswordRequired() {
             window.bootPasswordPending = true;
             passwordDlg.errorMessage = "";
@@ -169,8 +243,7 @@ ApplicationWindow {
                 passwordDlg.errorMessage = "Secure screen unavailable.";
         }
 
-        // The QR path is the only one that pre-fills the field. The secure-desktop
-        // path hands its result straight to the view model instead.
+        // Only QR results enter this field; secure-desktop input stays in C++.
         function onQrTextReady(text) {
             passwordDlg.errorMessage = "";
             passwordDlg.fillPassword(text);
@@ -216,6 +289,14 @@ ApplicationWindow {
         function onBridgeDiagnoseCancelled() {}
     }
 
+    /*!
+     * \brief Open the account dialog in add mode.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * Clear the initial service and reset the edit index. Opening the dialog resets
+     * its text fields; this method does not create a vault record.
+     */
     function openAddAccountDialog() {
         accountDlg.dialogTitle = "Add Account";
         accountDlg.editIndex = -1;
@@ -223,23 +304,28 @@ ApplicationWindow {
         accountDlg.open();
     }
 
-    // Set true whenever an unlock prompt is raised. Read once at startup, during the
-    // synchronous autoLoadVault call, to tell "vault present, awaiting unlock" from
-    // "no vault" so the boot cover is held or dropped correctly.
+    /*!
+     * Record that a password request claimed the initial cover during startup.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * The startup call checks this flag before releasing the cover hold. The flag does
+     * not track whether a password request is currently pending.
+     */
     property bool bootPasswordPending: false
-    // The first close is always intercepted. AppViewModel emits cleanupFinished
-    // only after asynchronous folder re-protection (when armed) has completed.
+    /*!
+     * Allow window closure after asynchronous cleanup reports completion.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     property bool closeReady: false
 
     Component.onCompleted: {
         fitInitialWindowToScreen();
         WindowVM.updateWindowTheme(Theme.dark);
         visible = true;
-        // The cover starts opaque (LoadingOverlay.booting) so the app is never seen
-        // before it. autoLoadVault raises the unlock prompt synchronously when a vault
-        // exists; the cover then stays up until the prompt takes over. With no vault,
-        // drop the cover at once (snap still true) so the empty app appears with no
-        // reverse-flash.
+        // autoLoadVault synchronously transfers the boot cover to the unlock prompt.
+        // Without a vault, release it before the first fade to avoid a flash.
         AppViewModel.autoLoadVault();
         if (!window.bootPasswordPending)
             loadingOverlay.booting = false;
@@ -255,9 +341,7 @@ ApplicationWindow {
         AppViewModel.cleanup();
     }
 
-    // Flat window-chrome button, fixed at 46x36 to match the drag strip height. The
-    // bleed properties extend the hover fill past one edge, for a button that has to
-    // reach into a window corner; every instance below leaves them at zero.
+    // Positive bleed extends the hover background beyond the button hit area.
     component ChromeButton: Item {
         id: chromeButton
         property alias iconSource: _icon.source
@@ -275,7 +359,7 @@ ApplicationWindow {
         property int backgroundBottomBleed: 0
         signal clicked()
 
-        width: 46; height: 36
+        width: 46; height: Theme.chromeHeight
 
         Rectangle {
             id: _background
@@ -339,15 +423,13 @@ ApplicationWindow {
         }
     }
 
-    // Window drag strip. A frameless window has no system title bar, so dragging
-    // exists only because this MouseArea calls WindowVM.startWindowDrag(). It spans
-    // the top 36 px up to the window buttons; a new opaque item over that strip takes
-    // the press and dragging stops working there.
+    // Keep this drag strip uncovered up to the window buttons. Items that consume
+    // presses here must call WindowVM.startWindowDrag() themselves.
     MouseArea {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: windowButtons.left
-        height: 36
+        height: Theme.chromeHeight
         z: 9
         acceptedButtons: Qt.LeftButton
         onPressed: function(mouse) { WindowVM.startWindowDrag() }
@@ -359,30 +441,30 @@ ApplicationWindow {
         }
     }
 
-    // Author mark inside the drag strip. It stacks above the drag handler but has no
-    // input handler of its own, so presses still reach the drag MouseArea.
+    // No input handler, so presses reach the drag MouseArea.
     Text {
         anchors.left: parent.left
         anchors.leftMargin: 10
         anchors.top: parent.top
-        height: 36
+        height: Theme.chromeHeight
         z: 10
         text: "@lextpf"
-        color: "#000000"
-        opacity: 0.58
+        color: Theme.chromeIcon
+        opacity: 0.58 * window.shellReveal
         font.family: Theme.fontFamily
         font.pixelSize: Theme.fontSizeSmall
         font.weight: Font.Medium
         verticalAlignment: Text.AlignVCenter
     }
 
-    // Custom window control buttons pinned to the top-right corner.
     Row {
         id: windowButtons
         anchors.top: parent.top
         anchors.right: parent.right
         z: 10
         spacing: 0
+        opacity: window.shellReveal
+        visible: opacity > 0.001
 
         ChromeButton {
             iconSource: Theme.iconThumbtack
@@ -443,9 +525,7 @@ ApplicationWindow {
         color: closeButton.pressed ? Theme.windowClosePressed : Theme.windowCloseHover
     }
 
-    // Escape hatch during the master-password prompt: the window-control row (z:10)
-    // is buried under the loading cover (z:100), so surface a close button above it
-    // (z:101). The prompt otherwise offers no way to quit the app.
+    // Keep a close button above the cover while the normal window controls are hidden.
     ChromeButton {
         anchors.top: parent.top
         anchors.right: parent.right
@@ -457,32 +537,45 @@ ApplicationWindow {
         onClicked: window.close()
     }
 
-    // Stop the shared animation clock whenever nothing of the ambient field is
-    // visible, so a hidden, minimised or fully covered window costs nothing per frame.
+    /*!
+     * Shell opacity, from 0 through 1, complementary to the cover opacity.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * The ambient background remains visible while the password prompt covers the shell.
+     */
+    readonly property real shellReveal: 1.0 - loadingOverlay.opacity
+
+    // Stop the shared clock when the window is hidden or minimized.
     Binding {
         target: Ambient
         property: "awake"
         value: window.visible && window.visibility !== Window.Minimized
-               && loadingOverlay.opacity < 0.999
     }
 
-    // Keep the ambient field proportionate without allowing decorative blobs
-    // to dominate a small desktop window or disappear on a large one.
+    /*!
+     * Decorative size multiplier, clamped to 0.82 through 1.30.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
     readonly property real ambientSizeScale:
         Math.max(0.82, Math.min(1.30, Math.min(width / 1600, height / 568)))
 
     component Blob: Rectangle {
         id: blob
-        property real phase: 0                 // shared clock, injected per instance
-        property real baseX: 0                 // responsive anchor (percentage of window)
+        // Shared phase in radians, supplied by each instance.
+        property real phase: 0
+        property real baseX: 0                 // Horizontal anchor in logical pixels.
         property real baseY: 0
-        property real swayAmp: Theme.px(12)    // horizontal drift base (the smaller axis)
-        property real bobAmp: Theme.px(18)     // vertical bob base (the dominant swell)
-        property real breatheAmp: 0.05         // scale swell base; x4 in the binding is +/-20%
-        property int freqX: 1                  // integer multipliers keep the loop seamless
+        // Horizontal amplitude in logical pixels, multiplied by 5.
+        property real swayAmp: Theme.px(12)
+        // Vertical amplitude in logical pixels, multiplied by 5.
+        property real bobAmp: Theme.px(18)
+        property real breatheAmp: 0.05         // Scale amplitude, multiplied by 4.
+        property int freqX: 1                  // Integer frequencies keep the loop continuous.
         property int freqY: 1
         property int freqS: 1
-        property real phaseX: 0                // phase offsets spread the field out of sync
+        property real phaseX: 0                // Phase offset in radians.
         property real phaseY: 0
         property real phaseS: 0
 
@@ -490,8 +583,7 @@ ApplicationWindow {
         z: -1
         antialiasing: true
         transformOrigin: Item.Center
-        // The amplitude properties above are bases; these bindings scale them:
-        // x5 for sway and bob, x4 for the scale swell.
+        // Scale base amplitudes by 5 for sway/bob and 4 for swell.
         x: baseX + swayAmp * 5.0 * Math.sin(phase * freqX + phaseX)
         y: baseY + bobAmp * 5.0 * Math.sin(phase * freqY + phaseY)
         scale: 1.0 + breatheAmp * 4.0 * Math.sin(phase * freqS + phaseS)
@@ -608,14 +700,16 @@ ApplicationWindow {
             id: ripple
             readonly property real ph: (window.ripplePhase + index / 3.0) % 1.0
             property real lastPh: 0
-            property real cx: (index * 0.31 + 0.2) % 1.0   // initial spread; re-randomized on wrap
+            // Initial horizontal position as a fraction of window width; randomized at wrap.
+            property real cx: (index * 0.31 + 0.2) % 1.0
             property real cy: (index * 0.47 + 0.15) % 1.0
             property var blobHues: [Theme.blobColor1, Theme.blobColor2, Theme.blobColor3]
             property color hue: Qt.rgba(blobHues[index % 3].r, blobHues[index % 3].g, blobHues[index % 3].b, 1.0)
             readonly property real maxD: Math.hypot(window.width, window.height) * 1.2
 
             onPhChanged: {
-                if (ph < lastPh) {              // wrapped -> new cycle: re-seed while invisible
+                // Choose the next center and hue at wrap, while the ripple is invisible.
+                if (ph < lastPh) {
                     cx = Math.random();
                     cy = Math.random();
                     var c = blobHues[Math.floor(Math.random() * 3)];
@@ -641,44 +735,44 @@ ApplicationWindow {
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
+        opacity: window.shellReveal
+        visible: opacity > 0.001
+
+        // Compact mode leaves 6 px beyond fixed child heights; the content column takes
+        // that slack so the header keeps its height and starts at y = 0.
+        HeaderBar {
+            id: headerBar
+            Layout.fillWidth: true
+            isCompact: WindowVM.isCompact
+            isCliMode: Cli.isCliMode
+            sideMargin: window.contentSideMargin
+            vaultLoaded: AppViewModel.vaultLoaded
+            protectFolderEnabled: AppViewModel.protectFolderEnabled
+            resultCount: AppViewModel.vaultModel.count
+
+            onLoadClicked: AppViewModel.loadVault()
+            onSaveClicked: AppViewModel.saveVault()
+            onUnloadClicked: AppViewModel.unloadVault()
+            onRekeyClicked: rekeyDlg.open()
+            onProtectFolderToggled: function(enabled) {
+                AppViewModel.requestProtectFolderEnabled(enabled);
+            }
+            onSearchRequested: function(text) { AppViewModel.searchFilter = text }
+        }
 
         ColumnLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
+            // Assign slack to this cell; AlignTop keeps content against the header.
+            Layout.verticalStretchFactor: 1
+            Layout.alignment: Qt.AlignTop
             Layout.leftMargin: window.contentSideMargin
             Layout.rightMargin: window.contentSideMargin
-            Layout.topMargin: window.contentTopMargin
+            Layout.topMargin: window.contentSpacing
             Layout.bottomMargin: window.contentBottomMargin
             spacing: window.contentSpacing
 
-            // Vault commands leave the header as signals and are routed into
-            // AppViewModel here, so the header holds no vault state.
-            HeaderBar {
-                Layout.fillWidth: true
-                visible: !WindowVM.isCompact
-                vaultLoaded: AppViewModel.vaultLoaded
-                protectFolderEnabled: AppViewModel.protectFolderEnabled
-
-                onLoadClicked: AppViewModel.loadVault()
-                onSaveClicked: AppViewModel.saveVault()
-                onUnloadClicked: AppViewModel.unloadVault()
-                onRekeyClicked: rekeyDlg.open()
-                onProtectFolderToggled: function(enabled) {
-                    AppViewModel.requestProtectFolderEnabled(enabled);
-                }
-            }
-
-            // Cli.isCliMode swaps the vault views for the terminal panel. Both stay
-            // instantiated; only visibility changes.
-            SearchBar {
-                id: searchBar
-                Layout.fillWidth: true
-                visible: !Cli.isCliMode
-                vaultLoaded: AppViewModel.vaultLoaded
-                resultCount: AppViewModel.vaultModel.count
-                onSearchRequested: function(text) { AppViewModel.searchFilter = text }
-            }
-
+            // Both views remain instantiated across mode changes.
             AccountsGrid {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -707,7 +801,7 @@ ApplicationWindow {
 
                 onAddAccountRequested: window.openAddAccountDialog()
                 onClearSearchRequested: {
-                    searchBar.text = "";
+                    headerBar.searchText = "";
                     AppViewModel.searchFilter = "";
                 }
             }
@@ -754,8 +848,7 @@ ApplicationWindow {
         }
     }
 
-    // Boot cover and scrypt-grind indicator. At z:100 it covers the whole window,
-    // including the window-control row.
+    // At z:100 the cover owns window input; shellReveal fades the underlying content.
     LoadingOverlay {
         id: loadingOverlay
         anchors.fill: parent
@@ -796,15 +889,14 @@ ApplicationWindow {
         }
     }
 
-    // A wrong password fractures the cover; reopen the prompt after that animation
-    // rather than on top of it.
+    // Reopen after the fracture animation finishes.
     Timer {
         id: retryReopen
         interval: 340
         onTriggered: passwordDlg.open()
     }
 
-    // Add/edit dialog. editIdx == -1 means add; >= 0 means edit.
+    // A negative editIdx adds a record; a non-negative value edits a record.
     AccountDialog {
         id: accountDlg
         onAccepted: function(service, username, password, editIdx) {
@@ -815,7 +907,7 @@ ApplicationWindow {
         }
     }
 
-    // Soft-delete: marks record as deleted in memory, removed on next save.
+    // Soft deletes commit on the next save.
     ConfirmDialog {
         id: confirmDlg
         title: "Confirm Delete"
@@ -930,7 +1022,6 @@ ApplicationWindow {
         }
     }
 
-    // Success/info messages (e.g. "Vault saved", "Directory encrypted").
     ConfirmDialog {
         id: infoDialog
         tone: Theme.accent
