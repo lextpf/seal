@@ -2,33 +2,106 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Chip grid over VaultListModel: a Flow of AccountChip delegates plus the three
-// empty states. The row numbers this grid emits are visual positions in the
-// filtered, sorted model, never record indices. The grid reports gestures only;
-// Main.qml forwards them to AppViewModel, which resolves the row and owns every
-// mutation.
+/*!
+ * \qmltype AccountsGrid
+ * \inqmlmodule seal
+ * \brief Present filtered credential chips and vault empty states.
+ *
+ * Author: \l {https://github.com/lextpf}{Lextpf}.
+ *
+ * The owner supplies the model and selection. Emitted rows index the current
+ * filtered, sorted view; AppViewModel resolves them to records and owns mutations.
+ * Compact mode hides the scrollbar and resets vertical scroll to the top.
+ *
+ * With no visible rows, the message depends on the supplied state:
+ *
+ * \table
+ * \header
+ *     \li Condition
+ *     \li Message
+ * \row
+ *     \li No vault is loaded.
+ *     \li Load a vault.
+ * \row
+ *     \li A vault is loaded and search is active.
+ *     \li No matching accounts.
+ * \row
+ *     \li A vault is loaded and search is inactive.
+ *     \li The vault has no accounts.
+ * \endtable
+ */
 Rectangle {
     id: root
 
-    property var model              // VaultListModel from AppViewModel, already filtered
-    property int selectedRow: -1    // Visual row of the selected chip (-1 = none)
-    property bool searchActive: false  // Search filter is non-empty
-    property bool vaultLoaded: false   // A vault is open
-    property bool isCompact: false     // Collapsed window: one chip strip, no scrollbar
+    /*!
+     * Filtered VaultListModel supplied by AppViewModel; null or unset shows no chips.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property var model
+    /*!
+     * Zero-based row in the current model; -1 leaves every chip unselected.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property int selectedRow: -1
+    /*!
+     * Select the no-results message when the loaded vault has no visible rows.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property bool searchActive: false
+    /*!
+     * Distinguish a closed vault from an open vault with no visible rows.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property bool vaultLoaded: false
+    /*!
+     * Hide sorting, scrollbars, and expanded empty-state details.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     */
+    property bool isCompact: false
 
     readonly property bool showNoResultsState: chipRepeater.count === 0 && root.searchActive && root.vaultLoaded
     readonly property bool showNoVaultState: chipRepeater.count === 0 && !root.vaultLoaded
     readonly property bool showEmptyVaultState: chipRepeater.count === 0 && root.vaultLoaded && !root.searchActive
 
+    /*!
+     * \brief Forward a chip click with its current visual row.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * The owner must resolve \a row through the current model before accessing a record.
+     */
     signal rowClicked(int row)
+    /*!
+     * \brief Forward a chip double-click with its current visual row.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * The owner must resolve \a row through the current model before accessing a record.
+     */
     signal rowDoubleClicked(int row)
-    // Reserved hooks for the empty-state action row (EmptyStatePanel.actions).
-    // No delegate emits them today; Main.qml already handles both.
+    /*!
+     * \brief Reserve an account-creation request for the owner.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * The current empty-state controls do not emit this signal.
+     */
     signal addAccountRequested()
+    /*!
+     * \brief Reserve a filter-clear request for the owner.
+     *
+     * Author: \l {https://github.com/lextpf}{Lextpf}.
+     *
+     * The current empty-state controls do not emit this signal.
+     */
     signal clearSearchRequested()
 
-    // Card for the empty-vault state. Default children are appended to the
-    // action row under the message text.
+    // Default children enter the action row below the empty-vault message.
     component EmptyStatePanel: Rectangle {
         id: panel
         property string titleText: ""
@@ -127,7 +200,6 @@ Rectangle {
     border.color: Theme.dark ? Theme.borderMedium : Theme.borderSubtle
     clip: true
 
-    // Decorative corner glows behind the chips.
     Rectangle {
         width: parent.width * 0.40
         height: parent.height * 0.30
@@ -210,8 +282,7 @@ Rectangle {
                 }
             }
 
-            // Compact mode shows a single chip strip and hides the scrollbar, so
-            // reset the offset or the strip stays parked mid-list.
+            // Reset scrolling when compact mode hides the scrollbar.
             Connections {
                 target: root
                 function onIsCompactChanged() {
@@ -221,7 +292,6 @@ Rectangle {
                 }
             }
 
-            // ------- Empty states: search miss, no vault, empty vault -------
 
             Column {
                 anchors.centerIn: parent
