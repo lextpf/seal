@@ -1,0 +1,39 @@
+# @brief Generate the standalone QML reference with an installed QDoc executable.
+# @author OpenAI Codex (<https://github.com/openai>)
+#
+# Paths resolve from this file. Keep output separate from authored input and the Material site.
+project = seal
+description = "seal QML reference"
+version = 1.0.0
+outputformats = HTML
+outputdir = build/qdoc/html
+outputencoding = UTF-8
+sourceencoding = UTF-8
+moduleheader =
+locationinfo = false
+sources = docs/qml.qdoc \
+    qml/AccountChip.qml \
+    qml/AccountDialog.qml \
+    qml/AccountsGrid.qml \
+    qml/AccountsToolbar.qml \
+    qml/ActionBar.qml \
+    qml/Ambient.qml \
+    qml/BridgeSettings.qml \
+    qml/CliPanel.qml \
+    qml/ConfirmDialog.qml \
+    qml/DialogBlobs.qml \
+    qml/HeaderBar.qml \
+    qml/LoadingOverlay.qml \
+    qml/Main.qml \
+    qml/PasswordDialog.qml \
+    qml/ProtectFolderDialog.qml \
+    qml/RekeyDialog.qml \
+    qml/RippleEffect.qml \
+    qml/SearchBar.qml \
+    qml/StatusFooter.qml \
+    qml/SvgIcon.qml \
+    qml/Theme.qml \
+    qml/TintedButton.qml
+sources.fileextensions = "*.qml *.qdoc"
+HTML.nosubdirs = true
+HTML.outputsubdir = .
