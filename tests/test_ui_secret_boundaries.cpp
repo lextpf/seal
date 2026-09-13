@@ -175,8 +175,6 @@ TEST(MvvmCommandRoutingTest, CliEchoClassificationLivesInCliHandler)
 
 TEST(MvvmCommandRoutingTest, CliTranscriptIsOwnedByTheCliPanelViewModel)
 {
-    // The CLI transcript moved to CliPanelViewModel (the "Cli" context
-    // property); the view binds Cli.cliOutputText, not AppViewModel's.
     const std::string cliHeader = readSourceFile("src/CliPanelViewModel.hpp");
     const std::string cliCpp = readSourceFile("src/CliPanelViewModel.cpp");
     const std::string cliPanel = readSourceFile("qml/CliPanel.qml");
@@ -290,8 +288,7 @@ TEST(Top5FeaturesTest, RekeyFlowIsViewModelMediatedAndSecretSafe)
     expectPresent(rekeyDialog, "AppViewModel.rekeyVault(");
     expectPresent(headerBar, "rekeyClicked");
 
-    // The dialog must clear its fields after submission and never bind
-    // password text to anything but the two invocation arguments.
+    // clear transient password fields after submission.
     expectPresent(rekeyDialog, "function clearFields()");
     expectAbsent(rekeyDialog, "vaultModel");
 }
@@ -356,12 +353,11 @@ TEST(SecretOwnership, AppViewModelOwnsKeyOnlyViaCredentialWorkspace)
 {
     const std::string src = readSourceFile("src/AppViewModel.cpp");
     const std::string hdr = readSourceFile("src/AppViewModel.hpp");
-    // The trio members are gone; ownership lives in CredentialWorkspace, which
-    // in turn owns the CredentialSession.
+    // CredentialWorkspace owns CredentialSession.
     EXPECT_EQ(hdr.find("m_DPAPIGuard"), std::string::npos);
     EXPECT_EQ(hdr.find("m_PasswordSet"), std::string::npos);
     EXPECT_NE(hdr.find("CredentialWorkspace& m_Workspace"), std::string::npos);
-    // No direct DPAPI/trio mutation remains in the .cpp.
+
     EXPECT_EQ(src.find("m_DPAPIGuard"), std::string::npos);
     EXPECT_EQ(src.find("m_PasswordSet"), std::string::npos);
     EXPECT_EQ(src.find("ScopedDpapiUnprotect"),
@@ -372,10 +368,10 @@ TEST(PendingAction, SingleAssignerNoLastWriterWins)
 {
     const std::string src = readSourceFile("src/AppViewModel.cpp");
     const std::string hdr = readSourceFile("src/AppViewModel.hpp");
-    // The single overwrite-able slot is gone; a FIFO queue replaces it.
+    // password continuations must preserve FIFO order.
     EXPECT_EQ(hdr.find("std::function<void()> m_PendingAction"), std::string::npos);
     EXPECT_NE(hdr.find("std::deque<std::function<void()>> m_PendingActions"), std::string::npos);
-    // No site assigns the continuation directly; they all route via ensurePassword.
+
     EXPECT_EQ(src.find("m_PendingAction ="), std::string::npos);
     EXPECT_NE(src.find("ensurePassword("), std::string::npos);
 }
@@ -387,33 +383,24 @@ TEST(FillPlaintextWindow, NarrowedToDecryptInstant)
     const std::string vmSrc = readSourceFile("src/AppViewModel.cpp");
     const std::string tcSrc = readSourceFile("src/TypeController.cpp");
 
-    // FillController borrows the session, not a pre-unprotected buffer: the
-    // legacy const-ref master-password member/parameter is gone.
+    // FillController borrows the session; plaintext access is scoped to decryption.
     EXPECT_NE(fcH.find("CredentialSession"), std::string::npos);
     EXPECT_NE(fcH.find("CredentialSession* m_Session"), std::string::npos);
     EXPECT_EQ(fcH.find("m_MasterPw"), std::string::npos);
     EXPECT_EQ(fcSrc.find("m_MasterPw"), std::string::npos);
 
-    // performType opens a scoped unlock() so the key is plaintext only for the
-    // decrypt; the very next call hands access.password() to the decrypt.
     EXPECT_NE(fcSrc.find("m_Session->unlock()"), std::string::npos);
     EXPECT_NE(fcSrc.find("decryptCredentialOnDemand(record, access.password())"),
               std::string::npos);
 
-    // Arming no longer pre-unprotects the key for the whole armed window: the
-    // session is handed straight to arm() rather than access.password(). After
-    // Task 8 the arm site lives in TypeController and pulls records/session/
-    // generation from the injected CredentialWorkspace.
+    // arming borrows workspace records and session without unlocking the password.
     EXPECT_NE(tcSrc.find("m_Engine.arm(index, m_Workspace.records(), "
                          "m_Workspace.session(), m_Workspace.generation())"),
               std::string::npos);
-    // AppViewModel no longer references the fill engine directly.
+
     EXPECT_EQ(vmSrc.find("m_FillController"), std::string::npos);
 
-    // The 60s fill reprotect safety net is gone. Neither AppViewModel.cpp nor
-    // TypeController.cpp uses QTimer::singleShot; an absent (not merely
-    // "unique") singleShot is the robust signal - re-introducing the timer
-    // would re-add a singleShot and fail this assertion.
+    // plaintext protection must follow scope exit rather than a delayed timer.
     EXPECT_EQ(vmSrc.find("singleShot"), std::string::npos);
     EXPECT_EQ(tcSrc.find("singleShot"), std::string::npos);
 }
@@ -426,70 +413,74 @@ TEST(StagedAutofillBoundary, StagingNeverDecryptsAndReleaseFailsClosed)
     const std::string clipboardSrc = readSourceFile("src/Clipboard.cpp");
     const std::string qm = readSourceFile("src/QmlMain.cpp");
 
-    // Staging only selects + arms; it never decrypts, unlocks, or prompts for
-    // the master password. The plaintext window stays at the click-time
-    // decrypt in FillController, so these must be absent from the poll.
+    // staging selects and arms; plaintext access belongs to FillController at click time.
     expectAbsent(scSrc, "decryptCredentialOnDemand");
     expectAbsent(scSrc, "unlock()");
     expectAbsent(scSrc, "ensurePassword");
-    // The nav poll is a repeating timer, never a one-shot reprotect net.
+
     expectAbsent(scSrc, "singleShot");
 
-    // The auto-fill release path is hardened: injected clicks are rejected,
-    // the fused verdict must be on-disk corroborated (decideDetailed), and the
-    // classification / host / foreground gates fail closed.
+    // auto-fill requires native-probe corroboration and fail-closed host/foreground gates.
     expectPresent(fcSrc, "LLMHF_INJECTED");
     expectPresent(fcSrc, "decideDetailed");
     expectPresent(fcSrc, "reason=no_bridge_entry");
     expectPresent(fcSrc, "reason=host_mismatch");
     expectPresent(fcSrc, "reason=foreground_pid_mismatch");
-    // Nav-mode host binding goes through the shared secret-release matcher:
-    // only records storing a real domain/URL can release browser credentials.
+    expectPresent(fcSrc, "reason=visit_mismatch");
+    expectPresent(fcSrc, "reason=weak_fusion");
+    expectPresent(fcSrc, "outcome.m_Tier1ShortCircuit && outcome.m_BridgeCorroborated");
+    // only domain-bound records can release browser credentials.
     expectPresent(fcSrc, "url::platformMatchesHostForSecretRelease(record.platform, pageHost)");
-    // Manual Ctrl+Click uses the same strict domain-aware matcher and refuses
-    // browser fills when no fresh bridge URL exists.
-    expectPresent(fcSrc, "reason=no_bridge_entry_manual");
-    expectPresent(fcSrc, "reason=manual_foreground_pid_mismatch");
-    expectPresent(fcSrc, "url::platformMatchesHostForSecretRelease(record.platform,");
-    expectPresent(fcSrc, "manualPageHost))");
     expectAbsent(fcSrc, "keysMatch(recordKey, pageKey)");
-    // armAuto is a distinct entry (keeps the manual arm() call string intact).
+
     expectPresent(fcSrc, "armAuto");
 
-    // Staged auto-fill is opt-in: the master switch defaults to false.
     expectPresent(bvmSrc, "\"bridge/autostage\", false");
 
-    // StagingController is an owned collaborator, NOT a 6th context property.
     expectAbsent(qm, "setContextProperty(\"Staging\"");
-
-    // --- Zero-click username injection (reverse channel) invariants ---
 
     const std::string bbSrc = readSourceFile("src/BrowserBridge.cpp");
     const std::string contentJs = readSourceFile("extensions/browser/content.js");
 
-    // The username decrypt+send lives in FillController (JIT), NOT in the
-    // decrypt-free StagingController.
     expectAbsent(scSrc, "sendFillUsername");
     expectPresent(fcSrc, "injectUsername");
-    // Username injection uses the same strict browser secret-release matcher
-    // as the password gate.
+
     expectPresent(fcSrc, "platformMatchesHostForSecretRelease(record.platform, host)");
     expectPresent(fcSrc, "decryptUsernameOnDemand(record, access.password())");
-    // Only the USERNAME crosses the reverse channel; the password is never sent
-    // to the browser (no such method exists).
+    // the reverse channel carries usernames only.
     expectPresent(fcSrc, "sendFillUsername");
     expectAbsent(fcSrc, "sendFillPassword");
     expectAbsent(bbSrc, "sendFillPassword");
-    // The bridge wipes the plaintext username wire buffer after sending.
+
     expectPresent(bbSrc, "SecureZeroMemory(json.data()");
-    // The content script re-verifies its own host and per-document visit token
-    // before injecting, so a stale or same-host different-document route fails closed.
+    // recheck the host and visit token in the receiving document.
     expectPresent(contentJs, "msg.url_host !== location.host");
     expectPresent(contentJs, "msg.visit !== VISIT_TOKEN");
 
-    // typeSecret sends each key as one atomic down+up pair and must report a
-    // short SendInput (partial or failed pair) instead of marking fills complete.
+    // a partial SendInput pair must fail the fill.
     expectPresent(clipboardSrc, "if (sent != 2)");
+}
+
+// Ctrl+Click fill is authorized by the record selection and the physical click. The browser
+// extension never gates it; only the OS focus check and the fused probe verdict apply.
+TEST(ManualFillBoundary, CtrlClickReleaseIsOsGatedAndExtensionIndependent)
+{
+    const std::string fcSrc = readSourceFile("src/FillController.cpp");
+
+    // the focused window must still own the clicked window when typing starts.
+    expectPresent(fcSrc, "reason=manual_foreground_pid_mismatch");
+    // the fused verdict still selects the field for an Auto target.
+    expectPresent(fcSrc, "runProbeRegistry(m_ClickX.load(), m_ClickY.load())");
+    // one success line, and it carries no host.
+    expectPresent(fcSrc, "\"event=fill.manual.release\", \"result=ok\"");
+
+    // no bridge entry, host, visit, or corroboration check may block a manual fill.
+    expectAbsent(fcSrc, "event=fill.url_mismatch_block");
+    expectAbsent(fcSrc, "reason=no_bridge_entry_manual");
+    expectAbsent(fcSrc, "reason=visit_mismatch_manual");
+    expectAbsent(fcSrc, "reason=weak_fusion_manual");
+    expectAbsent(fcSrc, "manualPageHost");
+    expectAbsent(fcSrc, "isKnownBrowserImage");
 }
 
 TEST(BrowserExtensionBoundary, ClicksAreSecureAndUsernameRoutesByVisit)
@@ -532,33 +523,21 @@ TEST(BrowserBridgeBoundary, ShellHopsRequireTrustedShellImages)
     expectPresent(signerHpp, "isShellPathAllowed");
     expectPresent(signerHpp, "winVerifyTrustOk(imagePath)");
 
-    // Inbox shells carry no embedded signature - they are catalog-signed. An
-    // embedded-only gate is unsatisfiable for them and silently kills the
-    // whole shell-hop traversal, so the catalog path is load-bearing rather
-    // than a fallback. SignerFamilyTest.TrustsCatalogSignedInboxShells is the
-    // behavioural check; this only stops the code path being deleted.
+    // inbox shells use catalog signatures. SignerFamilyTest tests trust behavior;
+    // this scan keeps the catalog verification path present.
     expectPresent(signerHpp, "detail::catalogTrustOk(imagePath, catalogPublisher)");
     expectPresent(signerHpp, "WTD_CHOICE_CATALOG");
 }
 
-// host/browser/main.cpp is a separate target and is not compiled into
-// seal_tests, so this lifecycle invariant can only be pinned by a scan.
-//
-// The host's forward loop blocks on a stdin read that only the browser can
-// end, so bridge death is invisible to it; only the reverse-reader thread
-// sees the pipe drop. If that thread merely returns, the process survives
-// its own bridge and keeps the browser's native-messaging port open - and
-// the extension reconnects only once that port drops, so both its backoff
-// and its 30 s alarm stay disarmed. The symptom is that restarting seal
-// never reconnects until the extension is manually reloaded.
+// the host is outside seal_tests, so this invariant needs a source scan.
+// pipe loss must close the native port even while stdin blocks, or the extension cannot reconnect.
 TEST(BrowserHostBoundary, HostExitsWhenItsBridgePipeDies)
 {
     const std::string hostMain = readSourceFile("host/browser/main.cpp");
 
     expectPresent(hostMain, "emitExitDiag(0, \"bridge_pipe_closed\")");
     expectPresent(hostMain, "ExitProcess(0)");
-    // Must stay conditional: an orderly teardown signals shutdownEvent and the
-    // main loop writes its own exit line, so exiting there would be wrong.
+    // orderly shutdown lets the main loop log and exit; only unexpected pipe loss exits here.
     expectPresent(hostMain, "WaitForSingleObject(shutdownEvent, 0) != WAIT_OBJECT_0");
 }
 
@@ -587,13 +566,12 @@ TEST(Phase2aBoundaryTest, AppViewModelImplementsSeams)
 TEST(WorkPoolDeadlockGuard, ProcessDirectoryDoesNotSubmitDirectoryTasks)
 {
     const std::string src = readSourceFile("src/FileOperations.cpp");
-    // The directory branch must recurse INLINE, never submit a recursive
-    // processDirectory call to the pool (the H1 same-pool blocking deadlock).
+    // recurse on the current worker to avoid waiting on the same pool.
     EXPECT_EQ(src.find("Submit(\n                    [full, &password]() -> bool\n"
                        "                    { return FileOperations::processDirectory"),
               std::string::npos);
     EXPECT_NE(src.find("processDirectory(full, password, true)"), std::string::npos);
-    // Worker-count floor present.
+
     EXPECT_NE(src.find("std::max(1u, std::min(std::thread::hardware_concurrency(), 8u))"),
               std::string::npos);
 }
@@ -602,7 +580,7 @@ TEST(Phase2aBoundaryTest, AppViewModelOwnsNoRawRecordsOrSession)
 {
     const std::string cpp = readSourceFile("src/AppViewModel.cpp");
     const std::string hpp = readSourceFile("src/AppViewModel.hpp");
-    // State now lives in the workspace; AppViewModel reaches it via m_Workspace.
+
     expectAbsent(hpp, "std::vector<seal::VaultRecord> m_Records");
     expectAbsent(hpp, "seal::CredentialSession m_Session");
     expectPresent(hpp, "CredentialWorkspace& m_Workspace");
@@ -613,11 +591,7 @@ TEST(WorkerLifetime, AllWorkersDrainedAndCompletionsGuarded)
 {
     const std::string src = readSourceFile("src/AppViewModel.cpp");
 
-    // The load and rekey worker completions guard against a destroyed receiver
-    // via AsyncRunner: its per-call QFutureWatcher is bound to the receiver, so
-    // a mid-flight scrypt's onDone is auto-skipped once the AppViewModel dies.
-    // (m_Workers/drainWorkers removed in Phase 2b Task 7 - superseded by
-    // AsyncRunner teardown; see Phase2bBoundaryTest.NoHandRolledWorkersOrTerminate)
+    // AsyncRunner binds completion to the receiver; destroyed receivers must not receive results.
     EXPECT_NE(src.find("m_Async.run("), std::string::npos);
 }
 
@@ -677,13 +651,10 @@ TEST(SecureDesktopUnlockBoundary, CapturedPasswordStaysInLockedMemory)
     const std::string hpp = readSourceFile("src/AppViewModel.hpp");
     const std::string cpp = readSourceFile("src/AppViewModel.cpp");
 
-    // ViewModel surface: the invokable + the capture-failure signal exist.
     expectPresent(hpp, "Q_INVOKABLE void requestSecureDesktopUnlock()");
     expectPresent(hpp, "void secureCaptureFinished(bool");
 
-    // The password comes from the CredUI secure-desktop helper and is MOVED
-    // straight into the shared adopt+verify path -- never turned into a QString
-    // and never pre-filled into the field (contrast the QR path's qrTextReady).
+    // CredUI output must move directly into adopt/verify without a QString or field prefill.
     expectPresent(cpp, "#include \"Console.hpp\"");
     expectPresent(cpp, "readPasswordSecureDesktop(");
     expectPresent(cpp, "adoptPasswordAndDrain(std::move(");
@@ -694,10 +665,9 @@ TEST(SecureDesktopUnlockBoundary, ButtonIsWiredThroughTheViewModel)
     const std::string pwDialog = readSourceFile("qml/PasswordDialog.qml");
     const std::string mainQml = readSourceFile("qml/Main.qml");
 
-    // The dialog exposes a dedicated signal and delegates to the invokable via
-    // the parent -- it never calls a controller or pre-fills the field.
+    // the parent handles the dialog signal; the dialog must not call a controller.
     expectPresent(pwDialog, "signal secureScreenRequested()");
     expectPresent(mainQml, "AppViewModel.requestSecureDesktopUnlock()");
-    // The secure path must NOT reuse the QR pre-fill route for its result.
+
     expectPresent(mainQml, "onSecureCaptureFinished");
 }
