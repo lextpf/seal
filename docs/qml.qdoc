@@ -1,0 +1,32 @@
+/*!
+ * \qmlmodule seal 1.0
+ * \title seal QML reference
+ * \brief Describe the shared controls in the seal application.
+ *
+ * Author: \l {https://github.com/openai}{OpenAI Codex}.
+ *
+ * The QML layer presents application state and sends user actions to C++ view models.
+ * Shared controls use the colors, spacing, and motion settings in Theme.qml.
+ *
+ * \section1 Use a shared action button
+ *
+ * Use TintedButton for actions in the application workspace. Connect its inherited
+ * clicked signal to the view model that owns the action.
+ *
+ * \qml
+ * import QtQuick
+ * import seal
+ *
+ * TintedButton {
+ *     text: qsTr("Refresh")
+ *     onClicked: workspace.refresh()
+ * }
+ * \endqml
+ *
+ * The example assumes that the surrounding view supplies workspace. See the
+ * \l {https://doc.qt.io/qt-6/qml-qtquick-controls-button.html}{Qt Button reference}
+ * for inherited signals and properties.
+ *
+ * This reference includes all components in qml/. Member comments describe component
+ * contracts; inherited Qt API remains in the Qt reference.
+ */
