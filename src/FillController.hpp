@@ -26,16 +26,20 @@ namespace seal
 
 /**
  * @class FillController
- * @brief Manages credential auto-fill via global Windows input hooks.
- * @author Fable 5 (https://github.com/claude)
+ * @brief Release armed credentials through global Windows input hooks.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup FillController
  *
- * Auto-fill runs in two phases: the caller arms the controller for one vault
- * record, then a click in an external application releases the credential as
- * synthesised keystrokes (`SendInput`). Arming installs desktop-wide mouse and
- * keyboard hooks; the completing click decides which field is typed.
+ * Manual mode types either field on Ctrl+Click and completes after both fields.
+ * Auto mode types the password once on a plain click; it has no timeout.
+ * Diagnose mode runs probes without decrypting or typing.
  *
- * ## :material-state-machine: State Machine
+ * One controller owns the global hooks. Callbacks run on the installing GUI
+ * thread, update atomics, and queue work outside the OS hook dispatcher.
+ * Ctrl-held clicks do not start auto fills. Probes and keystroke delivery run on
+ * the GUI thread; a blocking provider or typing call delays cancellation processing.
+ *
+ * ### :material-transit-connection-variant: Manual fill states
  *
  * ```mermaid
  * ---
@@ -60,27 +64,6 @@ namespace seal
  *     T -->|error| Idle
  * ```
  *
- * - **Idle** - no hooks installed, waiting for arm().
- * - **Armed** - hooks active, waiting for Ctrl+Click. The probe pipeline
- *   detects whether the clicked field is a password input; either field can be
- *   typed in any order, and bit flags track which ones are done.
- * - **Typing** - keystrokes being sent, hooks still installed.
- *
- * Two more entry points reuse the same hook machinery:
- * - **AutoArmed** - staged on navigation by StagingController (armAuto()),
- *   never by the user. A plain click (no Ctrl) into a bridge-classified login
- *   field completes the fill through the fail-closed auto gates. It has no
- *   timeout: only Esc, a re-stage, or the fill itself ends it.
- * - **Diagnose** - armDiagnose() installs the same hooks and shares the Armed
- *   timeout, but a Ctrl+Click only dry-runs the probe pipeline (no decrypt, no
- *   keystrokes) and emits diagnoseCompleted with the per-probe verdict.
- *
- * ## Complete state machine (ASCII)
- *
- * The Mermaid diagram covers the manual Ctrl+Click path only. The full machine
- * has five states across three entry points; @ref State::Typing is transient
- * and always resolves back to its path's armed state or to @ref State::Idle.
- *
  * @verbatim
  *  MANUAL    Idle --arm()--> Armed
  *            Armed --Ctrl+Click--> Typing
@@ -99,39 +82,12 @@ namespace seal
  *            timeout: Armed | Diagnose  (30 s, Auto has none) --> Idle
  * @endverbatim
  *
- * ## :material-keyboard: Modifier Keys
- *
- * A modifier overrides which field gets typed. Modifiers apply to
- * @ref State::Armed only: while AutoArmed a Ctrl-held click is passed straight
- * through and starts nothing.
- *
- * | Gesture          | Effect                                                |
- * |------------------|-------------------------------------------------------|
- * | Ctrl+Click       | Type the field the probe pipeline detects             |
- * | Ctrl+Shift+Click | Type the password (forced, overrides detection)       |
- * | Ctrl+Alt+Click   | Type the username (forced, overrides detection)       |
- * | Esc              | Cancel and remove hooks (Armed, AutoArmed, Diagnose)  |
- *
- * ## :material-format-list-bulleted: Properties
- *
- * - **isArmed** (bool) - true in Armed and AutoArmed only
- * - **fillStatusText** (QString) - status line for the UI
- * - **countdownSeconds** (int) - seconds before auto-cancel; it ticks in Armed
- *   and Diagnose only, so AutoArmed holds it at 30
- *
- * ## :material-signal: Signals
- *
- * - **armedChanged**, **fillStatusTextChanged**, **countdownSecondsChanged** -
- *   property notifications
- * - **fillCompleted**(statusMessage) - both fields typed in manual mode, the
- *   password alone in AutoArmed mode
- * - **fillError**(errorMessage) - hook install, gate, decrypt or keystroke failure
- * - **fillCancelled** - Esc, timeout, or a re-arm over a live session
- *
- * @note One controller at a time owns the global hooks (@ref s_instance). The
- *       low-level hooks run on the installing thread, which is the GUI thread
- *       here, so the callbacks write only their atomics and queue the fill work
- *       instead of running it inside the OS hook dispatcher.
+ * | Gesture          | Effect                                               |
+ * |------------------|------------------------------------------------------|
+ * | Ctrl+click       | Type the field the probe pipeline detects            |
+ * | Ctrl+shift+Click | Type the password (forced, overrides detection)      |
+ * | Ctrl+alt+Click   | Type the username (forced, overrides detection)      |
+ * | Esc              | Cancel and remove hooks (Armed, AutoArmed, Diagnose) |
  */
 class FillController : public QObject
 {
@@ -142,81 +98,88 @@ class FillController : public QObject
     Q_PROPERTY(int countdownSeconds READ countdownSeconds NOTIFY countdownSecondsChanged)
 
 public:
-    /// @enum State
-    /// @brief Fill controller state machine states.
+    /**
+     * @enum State
+     * @brief Fill controller state machine states.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     enum class State
     {
         Idle,       ///< No hooks, waiting for arm(), armAuto() or armDiagnose().
         Armed,      ///< Hooks active, waiting for Ctrl+Click to type either field.
         Typing,     ///< Keystrokes being sent to target window.
         Diagnose,   ///< Hooks active, waiting for Ctrl+Click to dry-run probes only.
-        AutoArmed,  ///< Staged on navigation; a plain (no-Ctrl) click completes the fill.
+        AutoArmed,  ///< Staged on navigation; a plain (no-ctrl) click completes the fill.
     };
     Q_ENUM(State)
 
-    /// @brief Construct the controller and wire up the timeout timer.
+    /**
+     * @fn FillController(QObject* parent = nullptr)
+     * @brief Construct the controller and wire up the timeout timer.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     explicit FillController(QObject* parent = nullptr);
 
-    /// @brief Destructor. Cancels any active fill and removes hooks.
+    /**
+     * @fn ~FillController()
+     * @brief Cancel any active fill, remove hooks, and stop the bridge.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     ~FillController() override;
 
-    /// @brief Whether a credential is bound and waiting for the completing click.
-    /// True in @ref State::Armed and @ref State::AutoArmed only. Diagnose
-    /// installs hooks but binds no credential, so it reads false, as does
-    /// @ref State::Typing.
+    /**
+     * @fn bool isArmed() const
+     * @brief Whether a credential is bound and waiting for the completing click.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * True in `State::Armed` and `State::AutoArmed` only. Diagnose
+     * installs hooks but binds no credential, so it reads false, as does
+     * `State::Typing`.
+     */
     bool isArmed() const;
 
-    /// @brief Status line for the UI. Empty while Idle.
+    /**
+     * @fn QString fillStatusText() const
+     * @brief Status line for the UI.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Empty while Idle.
+     */
     QString fillStatusText() const;
 
-    /// @brief Seconds left before auto-cancel. It counts down in Armed and
-    /// Diagnose only; AutoArmed never expires, so the value stays at its
-    /// arm-time @ref FILL_TIMEOUT_SECONDS.
+    /**
+     * @fn int countdownSeconds() const
+     * @brief Report seconds remaining before manual or diagnosis timeout.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * AutoArmed never expires; its value stays at `FILL_TIMEOUT_SECONDS`.
+     */
     int countdownSeconds() const;
 
-    /// @brief The current state machine state.
+    /**
+     * @fn State state() const
+     * @brief The current state machine state.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     State state() const;
 
     /**
-     * @brief Arm the controller for one vault record (manual Ctrl+Click path).
+     * @fn bool arm(int recordIndex, const std::vector<seal::VaultRecord>& records,
+     *     seal::CredentialSession& session, const uint64_t& ownerGeneration)
+     * @brief Install hooks for a manual fill of one record.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Installs the global mouse and keyboard hooks and enters
-     * @ref State::Armed. The completing Ctrl+Click decrypts and types one
-     * field; manual mode stays armed until both fields are typed.
+     * Records, session, and generation counter are borrowed and must outlive the fill.
+     * The master key stays DPAPI-protected except during on-demand decrypt.
+     * A changed generation cancels before decrypt. Re-arming first cancels the live
+     * session and emits fillCancelled.
      *
-     * @par Borrowing
-     * The records vector, the session and the generation counter are borrowed
-     * by pointer and must outlive the fill. The master key stays
-     * DPAPI-protected for the whole armed window: @ref decryptAndTypeField
-     * opens a scoped @c session.unlock() around the on-demand decrypt alone.
-     *
-     * @par Staleness
-     * A generation snapshot is taken at arm time. When the owner mutates the
-     * records before the completing click, the fill cancels instead of typing a
-     * credential the index no longer names. Both fill paths check it before any
-     * decrypt: @ref performType before it touches the borrowed vector,
-     * @ref performTypeAuto later in its gate order.
-     *
-     * @par Re-arming
-     * When the controller is not Idle - a different record was selected, or a
-     * navigation re-staged - @ref cancel runs first, so a live session emits
-     * @ref fillCancelled before the new arm. This keeps the manual and auto
-     * paths mutually exclusive.
-     *
-     * @param recordIndex     Index into @p records. Not range-checked here; an
-     *                        out-of-range index still arms and then fails with
-     *                        @ref fillError on the completing click.
-     * @param records         Vault records, borrowed by pointer.
-     * @param session         Owns the master key; unlocked only for the decrypt.
-     * @param ownerGeneration Owner's monotonic mutation counter, borrowed by
-     *                        pointer; it rises on every records/password change.
-     * @return `true` when both hooks installed. On failure it removes the
-     *         partial hooks, clears the borrowed records and session pointers,
-     *         emits @ref fillError and stays Idle. It emits no
-     *         @ref fillCancelled and leaves the generation pointer set; no path
-     *         reads it while Idle.
-     *
-     * @pre Call on the GUI thread; the timeout timer and the signals live there.
+     * @param recordIndex Checked on the completing click; an invalid index still arms.
+     * @param ownerGeneration Must increase on every records or password change.
+     * @return True if both hooks installed. Failure removes partial hooks, clears records
+     *         and session pointers, emits fillError, and stays Idle. The generation
+     *         pointer remains set but is unread while Idle.
+     * @pre Call on the GUI thread.
      */
     [[nodiscard]] bool arm(int recordIndex,
                            const std::vector<seal::VaultRecord>& records,
@@ -224,24 +187,16 @@ public:
                            const uint64_t& ownerGeneration);
 
     /**
-     * @brief Arm the controller for zero-gesture staged auto-fill.
+     * @fn bool armAuto(int recordIndex, const std::vector<seal::VaultRecord>& records,
+     *     seal::CredentialSession& session, const uint64_t& ownerGeneration)
+     * @brief Install hooks for one staged password fill.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Same borrowing, generation snapshot and hook install as @ref arm, but it
-     * enters @ref State::AutoArmed. There a plain left click (no Ctrl) into a
-     * bridge-classified login field completes the fill through the fail-closed
-     * gates listed on @ref performTypeAuto. The click is never swallowed, so
-     * the field takes focus normally; a click that misses a classified login
-     * field is a silent no-op that leaves the controller AutoArmed.
+     * Uses the borrowing and failure contract of arm. Plain clicks pass through for
+     * normal focus; unclassified clicks leave AutoArmed unchanged. Successful typing,
+     * esc, or re-staging ends the arm; no timeout applies.
      *
-     * This path releases only the password, and at most once: the fill tears
-     * the hooks down after the first successful type. It never times out -
-     * @ref onTimeoutTick ignores this state - so only Esc, a re-stage or a
-     * completed fill returns it to Idle.
-     *
-     * Called by StagingController when a navigation report uniquely matched a
-     * record and that page carries a password field. Parameters as @ref arm.
-     * @return true when both hooks installed; a failure behaves like a failed
-     *         @ref arm.
+     * @see performTypeAuto
      */
     [[nodiscard]] bool armAuto(int recordIndex,
                                const std::vector<seal::VaultRecord>& records,
@@ -249,51 +204,35 @@ public:
                                const uint64_t& ownerGeneration);
 
     /**
-     * @brief Consume the latest bridge navigation snapshot (GUI-thread poll).
+     * @fn std::optional<seal::NavSnapshot> takeNavSince(std::uint64_t& lastSeenSeq)
+     * @brief Poll one unseen navigation without changing fill state.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Passthrough to @ref BrowserBridge::takeNavSince so StagingController,
-     * which does not own the bridge, can poll it. The snapshot is consumed: a
-     * navigation is returned once, then @p lastSeenSeq advances past it. This
-     * does not touch the fill state machine and is legal in any state.
-     *
-     * @param lastSeenSeq In/out cursor owned by the caller.
-     * @return The one unseen snapshot, or nullopt when the bridge is disabled,
-     *         nothing new arrived, or the snapshot aged out.
+     * @param lastSeenSeq Caller-owned cursor; advances when a snapshot is consumed.
+     * @return `std::nullopt` if disabled, expired, or no newer snapshot exists.
+     * @pre Call on the GUI thread.
+     * @see BrowserBridge::takeNavSince
      */
     std::optional<seal::NavSnapshot> takeNavSince(std::uint64_t& lastSeenSeq);
 
     /**
-     * @brief Decrypt a record's username and push it to the browser for
-     *        zero-click DOM injection by the extension.
+     * @fn bool injectUsername(int recordIndex, const std::vector<seal::VaultRecord>& records,
+     *     seal::CredentialSession& session, const std::string& host, const std::string& visit,
+     *     DWORD browserPid)
+     * @brief Send a host-bound username to the browser for DOM injection.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * The higher-risk half of staged auto-fill: the username value crosses into
-     * the browser. Host-bound through
-     * @ref seal::url::platformMatchesHostForSecretRelease, the same strict
-     * matcher the selector and the password click-gate use, so a record must
-     * store a real domain or URL before any browser credential is released.
-     * The decrypt happens in a tight unlock() window here, keeping
-     * StagingController decrypt-free; the transient plaintext UTF-8 copy is
-     * wiped after the reverse-channel send.
+     * Requires a strict domain/URL match and a non-empty visit token. Decrypts inside
+     * a scoped session unlock and wipes the transient UTF-8 copy after sending.
+     * Does not read or change fill state.
      *
-     * Independent of the fill state machine: it neither reads nor changes
-     * @ref state, so it works while Idle and does not consume the staged
-     * password click.
-     *
-     * @param recordIndex Record to read; out of range returns false.
-     * @param records     Borrowed vault records, must outlive the call.
-     * @param session     Borrowed session; unlocked only for the decrypt.
-     * @param host        Navigated host, strict-matched and echoed to the peer.
-     * @param visit       Per-document visit token that binds the injection. An
-     *                    empty token returns false; an untokened page is never fed.
-     * @param browserPid  Validated browser PID whose peer receives the directive.
-     * @return true only when the directive reached a live peer.
-     *         StagingController latches its once-per-visit guarantee on this, so
-     *         a failed send may be retried on a later navigation of the same
-     *         visit. It returns false, emitting no signal, when the index is out
-     *         of range, the record is soft-deleted, @p visit is empty, the host
-     *         does not strict-match, the bridge is disabled, the unlock or
-     *         decrypt fails, the decrypted username is empty, or no peer serves
-     *         @p browserPid.
+     * @param records Borrowed for this call.
+     * @param session Borrowed for this call; unlocked only for decrypt.
+     * @param browserPid Validated browser whose live peer receives the directive.
+     * @return True if a live peer received the directive, allowing the caller to latch
+     *         this visit. False without signals for invalid/deleted records, missing
+     *         visit, host mismatch, disabled bridge, unlock/decrypt failure, empty
+     *         username, or failed send. Failed sends may be retried.
      */
     [[nodiscard]] bool injectUsername(int recordIndex,
                                       const std::vector<seal::VaultRecord>& records,
@@ -303,100 +242,83 @@ public:
                                       DWORD browserPid);
 
     /**
-     * @brief Arm the controller in dry-run diagnose mode.
+     * @fn bool armDiagnose()
+     * @brief Run the probe pipeline on the next Ctrl+Click without decrypt or typing.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Like @ref arm but it binds no credential. It installs the same mouse and
-     * keyboard hooks; the next Ctrl+Click runs the full probe pipeline (browser
-     * bridge, Win32, UIA, IME), fuses the verdict and emits
-     * @ref diagnoseCompleted with a readable summary. No decrypt and no
-     * keystrokes, so it is safe on any field, including fields owned by other
-     * applications.
+     * isArmed remains false. Completion emits diagnoseCompleted with probe results.
+     * Esc or timeout emits diagnoseCancelled.
      *
-     * Use it to test the browser extension end to end: arm diagnose, switch to
-     * the browser, Ctrl+Click an input field, read the per-probe verdict to
-     * confirm the bridge fired.
-     *
-     * Esc or the @ref FILL_TIMEOUT_SECONDS timeout cancels with
-     * @ref diagnoseCancelled. @ref isArmed stays false throughout, so a UI that
-     * only watches the armed property does not see diagnose mode.
-     *
-     * @return true when both hooks installed. On failure it emits
-     *         @ref fillError, not @ref diagnoseCancelled, and stays Idle.
+     * @return True if both hooks installed; otherwise emits fillError and stays Idle.
      */
     [[nodiscard]] bool armDiagnose();
 
     /**
-     * @brief Cancel the current fill and remove all hooks.
+     * @fn void cancel()
+     * @brief Remove hooks and clear borrowed state.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Safe from any state; a no-op while Idle. It stops the timer, removes the
-     * hooks, clears the borrowed records, session and generation pointers and
-     * the typed-field flags, then returns to Idle. It does not stop the browser
-     * bridge; only @ref disableBridge does that.
-     *
-     * It emits @ref diagnoseCancelled when the previous state was
-     * @ref State::Diagnose, otherwise @ref fillCancelled. A diagnose run that
-     * already reached @ref performDiagnose is back in Idle, so cancelling after
-     * it emits nothing.
+     * No-op in Idle. Stops the timer and returns to Idle without stopping the bridge.
+     * Emits diagnoseCancelled for Diagnose, otherwise fillCancelled.
      */
     Q_INVOKABLE void cancel();
 
     /**
-     * @brief Panic mode: disable the browser bridge (M8).
+     * @fn void disableBridge()
+     * @brief Disable the bridge and clear reports and visit tokens.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Closes the pipe handle, refuses further messages, and clears the
-     * in-memory click map, the pending navigation snapshot and the per-process
-     * visit tokens. Safe from any state. It does not cancel an armed fill, but
-     * a staged auto-fill can no longer complete, because its gates need a live
-     * bridge entry. Re-enable with @ref enableBridge.
+     * Does not cancel armed fills; auto completion requires a live bridge entry.
+     * Blocks the GUI thread while bridge threads join.
      *
-     * It blocks the GUI thread while it joins the bridge acceptor and its
-     * connection workers: the acceptor polls its stop token every 200 ms, and a
-     * worker parked in a read can take up to its 1 s stop poll to see the stop
-     * request. See @ref BrowserBridge::disable.
+     * @see BrowserBridge::disable
      */
     Q_INVOKABLE void disableBridge();
 
     /**
-     * @brief Clear panic mode and make sure the bridge pipe is listening.
+     * @fn void enableBridge()
+     * @brief Enable and start the bridge in any fill state.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Clearing the disabled flag restarts the accept thread on a freshly
-     * generated pipe-name secret, so the pipe name rotates (M7) and a peer that
-     * still holds the previous name cannot reconnect; see
-     * @ref BrowserBridge::enable. It then starts the pipe server whenever it is
-     * not already running, in any fill state, and even if the bridge was never
-     * disabled.
+     * Restarting rotates the pipe name. Eager startup avoids extension reconnect
+     * backoff on the first click.
      *
-     * Starting eagerly matters: the extension opens its native-messaging port
-     * at browser load, so a missing pipe pushes its reconnect into exponential
-     * backoff (tens of seconds) and the first Ctrl+Click finds no peer.
+     * @see BrowserBridge::enable
      */
     Q_INVOKABLE void enableBridge();
 
-    /// @brief Whether the bridge is enabled, that is not in panic mode.
+    /**
+     * @fn bool isBridgeEnabled() const
+     * @brief Whether the bridge is enabled, that is not in panic mode.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     bool isBridgeEnabled() const;
 
     /**
-     * @brief Whether the bridge enforces peer signer authentication.
+     * @fn bool isBridgePeerAuthEnforced() const
+     * @brief Report whether the startup signer identity enables peer authentication.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * False when this binary is unsigned; the M6 signer gate then accepts any
-     * peer. Fixed at startup from the running binary's Authenticode identity
-     * and surfaced by the UI, so an unsigned build shows a "peer auth disabled"
-     * warning. See @ref BrowserBridge::isPeerAuthEnforced.
+     * Unsigned builds return false and accept any peer signer.
+     *
+     * @see BrowserBridge::isPeerAuthEnforced
      */
     bool isBridgePeerAuthEnforced() const;
 
     /**
-     * @brief Whether any relay process (`seal-browser.exe`) is connected to the
-     *        bridge, with the pipe handshake complete.
+     * @fn bool isBridgePeerConnected() const
+     * @brief Report whether any relay has completed the pipe handshake.
+     * @author Alex (<https://github.com/lextpf>)
      *
      * BrowserBridge is not a QObject, so BridgeViewModel polls this at 1 Hz and
      * turns level changes into its aggregate `bridgePeerConnected` property.
-     * The three accessors below share that poll.
      */
     bool isBridgePeerConnected() const;
 
     /**
-     * @brief Whether a peer launched by @p kind is currently connected.
+     * @fn bool isBridgeBrowserConnected(seal::signer::BrowserKind kind) const
+     * @brief Whether a peer launched by kind is currently connected.
+     * @author Alex (<https://github.com/lextpf>)
      *
      * The per-browser source of truth: BridgeViewModel builds its `browsers`
      * model from this, which drives the status dots in the UI.
@@ -405,26 +327,52 @@ public:
      */
     bool isBridgeBrowserConnected(seal::signer::BrowserKind kind) const;
 
-    /// @brief Whether a Chrome-launched relay process is connected.
-    /// Fixed-browser shorthand for @ref isBridgeBrowserConnected; it backs the
-    /// `bridgeChromeConnected` property, which no QML file binds today.
+    /**
+     * @fn bool isBridgeChromeConnected() const
+     * @brief Report whether a Chrome-launched relay process is connected.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Uses the same peer state as `isBridgeBrowserConnected`.
+     */
     bool isBridgeChromeConnected() const;
 
-    /// @brief Whether a Brave-launched relay process is connected.
-    /// Fixed-browser shorthand for @ref isBridgeBrowserConnected; it backs the
-    /// `bridgeBraveConnected` property, which no QML file binds today.
+    /**
+     * @fn bool isBridgeBraveConnected() const
+     * @brief Report whether a Brave-launched relay process is connected.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Uses the same peer state as `isBridgeBrowserConnected`.
+     */
     bool isBridgeBraveConnected() const;
 
 signals:
-    /// @brief The armed/disarmed boundary was crossed. Moves that keep
-    /// @ref isArmed the same (Armed to Typing to Armed) stay silent, so QML
-    /// bindings are not woken for states that look identical to the front end.
+    /**
+     * @fn void armedChanged()
+     * @brief Notify a change in whether a credential is waiting for a click.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Entering Typing from Armed emits this signal because `isArmed()` becomes false.
+     * Returning to Armed emits it again; transitions between unarmed states stay silent.
+     */
     void armedChanged();
-    void fillStatusTextChanged();    ///< Status text updated.
-    void countdownSecondsChanged();  ///< Countdown tick or reset.
+    /**
+     * @fn void fillStatusTextChanged()
+     * @brief Notify a changed status message.
+     * @author Alex (<https://github.com/lextpf>)
+     */
+    void fillStatusTextChanged();
 
     /**
+     * @fn void countdownSecondsChanged()
+     * @brief Notify a countdown tick or reset.
+     * @author Alex (<https://github.com/lextpf>)
+     */
+    void countdownSecondsChanged();
+
+    /**
+     * @fn void fillCompleted(const QString& statusMessage)
      * @brief The fill finished and the controller is back in Idle.
+     * @author Alex (<https://github.com/lextpf>)
      *
      * Manual mode emits this once both fields are typed. AutoArmed mode is
      * one-click-one-fill, so it emits after the password alone.
@@ -434,146 +382,129 @@ signals:
     void fillCompleted(const QString& statusMessage);
 
     /**
+     * @fn void fillError(const QString& errorMessage)
      * @brief A fill attempt failed and the controller cancelled back to Idle.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Covers hook-install failure, a refused release gate (site mismatch,
-     * changed document, unconfirmed password field, focus stolen), a stale
+     * Covers hook-install failure, a refused release gate (focus stolen on the manual
+     * path; site mismatch or changed document on the staged path), a stale
      * generation or record, unlock or decrypt failure, and `SendInput` failure.
-     * Every emission except the hook-install one is followed by @ref cancel, so
-     * @ref fillCancelled follows on the same turn.
+     * Every emission except the hook-install one is followed by `cancel`, so
+     * `fillCancelled` follows on the same turn.
      *
      * @param errorMessage Description of the failure, shown to the user verbatim.
      */
     void fillError(const QString& errorMessage);
 
-    /// @brief The bound fill ended without completing: Esc, the Armed timeout,
-    /// a re-arm over a live session, or any @ref fillError path.
+    /**
+     * @fn void fillCancelled()
+     * @brief Notify cancellation of an active credential fill.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Covers Escape, manual timeout, re-arming, and errors after arming succeeds.
+     * Hook-install failure emits only `fillError`; diagnosis uses `diagnoseCancelled`.
+     */
     void fillCancelled();
 
     /**
+     * @fn void diagnoseCompleted(const QString& summary)
      * @brief Dry-run probe completed.
+     * @author Alex (<https://github.com/lextpf>)
+     *
      * @param summary Multi-line breakdown, one line per probe with its verdict,
      *                confidence and evidence.
      */
     void diagnoseCompleted(const QString& summary);
 
-    /// @brief Dry-run probe was cancelled (Esc or timeout) before any click.
+    /**
+     * @fn void diagnoseCancelled()
+     * @brief Dry-run probe was cancelled (esc or timeout) before any click.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     void diagnoseCancelled();
 
 private slots:
-    /// @brief One-second tick. It decrements the countdown and auto-cancels at
-    /// zero, but only in @ref State::Armed and @ref State::Diagnose; every
-    /// other state returns at once, which is why AutoArmed never expires.
+    /**
+     * @fn void onTimeoutTick()
+     * @brief Decrement the countdown and cancel when it reaches zero.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Only Armed and Diagnose consume timeout ticks; AutoArmed never expires.
+     */
     void onTimeoutTick();
 
     /**
-     * @brief Queued from the mouse hook; decrypts and types the pending field.
+     * @fn void performType()
+     * @brief Validate and type the pending manual field on the GUI thread.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Enters @ref State::Typing at once, then polls at 20 ms until Ctrl is
-     * released (2 s cap for a stuck key), because keystrokes sent while Ctrl is
-     * down register as shortcuts. A @ref cancel during that poll ends the run
-     * silently.
+     * Enters Typing, then waits for ctrl release at 20 ms intervals for up to 2 s
+     * to avoid shortcuts. Typing proceeds after 2 s even if Ctrl remains held.
+     * Cancellation during the wait ends the run silently.
+     * Click and foreground PIDs must match and be non-zero. Modifiers override fusion;
+     * Unknown uses the remaining field, starting with username. Generation and record
+     * checks precede decrypt.
      *
-     * @par Order after the poll
-     * The clicked window and the foreground window must belong to the same
-     * non-zero process. The target field is then resolved: Shift or Alt was
-     * already resolved in the hook, otherwise the fused probe verdict decides,
-     * and an Unknown verdict falls back to whichever field is still untyped
-     * (username when neither is). Next the generation and the record are
-     * re-validated, then the browser gates run.
+     * The record choice and the Ctrl+Click authorize the release. No bridge entry,
+     * host, or visit token is checked, so a browser fills like any other target and
+     * the companion extension is optional. The fused verdict only selects the field.
+     * Refusal emits fillError and cancels before decrypt.
      *
-     * @par Browser gates
-     * They apply only when a bridge entry exists for the click point: its host
-     * must strict-match the record, the entry must not contradict the document
-     * now loaded, and a password release must also be Tier-1 short-circuited
-     * and bridge-corroborated. The document check blocks only when the
-     * browser's current visit token is known and differs from the entry's, so
-     * an untagged click falls back to the host check alone - the fail-open
-     * contract of @ref seal::visitAuthorizes. @ref performTypeAuto applies the
-     * fail-closed form of the same gate and requires both tokens to be present
-     * and equal. A click into a known browser image with no bridge entry is
-     * refused outright; any other target carries no URL context and fills
-     * without these gates. Every refusal emits @ref fillError and cancels,
-     * always before the decrypt.
-     *
-     * Typing is delegated to @ref decryptAndTypeField, which stays Armed for
-     * the second field and only then completes.
+     * @see decryptAndTypeField
      */
     void performType();
 
     /**
-     * @brief Queued from the mouse hook on a plain click while AutoArmed.
+     * @fn void performTypeAuto()
+     * @brief Validate a staged password click before any decrypt.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * The zero-gesture completion path, and the only one that releases a secret
-     * without a modifier. A single-flight flag makes overlapping clicks a
-     * no-op. The click report travels browser to service worker to host to
-     * pipe, so the bridge entry is usually absent at click time: this polls for
-     * it at 20 ms for up to 400 ms before failing closed.
+     * Allows one completion at a time. Polls every 20 ms for up to 400 ms while the
+     * extension report reaches the bridge. Both visit tokens must be non-empty.
      *
-     * Every gate runs before any decrypt, so a refusal never produces plaintext.
+     * The URL gate uses platformMatchesHostForSecretRelease; bare labels cannot
+     * release credentials. A retry preserves the arm and emits no fillError.
+     * Corroboration and field-kind retries occur after entering Typing, so they emit
+     * armedChanged twice and reset the countdown.
      *
-     * @par Release gates, in order
-     * | Gate           | Requirement                                    | On failure          |
-     * |----------------|------------------------------------------------|---------------------|
-     * | classification | fresh bridge entry for the click point         | stay AutoArmed      |
-     * | foreground     | click PID and foreground PID equal, non-zero   | stay AutoArmed      |
-     * | record         | index in range, session live, not deleted      | cancel + error      |
-     * | URL            | strict secret-release host match (see below)   | cancel + error      |
-     * | visit          | entry token equals the browser's current one   | cancel + error      |
-     * | generation     | owner counter unchanged since arming           | cancel + error      |
-     * | corroboration  | Tier-1 short circuit and bridge corroborated   | return to AutoArmed |
-     * | field kind     | fused verdict is Password                      | return to AutoArmed |
+     * On success, decryptAndTypeField types the password. Username injection uses
+     * the reverse channel.
      *
-     * The last two gates run after the controller has entered
-     * @ref State::Typing, so a refusal there emits @ref armedChanged twice,
-     * shows the Typing status briefly, and restarts the countdown before the
-     * AutoArmed prompt returns.
-     *
-     * The URL gate uses @ref seal::url::platformMatchesHostForSecretRelease,
-     * not the tiered @ref seal::url::platformMatchesHost, so a record whose
-     * platform is a bare label such as "PayPal" never auto-releases. "Stay
-     * AutoArmed" and "return to AutoArmed" release no secret, emit no
-     * @ref fillError, and keep the arm live for a later click; "cancel"
-     * disarms after a @ref fillError.
-     *
-     * On success it types the password through @ref decryptAndTypeField; the
-     * username half is the extension DOM injection (@ref injectUsername).
+     * | Gate           | Requirement                                  | On failure          |
+     * |----------------|----------------------------------------------|---------------------|
+     * | Classification | Fresh bridge entry for the click point       | Stay AutoArmed      |
+     * | Foreground     | Click PID and foreground PID equal, non-zero | Stay AutoArmed      |
+     * | Record         | Index in range, session live, not deleted    | Cancel + error      |
+     * | URL            | Strict secret-release host match             | Cancel + error      |
+     * | Visit          | Entry token equals the browser's current one | Cancel + error      |
+     * | Generation     | Owner counter unchanged since arming         | Cancel + error      |
+     * | Corroboration  | Tier-1 short circuit and bridge corroborated | Return to AutoArmed |
+     * | Field kind     | Fused verdict is Password                    | Return to AutoArmed |
      */
     void performTypeAuto();
 
     /**
-     * @brief Queued from the mouse hook while in @ref State::Diagnose.
+     * @fn void performDiagnose()
+     * @brief Emit probe results and return to Idle without decrypt or keystrokes.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Runs the probe pipeline at the captured click point, builds a multi-line
-     * summary, emits @ref diagnoseCompleted and returns to Idle. It never
-     * decrypts a credential and never sends keystrokes.
-     *
-     * When the bridge probe alone reads Unknown while a peer is connected, the
-     * whole pipeline re-runs once after a 75 ms blocking `Sleep` on the GUI
-     * thread. Only the bridge probe rides the async extension path, so a
-     * just-woken service worker can land its report after the Ctrl+Click; the
-     * fill path absorbs that in its Ctrl-release poll, diagnose has no such
-     * wait of its own.
+     * If only the bridge probe is Unknown while a peer is connected, retry the whole
+     * pipeline after a blocking 75 ms GUI-thread wait for the extension report.
      */
     void performDiagnose();
 
 private:
     /**
-     * @brief Shared body of @ref arm and @ref armAuto.
+     * @fn bool armInternal(int recordIndex, const std::vector<seal::VaultRecord>& records,
+     *     seal::CredentialSession& session, const uint64_t& ownerGeneration, State targetState)
+     * @brief Initialize borrowed fill state and install hooks.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * In order: cancel any live session, record the borrowed pointers and the
-     * generation snapshot, reset the countdown, pending target and typed-field
-     * flags, start the bridge unless it is running or disabled, claim the
-     * `s_instance` singleton, install the hooks, then start the 1 s timeout
-     * timer. That timer also runs in @ref State::AutoArmed, where
-     * `onTimeoutTick` discards every tick.
+     * Cancels a live session first. Starts the bridge unless disabled and starts the
+     * 1 s timer; AutoArmed ignores timer ticks.
      *
-     * `m_AutoMode` follows @p targetState, which is what makes
-     * `decryptAndTypeField` disarm after one field instead of two.
-     *
-     * @param targetState @ref State::Armed (manual Ctrl+Click) or
-     *                    @ref State::AutoArmed (staged). No other value is valid.
-     * @return true when both hooks installed.
+     * @param targetState Only Armed or AutoArmed is valid.
+     * @return True if both hooks installed.
      */
     [[nodiscard]] bool armInternal(int recordIndex,
                                    const std::vector<seal::VaultRecord>& records,
@@ -581,69 +512,81 @@ private:
                                    const uint64_t& ownerGeneration,
                                    State targetState);
 
-    /// @brief Install the desktop-wide WH_MOUSE_LL and WH_KEYBOARD_LL hooks.
-    /// Failure is not reported here: the caller inspects @ref m_MouseHook and
-    /// @ref m_KeyboardHook, because either one can fail on its own.
+    /**
+     * @fn void installHooks()
+     * @brief Install the desktop-wide WH_MOUSE_LL and WH_KEYBOARD_LL hooks.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Failure is not reported here: the caller inspects `m_MouseHook` and
+     * `m_KeyboardHook`, because either one can fail on its own.
+     */
     void installHooks();
 
-    /// @brief Remove both hooks and clear @ref s_instance so an in-flight hook
-    /// callback cannot dereference a dead controller. Safe when not installed.
+    /**
+     * @fn void removeHooks()
+     * @brief Remove both hooks and clear the shared callback target.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Safe when hooks are absent; callbacks then have no controller to dereference.
+     */
     void removeHooks();
 
     /**
-     * @brief Move to @p newState and refresh the status text.
+     * @fn void transitionTo(State newState)
+     * @brief Change state and refresh the status text.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * @ref armedChanged is emitted only when @ref isArmed differs before and
-     * after, so Armed to Typing to Armed is silent for QML.
+     * Emits armedChanged only if isArmed changes.
      */
     void transitionTo(State newState);
 
-    /// @brief Rebuild @ref m_StatusText from the current state and
-    /// @ref m_TypedFields, emitting @ref fillStatusTextChanged only on a change.
+    /**
+     * @fn void updateStatusText()
+     * @brief Refresh the status text from the state and completed fields.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Emits `fillStatusTextChanged` only when the text changes.
+     */
     void updateStatusText();
 
     /**
-     * @brief Low-level mouse hook callback; reacts to left-button-down only.
+     * @fn LRESULT CALLBACK mouseHookProc(int nCode, WPARAM wParam, LPARAM lParam)
+     * @brief Capture left-button-down and queue the selected fill path.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Runs on the installing thread inside the OS hook dispatcher, so it keeps
-     * its work minimal: it reads @ref m_State, stores the click point and the
-     * resolved @ref TypeTarget in the atomics, then queues @ref performType,
-     * @ref performTypeAuto or @ref performDiagnose over a queued connection.
-     * Shift selects `Password`, Alt selects `Username`, any other modifier
-     * state selects `Auto`, and Shift wins when both are held. It writes no
-     * other controller state and calls no controller method synchronously; the
-     * only other synchronous work is a category log.
+     * Runs in the installing thread's OS hook dispatcher. Updates atomics and queues
+     * work without synchronous controller calls. Shift selects password and wins over
+     * alt, which selects username.
      *
-     * @par Click disposal
-     * A Ctrl+Click while Armed or Diagnose is swallowed (returns 1) so the
-     * target application never activates the control under the cursor. A plain
-     * click while AutoArmed is passed on instead, so the field still takes
-     * focus; an injected click (`LLMHF_INJECTED` or `LLMHF_LOWER_IL_INJECTED`)
-     * is ignored on that path, because a local process must not release a
-     * staged secret with `SendInput`. Every other case falls through to
-     * `CallNextHookEx`.
+     * Ctrl+Click is swallowed in Armed and Diagnose. Plain AutoArmed clicks pass
+     * through for focus; injected clicks are ignored to prevent SendInput from
+     * releasing a staged secret. Other cases call CallNextHookEx.
      */
     static LRESULT CALLBACK mouseHookProc(int nCode, WPARAM wParam, LPARAM lParam);
 
-    /// @brief Low-level keyboard hook callback (same thread rules as
-    /// @ref mouseHookProc). It handles Esc alone, and only while Armed,
-    /// AutoArmed or Diagnose; Esc during Typing is passed through, so it cannot
-    /// interrupt an in-flight keystroke run. A handled Esc queues @ref cancel
-    /// and is swallowed (returns 1).
+    /**
+     * @fn LRESULT CALLBACK keyboardHookProc(int nCode, WPARAM wParam, LPARAM lParam)
+     * @brief Queue cancellation for Escape while waiting for a click.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Uses the thread rules of `mouseHookProc`. Handled Escape events are swallowed.
+     * Escape passes through during Typing and cannot interrupt keystroke delivery.
+     */
     static LRESULT CALLBACK keyboardHookProc(int nCode, WPARAM wParam, LPARAM lParam);
 
     /**
-     * @brief Singleton: one controller at a time owns the global hooks.
+     * @brief Sole controller allowed to own global hooks.
      *
-     * The hook callbacks load it once per invocation, because a concurrent @ref cancel can
-     * null it between loads. Both arm paths store this pointer and @ref removeHooks clears it
-     * with no ownership check, so a second instance would take over the first one's hooks;
-     * the composition root (QmlMain.cpp) constructs exactly one FillController.
+     * Callbacks load once per invocation. The hook cleanup clears this pointer without an
+     * ownership check, so a second controller would invalidate the first one's hooks.
      */
     static std::atomic<FillController*> s_instance;
 
-    /// @enum TypeTarget
-    /// @brief Which credential field to type next.
+    /**
+     * @enum TypeTarget
+     * @brief Which credential field to type next.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     enum class TypeTarget
     {
         Username,  ///< Forced by Ctrl+Alt+Click, or resolved from a Username verdict.
@@ -651,9 +594,13 @@ private:
         Auto,      ///< Let the probe pipeline decide at fill time.
     };
 
-    /// @enum TypedFieldFlags
-    /// @brief Bit flags tracking which credential fields have been typed.
-    /// Only manual mode accumulates both; auto mode disarms after the password.
+    /**
+     * @enum TypedFieldFlags
+     * @brief Bit flags tracking which credential fields have been typed.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Only manual mode accumulates both; auto mode disarms after the password.
+     */
     enum TypedFieldFlags : uint8_t
     {
         TypedNone = 0,                              ///< Nothing typed yet.
@@ -663,70 +610,45 @@ private:
     };
 
     /**
-     * @brief Run the probe registry against a click point and fuse the results.
+     * @fn seal::Verdict runProbeRegistry(LONG x, LONG y)
+     * @brief Fuse probes and discard release provenance.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Keeps the verdict of @ref runProbeRegistryDetailed and drops the
-     * provenance flags, for callers where a bare Password/Username/Unknown
-     * answer is enough. No call site uses it today: both fill paths need the
-     * flags, and @ref performDiagnose builds its own pass.
-     *
-     * @warning A secret release must use the detailed form.
-     *
-     * @param x Screen-space X (raw mouse hook output).
-     * @param y Screen-space Y.
-     * @return The fused verdict. `Verdict::Unknown` means no probe was
-     *         decisive and the caller must pick a default itself.
+     * @param x Raw screen pixels.
+     * @param y Raw screen pixels.
+     * @return Unknown if no probe is decisive.
+     * @warning Staged auto release must use runProbeRegistryDetailed.
      */
     seal::Verdict runProbeRegistry(LONG x, LONG y);
 
     /**
-     * @brief Run every probe against a click point and fuse the results.
+     * @fn seal::FusionOutcome runProbeRegistryDetailed(LONG x, LONG y)
+     * @brief Fuse all probes with an advisory 300 ms pass deadline.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * Builds a `seal::ProbeContext` from the point (target window and its
-     * process id resolved with `WindowFromPoint`), gives the whole pass a
-     * 300 ms deadline, then runs the five probes in a fixed order - bridge,
-     * Win32 style, UIA IsPassword, UIA metadata, IME state - and fuses them
-     * with `seal::FusionDecider::decideDetailed`. The probes are member
-     * objects, so the UIA ones keep their cached automation state between calls.
+     * Runs bridge, Win32 style, UIA IsPassword, UIA metadata, then IME state.
+     * Logs verdict, corroboration, confidence, and sanitized evidence. The deadline
+     * does not interrupt provider calls or skip later probes.
      *
-     * Each call logs one `event=fill.decide` line to `logFill` carrying the
-     * fused verdict, the corroboration flag, and every probe's verdict,
-     * confidence and sanitised evidence, so weight tuning is telemetry-driven.
-     *
-     * @param x Screen-space X (raw mouse hook output).
-     * @param y Screen-space Y.
-     * @return The verdict plus the @ref FusionOutcome provenance flags. The
-     *         auto path releases a secret only when both flags are set, which
-     *         is why the detailed form exists.
+     * @param x Raw screen pixels.
+     * @param y Raw screen pixels.
+     * @return Verdict and provenance; auto release requires both provenance flags.
      */
     seal::FusionOutcome runProbeRegistryDetailed(LONG x, LONG y);
 
     /**
-     * @brief Decrypt the record's selected field and type it via `SendInput`.
+     * @fn void decryptAndTypeField(const seal::VaultRecord& record, TypeTarget target)
+     * @brief Decrypt and type a validated field through SendInput.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * The single decrypt-and-type site, shared by @ref performType (manual) and
-     * @ref performTypeAuto. It opens a scoped `session.unlock()` around the
-     * on-demand decrypt alone, types the field with `seal::typeSecret` and no
-     * pre-typing delay, then cleanses the plaintext and trims the working set.
+     * Unlocks the session only for decrypt, then cleanses plaintext and trims the
+     * working set. Auto mode completes after one field; manual mode re-arms with a
+     * reset countdown until both fields are typed. Every exit clears m_AutoFillInFlight.
      *
-     * @par Completion
-     * It completes - stops the timer, tears down the hooks, clears the borrowed
-     * records and session pointers, returns to Idle and emits
-     * @ref fillCompleted - when both fields have been typed or @ref m_AutoMode
-     * is set. In manual mode with one field still pending it instead resets the
-     * countdown and returns to @ref State::Armed for the other field's
-     * Ctrl+Click. Every exit path clears @ref m_AutoFillInFlight, which is what
-     * lets the auto path take a later click after a refused one.
-     *
-     * @param record Already-validated record.
-     * @param target The resolved field to type. @ref TypeTarget::Auto must have
-     *               been resolved by the caller: anything other than
-     *               @ref TypeTarget::Username types the password.
-     *
-     * @pre The caller validated the record, the generation and, for the auto
-     *      path, every release gate. This function applies no gate of its own.
-     * @post On failure it emits @ref fillError and cancels, so the controller
-     *       is Idle whatever happened.
+     * @param target Resolved field; every value except Username selects password.
+     * @pre Caller validated record, generation, and all applicable release gates.
+     * @post Failure emits fillError and cancels to Idle. Completion removes hooks,
+     *       clears borrowed records/session pointers, and emits fillCompleted.
      */
     void decryptAndTypeField(const seal::VaultRecord& record, TypeTarget target);
 
@@ -737,8 +659,10 @@ private:
     seal::CredentialSession* m_Session =
         nullptr;  ///< Borrowed session; unlocked only for the on-demand decrypt.
 
-    /// Points to the owner's generation counter; null while Idle, and a null
-    /// pointer makes the fill paths skip the staleness check entirely.
+    /**
+     * Borrowed generation counter, read only during an active fill. Successful
+     * completion and hook-install failure can leave it set while Idle; cancel clears it.
+     */
     const uint64_t* m_OwnerGeneration = nullptr;
     uint64_t m_SnapshotGeneration = 0;  ///< Generation at arm() time; mismatch means stale.
 
@@ -759,17 +683,19 @@ private:
     std::atomic<bool> m_AutoFillInFlight{
         false};  ///< Single-flight guard: one auto completion at a time.
 
-    // Declaration order is load-bearing: members destruct in reverse
-    // declaration order, so the probe - declared after the bridge - dies while
-    // the bridge it borrows is still alive. Moving m_BrowserBridge below the
-    // probe still compiles and silently breaks that ownership rule.
+    // Declare the bridge before its borrowing probe so the probe is destroyed first.
 
-    /// Owned named-pipe server that the browser relay process connects to. Started
-    /// lazily by @ref armInternal, @ref armDiagnose and @ref enableBridge; stopped
-    /// only by the destructor and by @ref disableBridge, so it outlives any single fill.
+    /**
+     * Owned named-pipe server that the browser relay process connects to. Started
+     * lazily by `armInternal`, `armDiagnose` and `enableBridge`; stopped
+     * only by the destructor and by `disableBridge`, so it outlives any single fill.
+     */
     seal::BrowserBridge m_BrowserBridge;
-    /// Tier-1 probe reading the click map of @ref m_BrowserBridge, which it
-    /// borrows by pointer. Rule M5 forbids it from deciding a fill alone.
+    /**
+     * Tier-1 probe reading the click map of `m_BrowserBridge`, which it
+     * borrows by pointer. Rule M5 lets it short-circuit fusion only with an agreeing
+     * on-disk probe.
+     */
     seal::BrowserBridgeProbe m_BrowserBridgeProbe{&m_BrowserBridge};
     seal::Win32StyleProbe m_Win32StyleProbe;   ///< Tier-1 native ES_PASSWORD probe (stateless).
     seal::UiaIsPasswordProbe m_UiaIsPassword;  ///< Tier-1 UIA IsPassword/MSAA probe (caches UIA).
@@ -778,9 +704,11 @@ private:
     seal::ImeStateProbe m_ImeStateProbe;  ///< Tier-2 IME context weak signal (stateless).
     seal::FusionDecider m_FusionDecider;  ///< Fuses ProbeResults into a Verdict.
 
-    /// Seconds the controller waits for the completing click before it
-    /// auto-cancels. It applies to @ref State::Armed and @ref State::Diagnose
-    /// only; see @ref onTimeoutTick.
+    /**
+     * Seconds the controller waits for the completing click before it
+     * auto-cancels. It applies to `State::Armed` and `State::Diagnose`
+     * only; see `onTimeoutTick`.
+     */
     static constexpr int FILL_TIMEOUT_SECONDS = 30;
 };
 
