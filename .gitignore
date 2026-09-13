@@ -3,9 +3,11 @@ build/*
 !build/.gitkeep
 build-*/
 
-# Generated documentation (main.html is the hand-authored mkdocs theme override)
+# Generated documentation. main.html is the authored mkdocs theme override;
+# qml.qdoc is the authored QDoc module overview.
 docs/*
 !docs/main.html
+!docs/qml.qdoc
 site/*
 !site/.gitkeep
 
