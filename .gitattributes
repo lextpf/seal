@@ -72,8 +72,9 @@ docs/**                 linguist-generated=true
 site/**                 linguist-generated=true
 build/**                linguist-generated=true -diff
 
-# The mkdocs theme override under docs/ is hand-authored, not generated.
+# The mkdocs theme override and QDoc module overview under docs/ are hand-authored.
 docs/main.html          -linguist-generated linguist-documentation=true
+docs/qml.qdoc           -linguist-generated linguist-documentation=true
 
 # Third-party and assets are not authored here.
 assets/**               linguist-vendored=true
