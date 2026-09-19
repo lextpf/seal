@@ -275,10 +275,12 @@ int HandleVerifyMode(const std::string& path)
 
 int HandleWipeMode()
 {
-    (void)seal::Clipboard::copyWithTTL("");
+    const bool clipboardCleared = seal::Clipboard::copyWithTTL("");
     seal::wipeConsoleBuffer();
     writeCliDiag(seal::console::Tone::Success,
-                 {"event=cli.wipe.finish", "result=ok", "clipboard=true"});
+                 {"event=cli.wipe.finish",
+                  "result=ok",
+                  clipboardCleared ? "clipboard=true" : "clipboard=false"});
     return 0;
 }
 
